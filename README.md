@@ -1,6 +1,6 @@
-# Codex Skills
+# Skills
 
-个人 Codex Skills 合集。完整目录、依赖关系和发布状态见
+个人Skills 合集。完整目录、依赖关系和发布状态见
 [SKILLS_CATALOG.md](./SKILLS_CATALOG.md)。
 
 ## 恢复单个 Skill
