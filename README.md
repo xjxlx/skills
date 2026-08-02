@@ -1,13 +1,13 @@
-# Skills
+# Codex Skills
 
-个人Skills 合集。完整目录、依赖关系和发布状态见
+个人 Codex Skills 合集。完整目录、依赖关系和发布状态见
 [SKILLS_CATALOG.md](./SKILLS_CATALOG.md)。
 
 ## 恢复单个 Skill
 
 ```bash
 tmp=$(mktemp -d)
-git clone --depth 1 https://github.com/xjxlx/codex-skills.git "$tmp/codex-skills"
+git clone --depth 1 https://github.com/xjxlx/skills.git "$tmp/codex-skills"
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
 cp -R "$tmp/codex-skills/code-analyzer" "${CODEX_HOME:-$HOME/.codex}/skills/"
 rm -rf "$tmp"
@@ -20,7 +20,7 @@ rm -rf "$tmp"
 
 ```bash
 tmp=$(mktemp -d)
-git clone --depth 1 https://github.com/xjxlx/codex-skills.git "$tmp/codex-skills"
+git clone --depth 1 https://github.com/xjxlx/skills.git "$tmp/codex-skills"
 mkdir -p "${CODEX_HOME:-$HOME/.codex}/skills"
 for skill in code-analyzer code-normalize github-manager java-to-kotlin skill-common; do
   rm -rf "${CODEX_HOME:-$HOME/.codex}/skills/$skill"
@@ -41,4 +41,4 @@ rm -rf "$tmp"
 ~/.codex/skills/github-manager/scripts/restore_skills.sh --all --force
 ```
 
-仓库：https://github.com/xjxlx/codex-skills
+仓库：https://github.com/xjxlx/skills
