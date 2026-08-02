@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-02 13:04:40，由 github-manager 维护
+> 自动生成于 2026-08-02 15:59:15，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -46,7 +46,7 @@ graph LR
 - **目录名**：`code-compose`
 - **用途**：生成符合当前项目规范的 Android Compose 代码，并随使用持续积累项目约定。接收从蓝湖（Lanhu）复制的设计信息（尺寸、颜色、字号、间距、布...
 - **依赖**：skill-common
-- **文件数**：7
+- **文件数**：8
 - **UI 元数据**：有 agents/openai.yaml
 - **路径**：`~/.codex/skills/code-compose/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-compose
