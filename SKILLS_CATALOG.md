@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-02 12:09:23，由 github-manager 维护
+> 自动生成于 2026-08-02 12:45:10，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -8,7 +8,7 @@
 | Skill | 用途 | 依赖 | 状态 | 最后更新 |
 |---|---|---|---|---|
 | [code-analyzer](https://github.com/xjxlx/skills/tree/main/code-analyzer) | 为指定 Java、Kotlin 文件梳理方法逻辑，添加详细中文方法注释，检测潜在 bug 和性能复杂度问题，并调用 code-normalize 完成成员... | code-normalize, skill-common | 已发布 | 2026-08-02 |
-| [code-compose](https://github.com/xjxlx/skills/tree/main/code-compose) | 生成符合当前项目规范的 Android Compose 代码，并随使用持续积累项目约定。接收从蓝湖（Lanhu）复制的设计信息（尺寸、颜色、字号、间距、布... | skill-common | 已发布 | - |
+| [code-compose](https://github.com/xjxlx/skills/tree/main/code-compose) | 生成符合当前项目规范的 Android Compose 代码，并随使用持续积累项目约定。接收从蓝湖（Lanhu）复制的设计信息（尺寸、颜色、字号、间距、布... | skill-common | 已发布 | 2026-08-02 |
 | [code-normalize](https://github.com/xjxlx/skills/tree/main/code-normalize) | 检测并安全规范 Java、Kotlin 类中的成员变量命名，更新全部引用，补充缺失的类注释，并为关键成员添加作用说明；发现已启用 ViewBinding ... | skill-common | 已发布 | 2026-08-02 |
 | [github-manager](https://github.com/xjxlx/skills/tree/main/github-manager) | 实现个人 Codex Skills 的变更检测、凭据扫描、GitHub 发布、目录维护和本地恢复。当用户要求检查发布状态、发布或更新 skill、扫描敏感... | 无 | 已发布 | 2026-08-02 |
 | [java-to-kotlin](https://github.com/xjxlx/skills/tree/main/java-to-kotlin) | 将 Android 项目中的 Java 类转换为 Kotlin。用于将 Java 文件迁移到 Kotlin、用惯用 Kotlin 重写 Java 类、或现... | code-analyzer, code-normalize, skill-common | 已发布 | 2026-08-02 |
@@ -51,7 +51,7 @@ graph LR
 - **路径**：`~/.codex/skills/code-compose/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-compose
 - **状态**：已发布
-- **最后更新**：-
+- **最后更新**：2026-08-02
 
 ### code-normalize
 
