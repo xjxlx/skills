@@ -90,7 +90,7 @@ description: 实现个人 Codex Skills 的变更检测、凭据扫描、GitHub �
 
 1. 列出新增、修改、删除的文件
 2. 更新 README.md（如有必要）
-3. 提交并推送到 GitHub
+3. 提交并推送到 GitHub（提交信息必须包含本次变更的 skill 与文件清单，禁止使用固定文案）
 4. 更新 `.hashes.json` 中该 skill 的 hash 记录
 5. 更新 `.github-published` 中的 `last_publish` 和 `commit`
 

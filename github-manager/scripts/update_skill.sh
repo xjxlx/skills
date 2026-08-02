@@ -67,11 +67,16 @@ COMMIT_MSG="update: $SKILL_NAME"
 if [[ $ADDED -gt 0 ]]; then COMMIT_MSG="$COMMIT_MSG (+${ADDED} new)"; fi
 if [[ $MODIFIED -gt 0 ]]; then COMMIT_MSG="$COMMIT_MSG (~${MODIFIED} modified)"; fi
 if [[ $DELETED -gt 0 ]]; then COMMIT_MSG="$COMMIT_MSG (-${DELETED} deleted)"; fi
+CHANGE_FILES=$(printf '%s\n' "$CHANGE_OUTPUT" | grep -E "^[AMD] " | sed 's/^[AMD]  //')
 
 # 提交并推送
 echo "📁 提交变更..."
 git add -A
-git commit -m "$COMMIT_MSG"
+if [[ -n "$CHANGE_FILES" ]]; then
+  git commit -m "$COMMIT_MSG" -m "$CHANGE_FILES"
+else
+  git commit -m "$COMMIT_MSG"
+fi
 
 echo "🚀 推送到 GitHub..."
 CURRENT_BRANCH=$(git branch --show-current)

@@ -161,7 +161,18 @@ git -C "$UNIFIED_DIR" add -A
 if git -C "$UNIFIED_DIR" diff --cached --quiet; then
   echo "无仓库变更，跳过提交"
 else
-  git -C "$UNIFIED_DIR" commit -m "update: sync skills"
+  # 提交信息包含本次实际变更：主题为涉及的 skill/根文件，正文为完整文件清单
+  CHANGED_SKILLS=$(git -C "$UNIFIED_DIR" diff --cached --name-only | awk -F/ '{print ($1 == "") ? $0 : $1}' | sort -u | paste -sd, -)
+  CHANGED_FILES=$(git -C "$UNIFIED_DIR" diff --cached --name-status)
+  if [[ -n "$CHANGED_SKILLS" ]]; then
+    if [[ -n "$CHANGED_FILES" ]]; then
+      git -C "$UNIFIED_DIR" commit -m "sync skills: $CHANGED_SKILLS" -m "$CHANGED_FILES"
+    else
+      git -C "$UNIFIED_DIR" commit -m "sync skills: $CHANGED_SKILLS"
+    fi
+  else
+    git -C "$UNIFIED_DIR" commit -m "sync skills"
+  fi
 fi
 CURRENT_BRANCH=$(git -C "$UNIFIED_DIR" branch --show-current)
 [[ -n "$CURRENT_BRANCH" ]] || {
