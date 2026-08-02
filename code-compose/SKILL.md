@@ -46,6 +46,8 @@ description: 生成符合当前项目规范的 Android Compose 代码，并随�
 
 按 [references/lanhu-to-compose.md](references/lanhu-to-compose.md) 解析尺寸、颜色、字号、间距、布局和切图信息。转换前先查约定库：颜色映射到项目色板、字号映射到项目 Typography、间距映射到项目 spacing 体系、组件优先复用项目已有 Composable。
 
+- 可见性判定：按图层/兄弟节点顺序检查不透明背景遮挡，只实现最终可见的元素；被不透明面板背景盖住的隐藏层（如顶部目标条）不得渲染
+
 ### 5. 生成代码
 
 - 遵循项目命名与目录约定（如 `XxxLayout.kt` / `XxxPage.kt`）

@@ -11,8 +11,8 @@
 
 ## 通用换算
 
-- 设计稿基准：优先取项目约定的设计稿宽度（如 375dp 逻辑宽度或 1080px 像素宽度）
-- 换算公式：`dp = px × 设计稿逻辑宽度 / 设计稿像素宽度`；字号同理换算为 `sp`
+- 设计稿基准：以蓝湖导出信息中的页面/画布实际尺寸为准（如 HTML/CSS 中 `.page` 的宽高），禁止写死固定基准；设计稿尺寸不规范（异常宽高比、与项目约定不一致）时仍按导出尺寸换算，并明确标注假设
+- 换算公式：`dp = px × 设计稿实际逻辑宽度 / 设计稿像素宽度`；字号同理换算为 `sp`
 - 颜色：`#RRGGBB` → `Color(0xFFRRGGBB)`，`#RRGGBBAA` → `Color(0xRRGGBBAA)`；先查项目色板，禁止硬编码已有语义色
 - 圆角：`border-radius` → `RoundedCornerShape`
 - 阴影：`box-shadow` → `Modifier.shadow` 或 elevation
