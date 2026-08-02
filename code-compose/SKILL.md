@@ -174,6 +174,103 @@ python3 scripts/conventions.py init <project>              # 生成项目约定�
 - 只写能降低未来同类问题概率的最小规则；单次特例、猜测、未验证内容不写入
 - 与 `$skill-common` 的进化门槛保持一致
 
+## 常见编译错误与自动约束
+
+生成或修改 Compose 代码后，以下编译错误属于**高频可预防**类型，必须在写代码时主动规避：
+
+### 1. 未导入 Compose 布局修饰符
+
+使用 `heightIn`、`widthIn`、`sizeIn`、`fillMaxSize`、`wrapContentSize` 等修饰符时，必须确保对应的 import 已存在。
+
+**已知需要的 import（按使用频率）：**
+
+| 修饰符 | 所需 import |
+|---|---|
+| `heightIn` / `widthIn` / `sizeIn` | `import androidx.compose.foundation.layout.heightIn` / `widthIn` / `sizeIn` |
+| `fillMaxSize` / `fillMaxWidth` / `fillMaxHeight` | 已含 `fillMaxSize`；`fillMaxWidth` 和 `fillMaxHeight` 在同一包下，通常已有 |
+| `wrapContentSize` / `wrapContentWidth` / `wrapContentHeight` | `import androidx.compose.foundation.layout.wrapContentSize` |
+| `aspectRatio` | `import androidx.compose.foundation.layout.aspectRatio` |
+| `offset` | `import androidx.compose.foundation.layout.offset` |
+| `Spacer` | `import androidx.compose.foundation.layout.Spacer` |
+| `Divider` / `HorizontalDivider` | `import androidx.compose.material3.HorizontalDivider` |
+
+**执行规则：**
+- 生成新文件时，一次性写入所有需要的 import
+- 修改已有文件时，**先检查 import 区域**是否已包含所需 import，缺失则补充
+- 编译报 `Unresolved reference` 时，第一反应检查 import 而非修改代码逻辑
+
+### 2. Row/Column 中 weight 与 arrangement 冲突
+
+`Arrangement.spacedBy()` 与 `Modifier.weight()` 可以共存，但 `Arrangement.spacedBy()` 会**先扣除间距再分配 weight**。如果子项总宽度加上间距超出容器，weight 分配会异常。
+
+**规则：** 使用 `weight` 时，优先用 `Spacer` 手动控制间距，或确保 `Arrangement.spacedBy` 的间距值在合理范围内。
+
+### 3. Column 内 Row 高度不收敛（高频错误）
+
+`Column` 中的 `Row` 默认不继承 Column 的高度约束。`heightIn(min=X.dp)` 只设最小值，Row 会包裹内容高度而非填满 Column。
+
+**根因：** `Modifier.weight(1f)` 在 `Row` 中只分配**宽度**，不分配高度。所以 Row 内使用 `weight` 的子项不会让 Row 扩展高度。
+
+**规则：**
+- **Column 内需要 Row 按比例瓜分高度时**：用 `Modifier.weight(比例)` 而非 `heightIn`
+- **Row 内需要子项填充高度时**：用 `Modifier.fillMaxHeight()` 或 `.height(xxx.dp)`
+- **绝对不要**在 Column 内的 Row 上只用 `heightIn(min=X.dp)` + `weight(1f)` 子项——Row 不会扩展
+
+**正确示例：**
+```kotlin
+// Column 内两行按比例瓜分剩余高度
+Column(modifier = Modifier.fillMaxSize()) {
+    Row(modifier = Modifier.fillMaxWidth().weight(1.4f)) { ... }  // ✅ 占1.4份
+    Spacer(modifier = Modifier.height(10.dp))
+    Row(modifier = Modifier.fillMaxWidth().weight(1f)) { ... }    // ✅ 占1份
+}
+```
+
+**错误示例：**
+```kotlin
+Column(modifier = Modifier.fillMaxSize()) {
+    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 88.dp)) { ... }  // ❌ Row不扩展
+    Row(modifier = Modifier.fillMaxWidth().heightIn(min = 61.dp)) { ... }  // ❌ 第二行被挤出
+}
+```
+
+### 4. ConstraintLayout 中 Dimension.percent 与 spacing
+
+`Dimension.percent()` 计算的是**不含间距的百分比**。如果子项之间有 `margin`，需要在百分比中预留间距空间，否则子项会溢出。
+
+**规则：** 4 等分（含3个8dp间距）→ `Dimension.percent(138 / 636f)`（而非 `0.25f`），确保间距被纳入计算。
+
+---
+
+### 5. PlatformTextStyle 去除字体内边距
+
+Android 默认在 Text 上下加额外字体内边距（ascender/descender），导致行间距偏大。去掉写法：
+
+```kotlin
+import androidx.compose.ui.text.PlatformTextStyle
+import androidx.compose.ui.text.TextStyle  // 注意：如果项目已有 TextStyle 冲突，用别名
+
+Text(
+    text = "内容",
+    style = TextStyle(
+        platformStyle = PlatformTextStyle(includeFontPadding = false),
+        lineHeight = 11.sp,  // 行高 = 字号，无额外行间距
+    ),
+)
+```
+
+**注意 import 冲突：** Compose 的 `TextStyle` 可能与其他库冲突，用 `import ... as ComposeTextStyle` 别名解决。
+
+### 6. 固定设计高度 vs 比例分配
+
+当设计稿给出了明确的元素高度（如书卡88dp、61dp）时，**优先使用固定 `.height(X.dp)`** 而非 `Modifier.weight()`。
+
+- `weight()` 在 Column 中按比例瓜分剩余空间，实际高度取决于父容器总高度，不稳定
+- 固定高度直接匹配设计稿尺寸，内容不会被意外截断
+- 只有在父容器高度不确定且需要自适应时才用 `weight()`
+
+---
+
 ## 与其他 Skill 的边界
 
 - `$code-analyzer`：深度逻辑分析、Bug 检测、方法注释

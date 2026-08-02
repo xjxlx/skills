@@ -22,6 +22,12 @@
 
 ## 命名与结构
 
+## 编译约束
+
+- 2026-08-02: 使用 heightIn/widthIn/sizeIn 等修饰符时必须确认 import 已存在（`import androidx.compose.foundation.layout.heightIn` 等），否则编译报 Unresolved reference（来源：编译修复）
+- 2026-08-02: Column 内 Row 需要按比例分配高度时，必须用 Modifier.weight(比例) 而非 heightIn(min=X.dp)，因为 weight 在 Row 中只分配宽度不分配高度（来源：编译修复）
+- 2026-08-02: 设计稿给出明确高度的元素（如书卡88dp/61dp）优先用固定 .height(X.dp)，不用 weight()，避免父容器高度变化导致内容截断（来源：编译修复）
+
 ## 其他
 
 ## 设计稿
