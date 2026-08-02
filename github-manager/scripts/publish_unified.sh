@@ -166,12 +166,12 @@ else
   CHANGED_FILES=$(git -C "$UNIFIED_DIR" diff --cached --name-status)
   if [[ -n "$CHANGED_SKILLS" ]]; then
     if [[ -n "$CHANGED_FILES" ]]; then
-      git -C "$UNIFIED_DIR" commit -m "sync skills: $CHANGED_SKILLS" -m "$CHANGED_FILES"
+      git -C "$UNIFIED_DIR" commit -m "同步技能: $CHANGED_SKILLS" -m "$CHANGED_FILES"
     else
-      git -C "$UNIFIED_DIR" commit -m "sync skills: $CHANGED_SKILLS"
+      git -C "$UNIFIED_DIR" commit -m "同步技能: $CHANGED_SKILLS"
     fi
   else
-    git -C "$UNIFIED_DIR" commit -m "sync skills"
+    git -C "$UNIFIED_DIR" commit -m "同步技能"
   fi
 fi
 CURRENT_BRANCH=$(git -C "$UNIFIED_DIR" branch --show-current)

@@ -63,7 +63,7 @@ if ! git remote get-url origin >/dev/null 2>&1; then
 fi
 
 # 生成提交信息
-COMMIT_MSG="update: $SKILL_NAME"
+COMMIT_MSG="更新: $SKILL_NAME"
 if [[ $ADDED -gt 0 ]]; then COMMIT_MSG="$COMMIT_MSG (+${ADDED} new)"; fi
 if [[ $MODIFIED -gt 0 ]]; then COMMIT_MSG="$COMMIT_MSG (~${MODIFIED} modified)"; fi
 if [[ $DELETED -gt 0 ]]; then COMMIT_MSG="$COMMIT_MSG (-${DELETED} deleted)"; fi
