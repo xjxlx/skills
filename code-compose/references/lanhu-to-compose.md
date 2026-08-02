@@ -57,4 +57,20 @@
 - 缺颜色：查项目主题，标注假设
 - 缺交互说明：只生成静态布局并提示用户补充
 
+## 蓝湖资源命名与缓存
+
+### 命名规范
+
+- 目标格式：`[a-z][a-z0-9]*`（小写字母开头，仅含字母和数字）
+- 转换：移除空格、中文、下划线等特殊字符并转小写；无语义信息时用 `group/icon/label/image + 序号` 兜底
+- 示例：`组件 1.png` → `group1.png`；`Label_2.png` → `label2.png`
+- 名称可调整，但调整后必须写入缓存，禁止在代码中猜测文件名
+
+### 缓存文件
+
+- 位置：项目根目录 `.codex/lanhu-resources.json`（项目已有其他固定资源目录时，缓存放同目录）
+- 格式：`{"原始名称或URL": "本地文件名"}`
+- 示例：`{"组件 1.png": "group1.png", "https://lanhu-oss-2537-2.lanhuapp.com/SketchPngxxx": "icon_v2_rect_backup6.png"}`
+- 生成时用缓存中的本地文件名引用资源（如 `R.mipmap.group1`）
+
 完整示例见 [examples/lanhu-sample.md](../examples/lanhu-sample.md)。
