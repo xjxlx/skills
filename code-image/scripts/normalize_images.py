@@ -67,6 +67,15 @@ def normalize_namespace(compose_path: Path) -> str:
     return token
 
 
+def namespace_prefixes(namespace: str) -> list[str]:
+    """返回识别“已按命名空间规范命名”文件的前缀列表。"""
+    prefixes = [f"icon_{namespace}_"]
+    tokens = namespace.split("_")
+    if len(tokens) >= 2 and tokens[-1].startswith("v") and tokens[-1][1:].isdigit():
+        prefixes.append(f"icon_{'_'.join(tokens[:-1])}_")
+    return sorted(set(prefixes), key=len, reverse=True)
+
+
 def normalize_asset_stem(original_stem: str) -> str:
     """将图片原名转换为小写 snake_case；中文名使用稳定 Hash 兜底。"""
     # 蓝湖常见的重复下载后缀不参与基础名，真正冲突由资源身份 Hash 解决。
@@ -99,7 +108,8 @@ def resolve_mipmap_path(project_root: Path, value: str | None) -> Path:
         project_root / "app/src/main" / path,
     ]
     for candidate in candidates:
-        if candidate.exists():
+        # 基础 mipmap 目录可能不存在，但同级密度目录存在时同样可用
+        if candidate.exists() or any(candidate.parent.glob(candidate.name + "-*")):
             return candidate.resolve()
     return candidates[0].resolve()
 
@@ -163,6 +173,12 @@ def _find_cached_record(
             return record
     for record in records:
         if (
+            record.get("outputName") == Path(current_path).name
+            and record.get("resourceFamily") == resource_family
+        ):
+            return record
+    for record in records:
+        if (
             record.get("hash") == current_hash
             and record.get("resourceFamily") == resource_family
         ):
@@ -214,6 +230,7 @@ def build_plan(
 
     manifest = load_manifest(manifest_path) if manifest_path else {"resources": []}
     namespace = normalize_namespace(compose_path)
+    normalized_prefixes = namespace_prefixes(namespace)
     input_set = {path.resolve() for path in source_files}
     all_resource_dirs = list(
         dict.fromkeys(discover_project_mipmap_dirs(project_root) + directories)
@@ -228,20 +245,32 @@ def build_plan(
         cached = _find_cached_record(
             manifest.get("resources", []), current_path, source_hash, family
         )
-        if cached:
+        is_normalized_name = any(
+            source.name.lower().startswith(prefix) for prefix in normalized_prefixes
+        )
+        if cached and (not is_normalized_name or source.name == cached.get("outputName")):
             previous_original = cached.get("originalName")
             is_previous_output = source.name == cached.get("outputName")
             original_name = previous_original if is_previous_output else source.name
             identity = cached.get("identity") or f"{family}:{original_name}"
             previous_output = cached.get("outputName")
             previous_original_name = None if is_previous_output else previous_original
+        elif is_normalized_name:
+            # 文件已按当前命名空间规范命名，保留名称，仅同步缓存
+            original_name = source.name
+            identity = f"{family}:{original_name}"
+            previous_output = None
+            previous_original_name = None
         else:
             original_name = source.name
             identity = f"{family}:{original_name}"
             previous_output = None
             previous_original_name = None
 
-        stem = "icon_" + namespace + "_" + normalize_asset_stem(Path(original_name).stem)
+        if is_normalized_name:
+            stem = Path(source.name).stem
+        else:
+            stem = "icon_" + namespace + "_" + normalize_asset_stem(Path(original_name).stem)
         records.append(
             {
                 "source": source,

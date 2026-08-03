@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """code-image 的最小行为测试。"""
 
+import hashlib
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -9,7 +11,9 @@ from normalize_images import (
     apply_plan,
     build_plan,
     load_manifest,
+    namespace_prefixes,
     resolve_mipmap_dirs,
+    resolve_mipmap_path,
     update_compose_references,
 )
 
@@ -107,6 +111,124 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(
             {directory.name for directory in directories},
             {"mipmap-xhdpi", "mipmap-xxhdpi"},
+        )
+
+    def test_resolve_mipmap_path_finds_density_siblings_without_base_dir(self):
+        self.write_resource("mipmap-xhdpi", "one.png")
+        self.write_resource("mipmap-xxhdpi", "one.png")
+
+        resolved = resolve_mipmap_path(self.project, "res.layouts.v2.report.mipmap")
+
+        self.assertEqual(resolved, (self.report_root / "mipmap").resolve())
+        self.assertEqual(
+            {directory.name for directory in resolve_mipmap_dirs(resolved)},
+            {"mipmap-xhdpi", "mipmap-xxhdpi"},
+        )
+
+    def test_namespace_prefixes_cover_version_suffix_variants(self):
+        self.assertEqual(
+            namespace_prefixes("report_home_v2"),
+            ["icon_report_home_v2_", "icon_report_home_"],
+        )
+        self.assertEqual(namespace_prefixes("lesson_yflx"), ["icon_lesson_yflx_"])
+
+    def test_already_normalized_names_are_kept_not_double_prefixed(self):
+        self.write_resource("mipmap-xhdpi", "icon_report_home_v2_bg.png", b"bg")
+        self.write_resource("mipmap-xxhdpi", "icon_report_home_v2_bg.png", b"bg")
+
+        plan = build_plan(self.compose, self.report_root / "mipmap")
+
+        self.assertEqual(len(plan), 2)
+        for item in plan:
+            self.assertEqual(item.source.name, item.output_name)
+            self.assertEqual(item.original_name, "icon_report_home_v2_bg.png")
+
+    def test_apply_keeps_already_normalized_names_and_syncs_manifest(self):
+        source = self.write_resource(
+            "mipmap-xhdpi", "icon_report_home_v2_bg.png", b"new content"
+        )
+        plan = build_plan(self.compose, self.report_root / "mipmap-xhdpi")
+
+        apply_plan(plan, self.manifest, self.mapping, self.project)
+        manifest = load_manifest(self.manifest)
+
+        self.assertTrue(source.exists())
+        self.assertEqual(manifest["resources"][0]["outputName"], "icon_report_home_v2_bg.png")
+        self.assertEqual(manifest["resources"][0]["hash"], hashlib.sha256(b"new content").hexdigest())
+
+    def test_normalized_name_ignores_stale_hash_match_with_different_output_name(self):
+        self.write_resource("mipmap-xhdpi", "icon_report_home_v2_bg.png", b"bg")
+        self.manifest.parent.mkdir(parents=True, exist_ok=True)
+        self.manifest.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "resources": [
+                        {
+                            "identity": "app/src/main/res/layouts/v2/report:icon_v2_bg.png",
+                            "originalName": "icon_v2_bg.png",
+                            "outputName": "icon_report_home_v2_icon_v2_bg.png",
+                            "currentPath": "app/src/main/res/layouts/v2/report/mipmap-xhdpi/icon_report_home_v2_icon_v2_bg.png",
+                            "outputPath": "app/src/main/res/layouts/v2/report/mipmap-xhdpi/icon_report_home_v2_icon_v2_bg.png",
+                            "resourceFamily": "app/src/main/res/layouts/v2/report",
+                            "composeFile": "app/src/main/java/com/example/report/ReportHomeV2Layout.kt",
+                            "hash": hashlib.sha256(b"bg").hexdigest(),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        plan = build_plan(
+            self.compose,
+            self.report_root / "mipmap-xhdpi",
+            manifest_path=self.manifest,
+        )
+
+        self.assertEqual(len(plan), 1)
+        self.assertEqual(plan[0].output_name, "icon_report_home_v2_bg.png")
+        self.assertEqual(
+            plan[0].identity,
+            "app/src/main/res/layouts/v2/report:icon_report_home_v2_bg.png",
+        )
+
+    def test_sibling_density_matches_cache_by_output_name_and_family(self):
+        self.write_resource("mipmap-xhdpi", "icon_report_home_v2_image_6.png", b"xhdpi")
+        self.write_resource("mipmap-xxhdpi", "icon_report_home_v2_image_6.png", b"xxhdpi")
+        self.manifest.parent.mkdir(parents=True, exist_ok=True)
+        self.manifest.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "resources": [
+                        {
+                            "identity": "app/src/main/res/layouts/v2/report:编组 6.png",
+                            "originalName": "编组 6.png",
+                            "outputName": "icon_report_home_v2_image_6.png",
+                            "currentPath": "app/src/main/res/layouts/v2/report/mipmap-xxxhdpi/icon_report_home_v2_image_6.png",
+                            "outputPath": "app/src/main/res/layouts/v2/report/mipmap-xxxhdpi/icon_report_home_v2_image_6.png",
+                            "resourceFamily": "app/src/main/res/layouts/v2/report",
+                            "composeFile": "app/src/main/java/com/example/report/ReportHomeV2Layout.kt",
+                            "hash": "0" * 64,
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        plan = build_plan(
+            self.compose,
+            self.report_root / "mipmap",
+            manifest_path=self.manifest,
+        )
+
+        self.assertEqual(len(plan), 2)
+        self.assertEqual({item.output_name for item in plan}, {"icon_report_home_v2_image_6.png"})
+        self.assertEqual(
+            {item.identity for item in plan},
+            {"app/src/main/res/layouts/v2/report:编组 6.png"},
         )
 
     def test_apply_can_update_only_the_selected_compose_references(self):

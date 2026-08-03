@@ -42,7 +42,7 @@ description: Use when 蓝湖下载的图片文件名不符合 Android 资源命�
 - `.codex/lanhu-resources.json`：保存原始名称或路径到新资源名的简单映射，供 `code-compose` 查找。
 - `.codex/code-image-manifest.json`：保存原名、新名、当前路径、Compose 文件、mipmap 资源族和文件 Hash。格式见 [resource-cache.md](references/resource-cache.md)。
 
-重跑时按以下顺序定位历史资源：当前路径 → 缓存中的输出路径 → 相同 Hash 与资源族。Hash 相同但原文件名变化时，视为同一资源，更新缓存中的原名和新生成的资源名；Hash 变化时视为新资源，不删除旧记录。
+重跑时按以下顺序定位历史资源：当前路径 → 缓存中的输出路径 → 相同输出名与资源族 → 相同 Hash 与资源族。Hash 相同但原文件名变化时，视为同一资源，更新缓存中的原名和新生成的资源名；Hash 变化时视为新资源，不删除旧记录。源文件已按 `icon_<命名空间>_` 规范命名时视为已规范化，保留当前名称并只同步缓存，禁止再次追加前缀。
 
 如果同一资源已经被其他 Compose 文件登记，保持原资源名并在报告中标记为共享资源，不要静默追加新的页面前缀。
 
