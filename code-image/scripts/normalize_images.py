@@ -46,25 +46,36 @@ def _ascii_token(value: str) -> str:
     return re.sub(r"[^a-zA-Z0-9]", "", ascii_value).lower()
 
 
+def _snake_token(value: str) -> str:
+    """将英文、数字和分隔符转换为 Android 资源常用的 snake_case。"""
+    normalized = unicodedata.normalize("NFKD", value)
+    ascii_value = normalized.encode("ascii", "ignore").decode("ascii")
+    ascii_value = re.sub(r"([A-Z]+)([A-Z][a-z])", r"\1_\2", ascii_value)
+    ascii_value = re.sub(r"([a-z0-9])([A-Z])", r"\1_\2", ascii_value)
+    token = re.sub(r"[^a-zA-Z0-9]+", "_", ascii_value)
+    return re.sub(r"_+", "_", token).strip("_").lower()
+
+
 def normalize_namespace(compose_path: Path) -> str:
-    """完整使用 Compose 文件名生成命名空间，不删除 Layout/Page 后缀。"""
-    token = _ascii_token(compose_path.stem)
+    """使用 Compose 文件名生成 snake_case 命名空间，并去掉末尾 Layout。"""
+    stem = re.sub(r"(?i)layout$", "", compose_path.stem)
+    token = _snake_token(stem)
     if not token:
-        token = "layout" + hashlib.sha256(compose_path.stem.encode()).hexdigest()[:6]
+        token = "screen_" + hashlib.sha256(compose_path.stem.encode()).hexdigest()[:6]
     if token[0].isdigit():
-        token = "layout" + token
+        token = "screen_" + token
     return token
 
 
 def normalize_asset_stem(original_stem: str) -> str:
-    """将图片原名转换为小写字母和数字；中文名使用稳定 Hash 兜底。"""
+    """将图片原名转换为小写 snake_case；中文名使用稳定 Hash 兜底。"""
     # 蓝湖常见的重复下载后缀不参与基础名，真正冲突由资源身份 Hash 解决。
     without_copy_suffix = re.sub(r"(?:\(\d+\)|[_-]\d+)$", "", original_stem)
-    token = _ascii_token(without_copy_suffix)
+    token = _snake_token(without_copy_suffix)
     if not token:
-        token = "image" + hashlib.sha256(original_stem.encode()).hexdigest()[:6]
+        token = "image_" + hashlib.sha256(original_stem.encode()).hexdigest()[:6]
     if token[0].isdigit():
-        token = "image" + token
+        token = "image_" + token
     return token
 
 
@@ -230,7 +241,7 @@ def build_plan(
             previous_output = None
             previous_original_name = None
 
-        stem = "icon_" + namespace + normalize_asset_stem(Path(original_name).stem)
+        stem = "icon_" + namespace + "_" + normalize_asset_stem(Path(original_name).stem)
         records.append(
             {
                 "source": source,
