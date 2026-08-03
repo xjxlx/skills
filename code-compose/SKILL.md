@@ -111,11 +111,19 @@ mkdir -p ~/Downloads/<目录名> && unzip -o <zip路径> -d ~/Downloads/<目录�
 
 - 可见性判定：按图层/兄弟节点顺序检查不透明背景遮挡，只实现最终可见的元素；被不透明面板背景盖住的隐藏层（如顶部目标条）不得渲染
 
+#### 图片资源查找（与 code-image 联动）
+
+- 图片命名、冲突处理和缓存格式以 `$code-image` 为唯一规范；`code-compose` 不再自行生成或猜测资源名。
+- 生成 `Image`、`painterResource` 或 `R.mipmap` 引用前，先运行 `scripts/resolve_resources.py` 查找项目内实际存在的图片。
+- 解析顺序固定为：本地资源文件中的原始文件名 → `.codex/lanhu-resources.json` 的原始名/路径映射 → `.codex/code-image-manifest.json` 的 `originalName`、`previousOriginalName` 和输出路径。
+- 映射键支持原始文件名、带目录的原始路径和 URL；只有解析结果对应实际文件且候选唯一时才生成引用，否则报告候选或缺失项，禁止清洗原名猜测 `R.mipmap` 或静默使用错误资源。
+
 ### 5. 生成代码
 
 - 遵循项目命名与目录约定（如 `XxxLayout.kt` / `XxxPage.kt`）
 - 布局结构、Modifier 顺序、状态管理按项目约定；单函数保持小而内聚，拆分私有 Composable
 - 默认写入项目对应 compose 目录；用户指定路径时写入指定位置
+- 图片引用使用资源解析器返回的当前资源 stem，例如 `R.mipmap.icon_report_home_v2_group_62`，禁止直接把蓝湖原始文件名拼成资源名
 
 ### 6. 设计稿截图验证（强制步骤）
 

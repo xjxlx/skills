@@ -61,16 +61,16 @@
 
 ### 命名规范
 
-- 目标格式：`[a-z][a-z0-9]*`（小写字母开头，仅含字母和数字）
-- 转换：移除空格、中文、下划线等特殊字符并转小写；无语义信息时用 `group/icon/label/image + 序号` 兜底
-- 示例：`组件 1.png` → `group1.png`；`Label_2.png` → `label2.png`
-- 名称可调整，但调整后必须写入缓存，禁止在代码中猜测文件名
+- 图片输出命名、Hash 冲突和缓存更新统一由 `$code-image` 负责；其 `icon_<compose>_<asset>.ext` 结果是本流程唯一认可的资源名。
+- `code-compose` 只负责查找和引用，不复制另一套清洗规则，也不从原始名推导新文件名。
 
 ### 缓存文件
 
 - 位置：项目根目录 `.codex/lanhu-resources.json`（项目已有其他固定资源目录时，缓存放同目录）
-- 格式：`{"原始名称或URL": "本地文件名"}`
-- 示例：`{"组件 1.png": "group1.png", "https://lanhu-oss-2537-2.lanhuapp.com/SketchPngxxx": "icon_v2_rect_backup6.png"}`
-- 生成时用缓存中的本地文件名引用资源（如 `R.mipmap.group1`）
+- 格式：`{"原始名称或URL": "当前本地资源文件名"}`；同名资源可以使用“资源族路径/原始文件名”作为键。
+- 示例：`{"Group 62.png": "icon_report_home_v2_group_62.png", "res/layouts/report/mipmap-xhdpi/Group 63.png": "icon_report_home_v2_group_63.png"}`
+- 查找时使用 `scripts/resolve_resources.py`，按本地实际文件、简单映射、完整 manifest 的顺序解析；只有确认文件存在后才生成 `R.mipmap.<资源 stem>`。
+- 示例命令：`python3 scripts/resolve_resources.py --project-root /path/to/project --original "Group 62.png"`
+- 缓存缺失、过期或出现多个候选时，必须报告原始文件名和候选路径，禁止在 Compose 代码中猜测资源名。
 
 完整示例见 [examples/lanhu-sample.md](../examples/lanhu-sample.md)。
