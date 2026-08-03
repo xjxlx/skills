@@ -285,7 +285,7 @@ def build_plan(
                     key = Path(output_name).stem
                     previous_same = output_by_identity.get((family_absolute, identity))
                     if (key not in used or previous_same == output_name) and output_name not in {
-                        item["output_name"] for item in plans
+                        item.output_name for item in plans
                     }:
                         used.add(key)
                         break
