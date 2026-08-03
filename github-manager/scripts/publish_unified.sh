@@ -157,22 +157,54 @@ rm -rf "\$tmp"
 仓库：https://github.com/$REPO_FULL
 README
 
+# --- 提交信息增强：包含 skill 名称和功能描述 ---
+extract_skill_desc() {
+  local skill_md="$1"
+  [[ -f "$skill_md" ]] || { echo ""; return; }
+  # 从 YAML front-matter 的 description 字段提取，取前 80 字符
+  local desc
+  desc=$(sed -n '/^---$/,/^---$/{ /^description:/{ s/^description: *//; p; q; } }' "$skill_md" 2>/dev/null || true)
+  [[ -z "$desc" ]] && desc=$(head -5 "$skill_md" | grep -v '^---' | grep -v '^#' | head -1 | sed 's/^[[:space:]]*//')
+  # 截断到 80 字符
+  echo "${desc:0:80}"
+}
+
 git -C "$UNIFIED_DIR" add -A
 if git -C "$UNIFIED_DIR" diff --cached --quiet; then
   echo "无仓库变更，跳过提交"
 else
-  # 提交信息包含本次实际变更：主题为涉及的 skill/根文件，正文为完整文件清单
-  CHANGED_SKILLS=$(git -C "$UNIFIED_DIR" diff --cached --name-only | awk -F/ '{print ($1 == "") ? $0 : $1}' | sort -u | paste -sd, -)
+  # 提取变更的 skill 列表
+  CHANGED_SKILLS=$(git -C "$UNIFIED_DIR" diff --cached --name-only | awk -F/ '{print ($1 == "") ? $0 : $1}' | sort -u | grep -v '^$')
   CHANGED_FILES=$(git -C "$UNIFIED_DIR" diff --cached --name-status)
+
+  # 构建 commit 标题和正文
+  COMMIT_TITLE=""
+  COMMIT_BODY=""
+
   if [[ -n "$CHANGED_SKILLS" ]]; then
-    if [[ -n "$CHANGED_FILES" ]]; then
-      git -C "$UNIFIED_DIR" commit -m "同步技能: $CHANGED_SKILLS" -m "$CHANGED_FILES"
-    else
-      git -C "$UNIFIED_DIR" commit -m "同步技能: $CHANGED_SKILLS"
-    fi
-  else
-    git -C "$UNIFIED_DIR" commit -m "同步技能"
+    # 为每个变更的 skill 提取功能描述
+    while IFS= read -r skill_name; do
+      [[ -z "$skill_name" ]] && continue
+      skill_desc=$(extract_skill_desc "$SKILLS_ROOT/$skill_name/SKILL.md")
+      if [[ -n "$skill_desc" ]]; then
+        COMMIT_TITLE="${COMMIT_TITLE:+$COMMIT_TITLE, }$skill_name"
+        COMMIT_BODY="${COMMIT_BODY}${COMMIT_BODY:+\n\n}[$skill_name] $skill_desc"
+      else
+        COMMIT_TITLE="${COMMIT_TITLE:+$COMMIT_TITLE, }$skill_name"
+      fi
+    done <<< "$CHANGED_SKILLS"
   fi
+
+  # 补充文件变更清单到正文
+  if [[ -n "$CHANGED_FILES" ]]; then
+    COMMIT_BODY="${COMMIT_BODY}${COMMIT_BODY:+\n\n}变更文件:\n$CHANGED_FILES"
+  fi
+
+  # 回退：无有效标题时使用默认值
+  [[ -z "$COMMIT_TITLE" ]] && COMMIT_TITLE="同步技能"
+  [[ -z "$COMMIT_BODY" ]] && COMMIT_BODY="$CHANGED_FILES"
+
+  git -C "$UNIFIED_DIR" commit -m "$COMMIT_TITLE" -m "$COMMIT_BODY"
 fi
 CURRENT_BRANCH=$(git -C "$UNIFIED_DIR" branch --show-current)
 [[ -n "$CURRENT_BRANCH" ]] || {
