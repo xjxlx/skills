@@ -30,7 +30,7 @@ description: Use when 蓝湖下载的图片文件名不符合 Android 资源命�
 
 - 使用 Compose 文件完整 stem 生成命名空间：`ReportHomeV2Layout.kt` → `reporthomev2layout`；不要删除 `Layout`、`Page` 等后缀。
 - 清理图片原名中的空格、中文和特殊字符，生成小写字母和数字；名称以数字开头时加 `image` 前缀。
-- 最终名称为 `Compose命名空间 + 图片基础名 + 原扩展名`，例如 `reporthomev2layoutgroup62.png`。
+- 所有输出文件名必须以 `icon_` 开头；最终名称为 `icon_ + Compose命名空间 + 图片基础名 + 原扩展名`，例如 `icon_reporthomev2layoutgroup62.png`。
 - 同一资源族在 `mipmap-xhdpi`、`mipmap-xxhdpi` 等密度目录中必须使用同一个文件名。
 - 同一资源族内出现不同图片但基础名相同时，为每个资源追加由稳定资源身份计算的 Hash；禁止依赖扫描顺序生成 `_1`、`_2`。
 - 扫描项目中已有的 mipmap 文件名；目标名已被其他资源占用时禁止覆盖，改用稳定 Hash 或报告冲突。

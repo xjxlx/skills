@@ -50,7 +50,7 @@ class NormalizeImagesTest(unittest.TestCase):
         reversed_names = {item.source: item.output_name for item in reversed_plan}
         self.assertEqual(normal_names, reversed_names)
         self.assertEqual(len({item.output_name for item in normal}), 2)
-        self.assertTrue(all(item.output_name.startswith("reporthomev2") for item in normal))
+        self.assertTrue(all(item.output_name.startswith("icon_reporthomev2") for item in normal))
 
     def test_same_asset_across_density_directories_keeps_one_resource_name(self):
         xhdpi = self.write_resource("mipmap-xhdpi", "Group 62.png", b"xhdpi")
@@ -58,7 +58,7 @@ class NormalizeImagesTest(unittest.TestCase):
 
         plan = build_plan(self.compose, self.report_root / "mipmap")
 
-        self.assertEqual({item.output_name for item in plan}, {"reporthomev2layoutgroup62.png"})
+        self.assertEqual({item.output_name for item in plan}, {"icon_reporthomev2layoutgroup62.png"})
 
     def test_existing_resource_name_is_never_overwritten(self):
         existing = self.write_resource("mipmap-xxhdpi", "reporthomev2bg.png", b"existing")
@@ -87,13 +87,13 @@ class NormalizeImagesTest(unittest.TestCase):
         )
 
         self.assertEqual(len(second_plan), 1)
-        self.assertEqual(second_plan[0].previous_output_name, "reporthomev2layoutold.png")
-        self.assertEqual(second_plan[0].output_name, "reporthomev2layoutnewsource.png")
+        self.assertEqual(second_plan[0].previous_output_name, "icon_reporthomev2layoutold.png")
+        self.assertEqual(second_plan[0].output_name, "icon_reporthomev2layoutnewsource.png")
 
         apply_plan(second_plan, self.manifest, self.mapping, self.project)
         manifest = load_manifest(self.manifest)
         self.assertEqual(manifest["resources"][0]["originalName"], "new-source.png")
-        self.assertEqual(manifest["resources"][0]["outputName"], "reporthomev2layoutnewsource.png")
+        self.assertEqual(manifest["resources"][0]["outputName"], "icon_reporthomev2layoutnewsource.png")
 
     def test_base_mipmap_path_includes_density_siblings(self):
         self.write_resource("mipmap-xhdpi", "one.png")
@@ -114,7 +114,7 @@ class NormalizeImagesTest(unittest.TestCase):
         apply_plan(plan, self.manifest, self.mapping, self.project)
         update_compose_references(self.compose, plan)
 
-        self.assertIn("R.mipmap.reporthomev2layoutold", self.compose.read_text())
+        self.assertIn("R.mipmap.icon_reporthomev2layoutold", self.compose.read_text())
 
 
 if __name__ == "__main__":

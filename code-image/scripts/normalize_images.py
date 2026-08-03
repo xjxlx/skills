@@ -230,7 +230,7 @@ def build_plan(
             previous_output = None
             previous_original_name = None
 
-        stem = namespace + normalize_asset_stem(Path(original_name).stem)
+        stem = "icon_" + namespace + normalize_asset_stem(Path(original_name).stem)
         records.append(
             {
                 "source": source,

@@ -29,8 +29,8 @@ Hash 用于识别原始文件被改名的情况，不用于把不同资源自动
 
 ```json
 {
-  "Group 62.png": "reporthomev2layoutgroup62.png",
-  "res/layouts/report/mipmap-xhdpi/Group 63.png": "reporthomev2layoutgroup63.png"
+  "Group 62.png": "icon_reporthomev2layoutgroup62.png",
+  "res/layouts/report/mipmap-xhdpi/Group 63.png": "icon_reporthomev2layoutgroup63.png"
 }
 ```
 
@@ -47,8 +47,8 @@ Hash 用于识别原始文件被改名的情况，不用于把不同资源自动
     {
       "identity": "res/layouts/report:Group 62.png",
       "originalName": "Group 62.png",
-      "outputName": "reporthomev2layoutgroup62.png",
-      "currentPath": "app/src/main/res/layouts/report/mipmap-xhdpi/reporthomev2layoutgroup62.png",
+      "outputName": "icon_reporthomev2layoutgroup62.png",
+      "currentPath": "app/src/main/res/layouts/report/mipmap-xhdpi/icon_reporthomev2layoutgroup62.png",
       "resourceFamily": "app/src/main/res/layouts/report",
       "composeFile": "app/src/main/java/com/jollyeng/www/compose/ui/activity/report/ReportHomeV2Layout.kt",
       "hash": "sha256..."
