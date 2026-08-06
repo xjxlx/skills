@@ -12,7 +12,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 遵循 `$skill-common` 基础规范。每次调用本 Skill 时，先执行 `"${CODEX_HOME:-$HOME/.codex}/skills/github-manager/scripts/check_and_publish.sh"`；检测或发布成功后再继续，失败时立即停止。
 - 只负责蓝湖 ZIP 的设计解析、Compose 生成、图片接入和视觉验证闭环。
 - 不调用、不继承旧 `$code-compose`，也不读取它的规则或缓存。
-- 图片需要规范命名、冲突处理或 Hash 映射时，调用 `$code-image`；只传递目标 Compose 文件和明确的资源目录，不复制其内部规则。
+- 图片接入时调用 `$code-image`；对蓝湖 ZIP 解压出的每张图片分别传递一次 `--image`、目标 Compose 文件和项目根目录，不调用其 ZIP 批量入口，也不复制其内部规则。
 - 模拟器验证能力可用时调用 `test-android-apps:android-emulator-qa`；不可用时才执行本 Skill 规定的显式 ADB 流程。
 
 ## 必需输入
@@ -33,7 +33,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 确认 ZIP、当前工作目录中的 Android 项目、目标模块和 Gradle Wrapper 可访问。
 - 计算 ZIP 完整 SHA-256；禁止根据文件名判断是否为同一设计。
 - 以规范化的 ZIP 文件名和完整 SHA-256 前六位确定本次专属工作目录：`.code-lanhu-compose/<zip-stem>-<sha256前6位>/`。目录内保存 `design.json`、`images.json` 与 `runs/`；完整 SHA-256 必须写入 JSON 供身份校验。
-- 安全解压到当前用户下载目录的 `<zip-stem>-<sha256前8位>/`，解压前拒绝绝对路径、`..` 路径穿越和指向目录外的符号链接。
+- 安全解压到当前用户下载目录的 `<zip-stem>-<sha256前6位>/`，解压前拒绝绝对路径、`..` 路径穿越和指向目录外的符号链接。
 - 找到唯一有效的 `index.html`，并找到它实际引用的 `index.css`。存在多个候选页面根目录时，列出候选并让用户选择。
 - 缺少入口、CSS 无法加载或资源路径越界时停止，不生成猜测代码。
 - 创建或复用截图运行目录前，必须确认本次专属工作目录中的 `design.json` 存在、可解析且其 `sourceSha256` 与当前 ZIP 一致；缺失时先完成设计解析写入，不得只创建 `runs/` 并把截图当作完整缓存。
@@ -72,8 +72,9 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 ### 4. 接入图片资源
 
 - 从解析结果取得图片的真实相对路径和内容 Hash，禁止使用模糊文件名猜测资源。
-- 先用 `scripts/import_zip_images.py` 将 ZIP 图片导入目标 mipmap，并在 `.code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json` 写入本次导入清单；同名 ZIP 必须通过 Hash 区分。
-- 需要规范 Android 资源名时调用 `$code-image`，同时传递目标 Compose 文件、目标 mipmap 路径和导入清单的 `--input-manifest`。它只重命名清单中的 `targetPath`，共享 mipmap 中其余图片只用于冲突检测。
+- 运行 `scripts/import_zip_images.py --zip <zip> --compose <target-compose> --project-root <project> --apply`。它安全解压 ZIP 后，对每张图片分别调用一次 `$code-image --image`；每张图片由 `$code-image` 复制到 `mipmap-xxhdpi`、规范命名并写入项目 `.code-image/resources.json`。
+- 将每张实际导入结果（ZIP 内源路径、Hash、真实 `outputPath`、`outputName`）原子写入 `.code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json`。Compose 只能引用其中真实存在的 `outputName`；禁止根据 ZIP 文件名或旧 staging 文件猜测资源名。
+- 蓝湖 HTML/CSS ZIP 通常不是 `mipmap*` 资源包，禁止把整个 ZIP 传给 `$code-image --zip`；必须先解压并逐图调用 `$code-image --image`。
 - 只使用实际存在且映射成功的资源；禁止用文字、猜测圆角或临时 `Canvas` 替代已有设计切图。
 - 图片匹配失败时列出设计节点、源路径、Hash 和候选文件，停止处理该资源并请求确认。
 

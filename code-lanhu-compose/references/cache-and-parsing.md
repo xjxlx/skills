@@ -19,26 +19,19 @@
 
 ## 图片导入清单
 
-ZIP 图片复制到共享 mipmap 时，先运行：
+蓝湖 HTML/CSS ZIP 不是 `$code-image --zip` 所需的 `mipmap*` 资源包。先运行本 Skill 的逐图协调脚本：
 
 ```bash
 python3 scripts/import_zip_images.py \
   --zip <zip-path> \
-  --mipmap-path <target-mipmap> \
-  --project-root <project-root>
-```
-
-脚本把图片暂存到目标 mipmap，默认生成 `<zip-stem>-<sha256前6位>/images.json`。每项至少记录 ZIP 内相对路径、原始文件名、内容 Hash 与实际 `targetPath`；临时导入名由 ZIP 内路径和内容 Hash 生成，禁止覆盖共享目录原文件。随后调用 `$code-image` 时必须传入该 JSON：
-
-```bash
-python3 normalize_images.py \
   --compose <target-compose> \
-  --mipmap-path <target-mipmap> \
-  --input-manifest .code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json \
+  --project-root <project-root> \
   --apply
 ```
 
-`$code-image` 必须校验每个 `targetPath` 的 Hash，只改清单列出的图片；扫描整个 mipmap 仅用于避免最终资源名冲突。
+脚本安全解压 ZIP 到 `~/Downloads/<zip-stem>-<sha256前6位>/`，按 ZIP 内图片逐个调用 `$code-image --image <extracted-image> --compose <target-compose> --project-root <project-root> --apply`。每次调用只复制和改名这一张图片，输出位于 `$code-image` 规定的 `mipmap-xxhdpi`；它同时更新项目 `.code-image/resources.json`。
+
+随后将本 ZIP 的来源和实际导入结果写入 `<zip-stem>-<sha256前6位>/images.json`。每项至少记录 ZIP 内 `sourcePath`、解压后路径、原始文件名、内容 Hash、真实 `outputPath` 和 `outputName`。该文件仅用于本 ZIP 的设计资源与 Compose 引用对应，不再作为 `$code-image` 的输入。
 
 ## 设计产物格式
 
