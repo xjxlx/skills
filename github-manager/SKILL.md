@@ -23,6 +23,9 @@ description: 实现个人 Codex Skills 的变更检测、凭据扫描、GitHub �
 
 ## 工作流程
 
+GitHub 网络异常、远端分支领先以及拉取/推送顺序，执行前先阅读
+[references/github-workflow.md](references/github-workflow.md)。
+
 ### 第一步：安全扫描
 
 对所有目标 skill 执行安全扫描，检测敏感信息。

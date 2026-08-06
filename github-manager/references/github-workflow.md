@@ -44,6 +44,20 @@ scripts/check_and_publish.sh
 7. push 成功后保存新 hash
 ```
 
+## GitHub 代理与分支同步
+
+当浏览器可以打开 GitHub，但 Git 的 `push` 或 `pull` 卡住、连接超时或出现
+`HTTP2 framing` 错误时，先执行 `scutil --proxy` 检查系统代理。若 HTTP/HTTPS
+代理已启用，使用实际代理地址显式执行 Git 操作：
+
+```bash
+git -c http.proxy=http://<代理地址>:<端口> fetch origin
+git -c http.proxy=http://<代理地址>:<端口> pull --rebase origin main
+git -c http.proxy=http://<代理地址>:<端口> push origin main
+```
+
+若推送提示 `fetch first` 或远端分支领先，先 `fetch`，再 `pull --rebase` 并解决冲突，确认本地历史正确后再推送。未经用户明确确认，不得使用 `--force` 覆盖远端提交；代理地址和端口必须以当前机器检测结果为准。
+
 ## 恢复流程
 
 ```
@@ -95,7 +109,7 @@ scripts/check_and_publish.sh
 ## 常见问题
 
 **Q: push 被拒绝？**
-A: 确认远程仓库地址正确，尝试 `git pull --rebase origin main` 后重新 push。
+A: 确认远程仓库地址正确；若网页可访问但 Git 卡住，先按“GitHub 代理与分支同步”使用代理，再执行 `git pull --rebase origin main` 后重新 push。
 
 **Q: 仓库已存在？**
 A: 使用 `--repo-name` 参数指定不同的名称，或先删除已有仓库。
