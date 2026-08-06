@@ -1,11 +1,11 @@
 ---
 name: code-image
-description: Use when 需要将单个 Android mipmap 图片改为合规资源名，并记录原始名称与新名称的稳定映射。
+description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并转换为合规 Android 资源名和稳定映射。
 ---
 
 # Code Image
 
-只处理调用方明确传入的一张图片：将其改为合规 Android 资源名，并在项目根目录 `.code-image/resources.json` 记录原始信息和改名结果。它不批量扫描或重命名其他图片，不修改 Compose，也不负责图片导入。
+导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 解压后按其中的 `mipmap` 或 `mipmap-*` 目录复制到项目对应目录。每张导入图片均独立生成合规名称并记录映射。
 
 ## 强制入口与维护边界
 
@@ -19,67 +19,66 @@ description: Use when 需要将单个 Android mipmap 图片改为合规资源名
 
 ## 输入契约
 
-- `--image <path>` 是唯一必填输入，必须是项目内 `mipmap` 或 `mipmap-*` 目录下的一张 `.png`、`.jpg`、`.jpeg`、`.webp` 或 `.gif` 图片。
-- `--compose <path>` 是可选参考。提供时必须是实际存在的 Compose 文件；仅用于生成页面命名空间。
-- 每次命令只能传入一个 `--image`。有 N 张图片时必须调用 N 次；禁止输入目录、通配符、ZIP 清单或多图片列表。
-- `--project-root <path>` 可选；未提供时从图片路径推断项目根目录。
+- 必须且只能提供其中一项：`--image <path>` 或 `--zip <path>`。重复参数、目录、通配符和同时传递两者均无效。
+- `--image` 只接受一张 `.png`、`.jpg`、`.jpeg`、`.webp` 或 `.gif` 图片；源文件保留不动。
+- `--zip` 只接受一个 ZIP；只导入其中路径位于 `mipmap` 或 `mipmap-*` 目录的图片，拒绝绝对路径、`..` 路径穿越和符号链接。
+- `--compose <path>` 可选。提供时必须是实际存在的 Compose 文件，仅用于生成页面命名空间。
+- `--project-root <path>` 可选，默认当前工作目录。
+
+## 导入位置
+
+- 单图：复制到 `<project>/app/src/main/res/mipmap-xxhdpi/`。
+- ZIP：先安全解压到 `~/Downloads/<zip-stem>-<zip-sha256前6位>/`，再将各图片复制到 `<project>/app/src/main/res/<ZIP 内对应的 mipmap 目录名>/`。
+- 输出图片始终使用目标目录；不以输入图片原目录或示例中的 `mipmap-nodpi` 作为单图输出位置。
 
 ## 命名规则
 
 - 图片基础名转为小写 snake_case：`Group 62.png` → `group_62.png`；无可用英文字符时使用稳定 Hash；数字开头时加 `image_`。
 - 无 `--compose` 时输出 `icon_<图片基础名>.<扩展名>`，例如 `icon_group_62.png`。
-- 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`，例如 `ReportHomeV2Layout.kt` → `icon_report_home_v2_group_62.png`。
-- Compose 文件名以 `Layout` 或 `Page` 结尾时去掉该后缀：`Test3Page.kt` → `test3`。
-- 已以 `icon_` 开头的合规名称不再加前缀；重跑已记录图片时保留已有输出名。
-- 目标名与同一 mipmap 资源族中既有文件冲突时，追加稳定 Hash；只读取冲突文件名，不改动它们。
+- 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`；`Layout` 和 `Page` 后缀不参与命名空间。
+- 已以 `icon_` 开头的合规名称不再加前缀；重复导入已记录源时保留已有输出名。
+- 目标 mipmap 目录已有同名文件时，从 `_1` 开始依次递增：`icon_group_62.png` → `icon_group_62_1.png` → `icon_group_62_2.png`。禁止覆盖已有图片。
 
 ## 记录与改名
 
-所有运行时生成文件只允许放在项目根目录 `.code-image/`：
+运行记录固定写入项目根目录 `.code-image/resources.json`。除用户要求的 ZIP 解压目录和项目资源输出外，Skill 不得在 `.code-image/` 之外创建缓存、映射或日志。记录格式见 [resource-cache.md](references/resource-cache.md)。
 
-```text
-.code-image/
-└── resources.json
-```
-
-实际改名只发生在输入图片原本所在的 mipmap 目录。应用改名后，原子更新 `.code-image/resources.json`，每项至少记录原始路径和名称、原始 Hash、输出路径和名称、Compose 文件（可为 `null`）、资源族及更新时间。格式见 [resource-cache.md](references/resource-cache.md)。
-
-重复调用时先匹配当前输出路径，或匹配原始路径且 Hash 一致；未命中时才以同一资源族内唯一的 Hash 匹配。命中后更新同一记录，保留首次原始路径和名称，避免二次加前缀。相同 Hash 对应多条记录时不得自动合并。
+每项记录原始路径和名称、原始 Hash、输出路径和名称、可选 Compose 文件及稳定身份。重复导入按原始路径和 Hash 或当前输出路径和 Hash 匹配；命中后更新同一记录，不重复添加前缀。
 
 ## 工作流程
 
-1. 校验唯一的 `--image` 和可选 `--compose`；确认图片位于项目内 mipmap 资源目录。
-2. 读取 `.code-image/resources.json`，计算输入图片 Hash；仅检查同资源族文件名是否占用目标名。
-3. 输出这一张图片的 Dry Run 计划。
-4. 用户确认后以 `--apply` 原地改名，并原子更新 `resources.json`。
-5. 报告原文件名、输出文件名、资源记录路径和未处理的冲突。
+1. 校验唯一输入及可选 Compose 文件。
+2. 单图确定 `mipmap-xxhdpi` 目标；ZIP 安全解压到下载目录并收集各 `mipmap*` 图片。
+3. 为每张图片独立生成名称；只检查目标目录重名。
+4. 输出 Dry Run；确认后以 `--apply` 复制图片并原子更新 `resources.json`。
 
 ## 使用脚本
 
-无 Compose 上下文：
+单图：
 
 ```bash
 python3 scripts/normalize_images.py \
-  --image app/src/main/res/mipmap-nodpi/Group\ 62.png \
-  --project-root .
+  --image ~/Downloads/Group\ 62.png \
+  --compose app/src/main/java/com/example/report/ReportHomePage.kt \
+  --project-root . \
+  --apply
 ```
 
-有 Compose 上下文并执行：
+ZIP：
 
 ```bash
 python3 scripts/normalize_images.py \
-  --image app/src/main/res/mipmap-nodpi/Group\ 62.png \
-  --compose app/src/main/java/com/example/report/ReportHomePage.kt \
+  --zip ~/Downloads/report-assets.zip \
   --project-root . \
   --apply
 ```
 
 ## 禁止事项
 
-- 禁止处理未明确传入的第二张图片、目录或 ZIP 清单中的图片。
-- 禁止写入 `.code-image/` 之外的缓存、映射、日志或临时产物；不得写入 `.codex/`。
-- 禁止覆盖已有图片、自动合并内容相同的不同图片，或修改 Compose 引用。
-- 禁止因外部 Skill 调用或日常执行而自行修改本 Skill。
+- 禁止覆盖已有图片、自动合并不同来源的图片或修改 Compose 引用。
+- 禁止把单图输出到输入所在目录；必须使用 `mipmap-xxhdpi`。
+- 禁止从 ZIP 导入非 `mipmap*` 目录下的图片。
+- 禁止写入 `.codex/`，或因外部 Skill 调用、日常执行而自行修改本 Skill。
 
 ## 验证
 

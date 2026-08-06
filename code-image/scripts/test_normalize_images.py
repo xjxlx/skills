@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
-"""code-image 单图片处理行为测试。"""
+"""code-image 单图和 ZIP 导入行为测试。"""
 
+import hashlib
 import json
-import re
+import os
 import subprocess
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 
 
@@ -16,8 +18,10 @@ class NormalizeImagesTest(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.project = Path(self.temp_dir.name)
-        self.mipmap = self.project / "app/src/main/res/mipmap-nodpi"
-        self.mipmap.mkdir(parents=True)
+        self.input_dir = self.project / "input"
+        self.input_dir.mkdir()
+        self.home = self.project / "home"
+        self.home.mkdir()
         self.compose = self.project / "app/src/main/java/com/example/ReportHomePage.kt"
         self.compose.parent.mkdir(parents=True)
         self.compose.write_text("@Composable fun ReportHomePage() = Unit\n", encoding="utf-8")
@@ -25,13 +29,15 @@ class NormalizeImagesTest(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def run_skill(self, image: Path, *extra: str):
+    def run_skill(self, source_flag: str, source: Path, *extra: str):
+        environment = dict(os.environ)
+        environment["HOME"] = str(self.home)
         return subprocess.run(
             [
                 "python3",
                 str(SCRIPT),
-                "--image",
-                str(image),
+                source_flag,
+                str(source),
                 "--project-root",
                 str(self.project),
                 *extra,
@@ -39,116 +45,111 @@ class NormalizeImagesTest(unittest.TestCase):
             ],
             capture_output=True,
             text=True,
+            env=environment,
         )
 
     def resources(self) -> list[dict]:
         path = self.project / ".code-image/resources.json"
         return json.loads(path.read_text(encoding="utf-8"))["resources"]
 
-    def test_single_image_without_compose_renames_only_that_image_and_writes_cache(self):
-        image = self.mipmap / "Group 62.png"
+    def test_single_image_copies_to_mipmap_xxhdpi_and_writes_minimal_record(self):
+        image = self.input_dir / "Group 62.png"
         image.write_bytes(b"new")
-        untouched = self.mipmap / "legacy.png"
-        untouched.write_bytes(b"legacy")
 
-        result = self.run_skill(image)
+        result = self.run_skill("--image", image)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        renamed = self.mipmap / "icon_group_62.png"
-        self.assertTrue(renamed.is_file())
-        self.assertTrue(untouched.is_file())
-        self.assertFalse(image.exists())
-        self.assertEqual([path.name for path in (self.project / ".code-image").iterdir()], ["resources.json"])
+        output = self.project / "app/src/main/res/mipmap-xxhdpi/icon_group_62.png"
+        self.assertTrue(output.is_file())
+        self.assertTrue(image.is_file())
         record = self.resources()[0]
-        self.assertEqual(record["originalName"], "Group 62.png")
-        self.assertEqual(record["outputName"], "icon_group_62.png")
-        self.assertIsNone(record["composeFile"])
-        self.assertFalse((self.project / ".codex").exists())
+        self.assertEqual(record["originalPath"], "input/Group 62.png")
+        self.assertEqual(record["outputPath"], "app/src/main/res/mipmap-xxhdpi/icon_group_62.png")
+        self.assertNotIn("resourceFamily", record)
+        self.assertNotIn("updatedAt", record)
 
-    def test_optional_compose_adds_page_namespace(self):
-        image = self.mipmap / "Group 62.png"
+    def test_optional_compose_adds_page_namespace_for_single_image(self):
+        image = self.input_dir / "Group 62.png"
         image.write_bytes(b"new")
 
-        result = self.run_skill(image, "--compose", str(self.compose))
+        result = self.run_skill("--image", image, "--compose", str(self.compose))
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertTrue((self.mipmap / "icon_report_home_group_62.png").is_file())
-        record = self.resources()[0]
-        self.assertEqual(record["composeFile"], "app/src/main/java/com/example/ReportHomePage.kt")
-
-    def test_repeated_call_keeps_previous_output_and_updates_one_record(self):
-        image = self.mipmap / "Group 62.png"
-        image.write_bytes(b"new")
-        first = self.run_skill(image, "--compose", str(self.compose))
-        renamed = self.mipmap / "icon_report_home_group_62.png"
-
-        second = self.run_skill(renamed)
-
-        self.assertEqual(first.returncode, 0, first.stderr)
-        self.assertEqual(second.returncode, 0, second.stderr)
-        self.assertTrue(renamed.is_file())
-        self.assertEqual(len(self.resources()), 1)
-        self.assertEqual(self.resources()[0]["outputName"], renamed.name)
-        self.assertEqual(
-            self.resources()[0]["originalPath"],
-            "app/src/main/res/mipmap-nodpi/Group 62.png",
+        self.assertTrue(
+            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_report_home_group_62.png").is_file()
         )
+        self.assertEqual(self.resources()[0]["composeFile"], "app/src/main/java/com/example/ReportHomePage.kt")
 
-    def test_existing_target_is_not_overwritten(self):
-        existing = self.mipmap / "icon_group_62.png"
+    def test_name_conflict_uses_incrementing_number_without_overwriting(self):
+        target_dir = self.project / "app/src/main/res/mipmap-xxhdpi"
+        target_dir.mkdir(parents=True)
+        existing = target_dir / "icon_group_62.png"
         existing.write_bytes(b"existing")
-        image = self.mipmap / "Group 62.png"
+        image = self.input_dir / "Group 62.png"
         image.write_bytes(b"new")
 
-        result = self.run_skill(image)
+        result = self.run_skill("--image", image)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        renamed = next(path for path in self.mipmap.iterdir() if path.name != existing.name)
-        self.assertRegex(renamed.name, r"^icon_group_62_[0-9a-f]{6}\.png$")
+        self.assertTrue((target_dir / "icon_group_62_1.png").is_file())
         self.assertEqual(existing.read_bytes(), b"existing")
 
-    def test_multiple_image_arguments_are_rejected(self):
-        first = self.mipmap / "first.png"
-        second = self.mipmap / "second.png"
+    def test_zip_extracts_to_downloads_and_copies_each_mipmap_directory(self):
+        archive = self.input_dir / "design.zip"
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("design/app/src/main/res/mipmap-xhdpi/Group 62.png", b"xhdpi")
+            zip_file.writestr("design/app/src/main/res/mipmap-xxhdpi/Group 62.png", b"xxhdpi")
+            zip_file.writestr("design/readme.txt", "ignored")
+
+        result = self.run_skill("--zip", archive)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+        extracted = self.home / "Downloads" / f"design-{source_hash[:6]}"
+        self.assertTrue((extracted / "design/app/src/main/res/mipmap-xhdpi/Group 62.png").is_file())
+        self.assertTrue(
+            (self.project / "app/src/main/res/mipmap-xhdpi/icon_group_62.png").is_file()
+        )
+        self.assertTrue(
+            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_group_62.png").is_file()
+        )
+        self.assertEqual(len(self.resources()), 2)
+
+    def test_multiple_images_or_mixed_image_and_zip_are_rejected(self):
+        first = self.input_dir / "first.png"
+        second = self.input_dir / "second.png"
+        archive = self.input_dir / "design.zip"
         first.write_bytes(b"first")
         second.write_bytes(b"second")
+        with zipfile.ZipFile(archive, "w"):
+            pass
+        environment = dict(os.environ)
+        environment["HOME"] = str(self.home)
 
-        result = subprocess.run(
+        repeated = subprocess.run(
             [
-                "python3",
-                str(SCRIPT),
-                "--image",
-                str(first),
-                "--image",
-                str(second),
-                "--project-root",
-                str(self.project),
-                "--apply",
+                "python3", str(SCRIPT), "--image", str(first), "--image", str(second),
+                "--project-root", str(self.project), "--apply",
             ],
             capture_output=True,
             text=True,
+            env=environment,
+        )
+        mixed = subprocess.run(
+            [
+                "python3", str(SCRIPT), "--image", str(first), "--zip", str(archive),
+                "--project-root", str(self.project), "--apply",
+            ],
+            capture_output=True,
+            text=True,
+            env=environment,
         )
 
-        self.assertNotEqual(result.returncode, 0)
-        self.assertIn("只允许一个", result.stderr)
+        self.assertNotEqual(repeated.returncode, 0)
+        self.assertIn("只允许一个", repeated.stderr)
+        self.assertNotEqual(mixed.returncode, 0)
         self.assertTrue(first.is_file())
         self.assertTrue(second.is_file())
-
-    def test_changed_image_at_a_reused_original_path_does_not_overwrite_old_output(self):
-        first = self.mipmap / "Group 62.png"
-        first.write_bytes(b"first")
-        initial = self.run_skill(first)
-        old_output = self.mipmap / "icon_group_62.png"
-        replacement = self.mipmap / "Group 62.png"
-        replacement.write_bytes(b"replacement")
-
-        updated = self.run_skill(replacement)
-
-        self.assertEqual(initial.returncode, 0, initial.stderr)
-        self.assertEqual(updated.returncode, 0, updated.stderr)
-        self.assertEqual(old_output.read_bytes(), b"first")
-        self.assertTrue(any(path.name.startswith("icon_group_62_") for path in self.mipmap.iterdir()))
-        self.assertEqual(len(self.resources()), 2)
 
 
 if __name__ == "__main__":

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""按单个图片输入生成 Android 资源名，并维护项目内映射。"""
+"""导入单张图片或 ZIP mipmap 资源，并规范 Android 资源名。"""
 
 from __future__ import annotations
 
@@ -8,10 +8,11 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import unicodedata
 from dataclasses import dataclass
-from datetime import datetime, timezone
-from pathlib import Path
+from pathlib import Path, PurePosixPath
+from zipfile import ZipFile
 
 
 IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
@@ -25,7 +26,6 @@ class RenamePlan:
     original_name: str
     output_name: str
     identity: str
-    resource_family: str
     compose_file: str | None
     file_hash: str
 
@@ -36,6 +36,11 @@ def sha256_file(path: Path) -> str:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def safe_token(value: str) -> str:
+    token = re.sub(r"[^A-Za-z0-9._-]+", "_", value).strip("._")
+    return token or "design"
 
 
 def snake_token(value: str) -> str:
@@ -62,37 +67,21 @@ def normalize_asset_stem(original_stem: str) -> str:
     return "image_" + token if token[0].isdigit() else token
 
 
-def find_project_root(image_path: Path) -> Path:
-    resolved = image_path.resolve()
+def find_project_root(source_path: Path) -> Path:
+    resolved = source_path.resolve()
     for parent in (resolved.parent, *resolved.parents):
         if (parent / ".git").exists() or (parent / "settings.gradle").exists() or (parent / "settings.gradle.kts").exists():
             return parent
         if parent.name == "app":
             return parent.parent
-    return resolved.parent
+    return Path.cwd()
 
 
 def relative_path(path: Path, project_root: Path) -> str:
     try:
         return path.resolve().relative_to(project_root.resolve()).as_posix()
     except ValueError:
-        return path.resolve().as_posix()
-
-
-def resource_family_root(image_path: Path) -> Path:
-    parent = image_path.parent
-    if parent.name != "mipmap" and not parent.name.startswith("mipmap-"):
-        raise ValueError(f"图片必须位于 mipmap 资源目录：{image_path}")
-    return parent.parent
-
-
-def resource_directories(image_path: Path) -> list[Path]:
-    root = resource_family_root(image_path)
-    return sorted(
-        directory
-        for directory in root.iterdir()
-        if directory.is_dir() and (directory.name == "mipmap" or directory.name.startswith("mipmap-"))
-    )
+        return str(path.resolve())
 
 
 def load_resources(path: Path) -> dict:
@@ -107,61 +96,55 @@ def load_resources(path: Path) -> dict:
     return data
 
 
-def _find_record(records: list[dict], current_path: str, file_hash: str, family: str) -> dict | None:
+def _find_record(records: list[dict], current_path: str, file_hash: str) -> dict | None:
     for record in records:
-        if current_path == record.get("outputPath"):
+        if current_path == record.get("originalPath") and file_hash == record.get("originalHash"):
             return record
-        if current_path == record.get("originalPath") and record.get("originalHash") == file_hash:
+        if current_path == record.get("outputPath") and file_hash == record.get("originalHash"):
             return record
-    matched = [
-        record
-        for record in records
-        if record.get("originalHash") == file_hash and record.get("resourceFamily") == family
-    ]
-    return matched[0] if len(matched) == 1 else None
+    return None
 
 
 def _is_normalized(name: str) -> bool:
     return Path(name).stem.lower().startswith("icon_")
 
 
-def _has_conflict(candidate: str, source: Path, directories: list[Path], record: dict | None) -> bool:
-    for directory in directories:
-        target = directory / candidate
-        if not target.exists() or target.resolve() == source.resolve():
-            continue
-        if record and record.get("outputName") == candidate and directory != source.parent:
-            continue
-        return True
-    return False
+def next_output_path(target_dir: Path, output_name: str, source: Path, reserved: set[Path]) -> Path:
+    candidate = target_dir / output_name
+    if not candidate.exists() and candidate.resolve() not in reserved:
+        return candidate
+    if candidate.resolve() == source.resolve() and candidate.resolve() not in reserved:
+        return candidate
+    base = Path(output_name).stem
+    extension = Path(output_name).suffix
+    number = 1
+    while True:
+        candidate = target_dir / f"{base}_{number}{extension}"
+        if not candidate.exists() and candidate.resolve() not in reserved:
+            return candidate
+        number += 1
 
 
 def build_plan(
-    image_path: Path,
+    source_path: Path,
+    target_dir: Path,
     project_root: Path,
-    compose_path: Path | None = None,
-    resources_path: Path | None = None,
+    compose_path: Path | None,
+    resources_path: Path,
+    reserved: set[Path] | None = None,
 ) -> RenamePlan:
-    source = Path(image_path).resolve()
-    project_root = Path(project_root).resolve()
+    source = Path(source_path).resolve()
     if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS:
         raise ValueError(f"不是支持的图片文件：{source}")
-    try:
-        source.relative_to(project_root)
-    except ValueError as error:
-        raise ValueError(f"图片位于项目外：{source}") from error
-
-    directories = resource_directories(source)
-    family = relative_path(resource_family_root(source), project_root)
+    target_dir = Path(target_dir).resolve()
+    project_root = Path(project_root).resolve()
     current_path = relative_path(source, project_root)
     file_hash = sha256_file(source)
-    resources_path = resources_path or project_root / ".code-image/resources.json"
     manifest = load_resources(resources_path)
-    record = _find_record(manifest["resources"], current_path, file_hash, family)
+    record = _find_record(manifest["resources"], current_path, file_hash)
     original_path = record.get("originalPath") if record else current_path
     original_name = record.get("originalName") if record else source.name
-    recorded_compose = record.get("composeFile") if record else None
-    compose_file = relative_path(compose_path, project_root) if compose_path else recorded_compose
+    compose_file = relative_path(compose_path, project_root) if compose_path else (record.get("composeFile") if record else None)
 
     if record and compose_path is None:
         output_name = record["outputName"]
@@ -172,22 +155,15 @@ def build_plan(
         prefix = f"icon_{namespace}_" if namespace else "icon_"
         output_name = prefix + normalize_asset_stem(Path(original_name).stem) + source.suffix.lower()
 
-    if _has_conflict(output_name, source, directories, record):
-        base = Path(output_name).stem
-        suffix = hashlib.sha256(f"{family}:{original_name}:{file_hash}".encode()).hexdigest()[:6]
-        output_name = f"{base}_{suffix}{source.suffix.lower()}"
-        if _has_conflict(output_name, source, directories, record):
-            raise FileExistsError(f"目标资源名已被占用：{output_name}")
-
-    identity = record.get("identity") if record else f"{family}:{current_path}:{file_hash}"
+    target = next_output_path(target_dir, output_name, source, reserved or set())
+    identity = record.get("identity") if record else f"{original_path}:{file_hash}"
     return RenamePlan(
         source=source,
-        target=source.with_name(output_name),
+        target=target,
         original_path=original_path,
         original_name=original_name,
-        output_name=output_name,
+        output_name=target.name,
         identity=identity,
-        resource_family=family,
         compose_file=compose_file,
         file_hash=file_hash,
     )
@@ -200,16 +176,18 @@ def write_resources(path: Path, data: dict) -> None:
     os.replace(temporary, path)
 
 
-def apply_plan(plan: RenamePlan, resources_path: Path, project_root: Path) -> None:
-    if plan.source != plan.target:
-        if plan.target.exists():
-            raise FileExistsError(f"目标文件已存在，拒绝覆盖：{plan.target}")
-        os.replace(plan.source, plan.target)
-
+def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Path) -> None:
     manifest = load_resources(resources_path)
-    records = [record for record in manifest["resources"] if record.get("identity") != plan.identity]
-    records.append(
-        {
+    records = {record.get("identity"): record for record in manifest["resources"]}
+    for plan in plans:
+        plan.target.parent.mkdir(parents=True, exist_ok=True)
+        if plan.source.resolve() != plan.target.resolve():
+            if plan.target.exists():
+                if sha256_file(plan.target) != plan.file_hash:
+                    raise FileExistsError(f"目标文件已存在，拒绝覆盖：{plan.target}")
+            else:
+                shutil.copyfile(plan.source, plan.target)
+        records[plan.identity] = {
             "identity": plan.identity,
             "originalPath": plan.original_path,
             "originalName": plan.original_name,
@@ -217,42 +195,102 @@ def apply_plan(plan: RenamePlan, resources_path: Path, project_root: Path) -> No
             "outputPath": relative_path(plan.target, project_root),
             "outputName": plan.output_name,
             "composeFile": plan.compose_file,
-            "resourceFamily": plan.resource_family,
-            "updatedAt": datetime.now(timezone.utc).isoformat(),
         }
-    )
     manifest["version"] = 1
-    manifest["resources"] = sorted(records, key=lambda record: record["identity"])
+    manifest["resources"] = sorted(records.values(), key=lambda record: record["identity"])
     write_resources(resources_path, manifest)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description="规范单个 Android 图片资源名并记录映射")
-    parser.add_argument(
-        "--image",
-        required=True,
-        action="append",
-        help="待处理的单个图片文件路径；每次只能提供一次",
-    )
-    parser.add_argument("--compose", help="可选的 Compose 布局文件，用于生成页面命名空间")
-    parser.add_argument("--project-root", help="项目根目录，默认从图片路径推断")
-    parser.add_argument("--apply", action="store_true", help="实际重命名；默认只输出预览")
-    args = parser.parse_args()
+def _safe_zip_entries(archive: ZipFile):
+    entries = []
+    for entry in archive.infolist():
+        path = PurePosixPath(entry.filename)
+        mode = (entry.external_attr >> 16) & 0o170000
+        if path.is_absolute() or ".." in path.parts or mode == 0o120000:
+            raise ValueError(f"ZIP 包含不安全路径或符号链接：{entry.filename}")
+        entries.append(entry)
+    return entries
 
-    if len(args.image) != 1:
+
+def extract_zip_to_downloads(zip_path: Path) -> Path:
+    source_hash = sha256_file(zip_path)
+    destination = Path.home() / "Downloads" / f"{safe_token(zip_path.stem)}-{source_hash[:6]}"
+    with ZipFile(zip_path) as archive:
+        entries = _safe_zip_entries(archive)
+        for entry in entries:
+            if entry.is_dir():
+                continue
+            target = destination / PurePosixPath(entry.filename)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with archive.open(entry) as input_stream, target.open("wb") as output_stream:
+                shutil.copyfileobj(input_stream, output_stream)
+    return destination
+
+
+def mipmap_directory_name(path: Path, extraction_root: Path) -> str | None:
+    for parent in (path.parent, *path.parents):
+        if parent == extraction_root.parent:
+            return None
+        if parent.name == "mipmap" or parent.name.startswith("mipmap-"):
+            return parent.name
+    return None
+
+
+def zip_image_sources(extraction_root: Path) -> list[tuple[Path, str]]:
+    sources = []
+    for path in sorted(extraction_root.rglob("*")):
+        if not path.is_file() or path.suffix.lower() not in IMAGE_EXTENSIONS:
+            continue
+        directory_name = mipmap_directory_name(path, extraction_root)
+        if directory_name:
+            sources.append((path, directory_name))
+    if not sources:
+        raise ValueError("ZIP 中没有位于 mipmap 目录的图片")
+    return sources
+
+
+def _print_plans(plans: list[RenamePlan]) -> None:
+    for plan in plans:
+        print(f"导入: {plan.source.name} -> {plan.target}")
+        print(f"  Hash: {plan.file_hash[:12]} | Compose: {plan.compose_file or '未提供'}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="导入并规范 Android 图片资源名")
+    source_group = parser.add_mutually_exclusive_group(required=True)
+    source_group.add_argument("--image", action="append", help="单个图片文件路径；每次只能提供一次")
+    source_group.add_argument("--zip", action="append", help="包含 mipmap 图片目录的 ZIP；每次只能提供一次")
+    parser.add_argument("--compose", help="可选的 Compose 布局文件，用于生成页面命名空间")
+    parser.add_argument("--project-root", default=".", help="Android 项目根目录，默认当前目录")
+    parser.add_argument("--apply", action="store_true", help="实际复制/改名；默认只输出预览")
+    args = parser.parse_args()
+    if args.image and len(args.image) != 1:
         parser.error("每次只允许一个 --image")
-    image = Path(args.image[0]).resolve()
-    project_root = Path(args.project_root).resolve() if args.project_root else find_project_root(image)
+    if args.zip and len(args.zip) != 1:
+        parser.error("每次只允许一个 --zip")
+
+    project_root = Path(args.project_root).resolve()
     compose = Path(args.compose).resolve() if args.compose else None
     if compose and not compose.is_file():
         raise ValueError(f"Compose 文件不存在：{compose}")
     resources_path = project_root / ".code-image/resources.json"
-    plan = build_plan(image, project_root, compose, resources_path)
-    marker = "保持" if plan.source == plan.target else "重命名"
-    print(f"{marker}: {plan.source.name} -> {plan.output_name}")
-    print(f"  Hash: {plan.file_hash[:12]} | Compose: {plan.compose_file or '未提供'}")
+    res_root = project_root / "app/src/main/res"
+
+    if args.image:
+        source = Path(args.image[0]).resolve()
+        plans = [build_plan(source, res_root / "mipmap-xxhdpi", project_root, compose, resources_path)]
+    else:
+        extraction_root = extract_zip_to_downloads(Path(args.zip[0]).resolve())
+        reserved: set[Path] = set()
+        plans = []
+        for source, directory_name in zip_image_sources(extraction_root):
+            plan = build_plan(source, res_root / directory_name, project_root, compose, resources_path, reserved)
+            plans.append(plan)
+            reserved.add(plan.target.resolve())
+
+    _print_plans(plans)
     if args.apply:
-        apply_plan(plan, resources_path, project_root)
+        apply_plans(plans, resources_path, project_root)
         print(f"已更新资源记录：{resources_path}")
     else:
         print("当前为 Dry Run，确认名称后追加 --apply 执行。")

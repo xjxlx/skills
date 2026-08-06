@@ -1,4 +1,4 @@
 interface:
   display_name: "Code Image"
-  short_description: "逐张规范 Android mipmap 图片资源名并保存映射"
-  default_prompt: "Use $code-image 处理一张指定图片；可选提供 Compose 文件作为页面命名参考。"
+  short_description: "导入单图或 ZIP 的 mipmap 图片并保存映射"
+  default_prompt: "Use $code-image 处理一个指定图片或一个含 mipmap 目录的 ZIP；Compose 文件可选。"

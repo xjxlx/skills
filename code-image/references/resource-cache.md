@@ -2,13 +2,13 @@
 
 ## 文件位置
 
-所有运行时记录固定写入项目根目录：
+运行记录固定写入：
 
 ```text
-.code-image/resources.json
+<project>/.code-image/resources.json
 ```
 
-不得读取、创建或更新 `.codex/lanhu-resources.json`、`.codex/code-image-manifest.json` 或其他项目外缓存。写入时先在 `.code-image/` 内创建临时文件，再原子替换 `resources.json`。
+除 ZIP 按约定解压到 `~/Downloads/` 外，不得创建 `.code-image/` 之外的缓存或映射。JSON 写入时只在 `.code-image/` 内创建临时文件，再原子替换 `resources.json`。
 
 ## 文件格式
 
@@ -17,27 +17,24 @@
   "version": 1,
   "resources": [
     {
-      "identity": "app/src/main/res:app/src/main/res/mipmap-nodpi/Group 62.png:<sha256>",
-      "originalPath": "app/src/main/res/mipmap-nodpi/Group 62.png",
+      "identity": "/Users/name/Downloads/Group 62.png:<sha256>",
+      "originalPath": "/Users/name/Downloads/Group 62.png",
       "originalName": "Group 62.png",
       "originalHash": "sha256...",
-      "outputPath": "app/src/main/res/mipmap-nodpi/icon_report_home_group_62.png",
+      "outputPath": "app/src/main/res/mipmap-xxhdpi/icon_report_home_group_62.png",
       "outputName": "icon_report_home_group_62.png",
-      "composeFile": "app/src/main/java/com/example/report/ReportHomePage.kt",
-      "resourceFamily": "app/src/main/res",
-      "updatedAt": "2026-08-07T00:00:00+00:00"
+      "composeFile": "app/src/main/java/com/example/report/ReportHomePage.kt"
     }
   ]
 }
 ```
 
-`composeFile` 在未提供 `--compose` 时为 `null`。`originalPath` 和 `originalName` 表示第一次处理时的输入，重复调用不得改写；`outputPath` 和 `outputName` 表示当前文件位置和名字。
+`composeFile` 未提供时为 `null`。不记录 `resourceFamily` 或 `updatedAt`；目标目录已经由 `outputPath` 表达。
 
-## 查找规则
+ZIP 图片的 `originalPath` 是下载目录内的解压后文件路径，`outputPath` 则是其对应的项目 `mipmap` 目录路径。
 
-重复处理一张图片时按以下顺序匹配已有记录：
+## 查找和冲突规则
 
-1. 当前输入路径等于 `outputPath`；或等于 `originalPath` 且 `originalHash` 与当前 Hash 一致。
-2. 同一 `resourceFamily` 内只有一条记录的 `originalHash` 与当前 Hash 一致。
+重复导入时，只有“原始路径加相同 Hash”或“输出路径加相同 Hash”才复用记录。Hash 变化时保留旧记录并生成新名称，禁止覆盖旧输出。
 
-第二步命中多条记录时视为不同图片，创建独立记录，禁止自动合并。文件名冲突只检查同一资源族中的 `mipmap`、`mipmap-*` 目录，不重命名或写入其中的其他图片。
+同一目标目录中名称被占用时按 `_1`、`_2`、`_3` 递增。不同密度目录允许保留同一个资源名。
