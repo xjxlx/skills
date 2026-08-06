@@ -60,6 +60,12 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 将页面拆成小而内聚的私有 Composable；只生成设计能够证明的静态状态和用户明确提供的交互。
 - 只修改目标页面及其必需的同作用域文件，保留用户已有修改，不做无关清理。
 
+实现细节约束：
+
+- 根层级背景图片必须直接使用项目的 `ImageItem`，`modifier = Modifier.fillMaxSize()`，并显式设置 `contentScale = ContentScale.FillBounds`；不得把根背景放进固定设计尺寸容器后再用局部缩放代替屏幕适配。
+- 标题、标签、数值、单位和右侧图标组成的复合内容必须使用 `Row`/`Column` 的对齐关系或项目已有标签组件表达；禁止用互不关联的固定 `offset` 拼接，完成后检查文字是否裁剪、标签文字是否真实存在、数值和单位是否同一基线。
+- 重复视觉单元必须先建数据列表再用 `Column`、`Row`、`LazyColumn` 或 `LazyVerticalGrid` 展示；复合卡片必须逐项保留设计中可见的图片、左右装饰、标签和操作入口，不得只保留中心文字或主数值。
+
 布局映射和间距归属必须遵循 [Compose 映射规则](references/compose-mapping.md)。
 
 ### 4. 接入图片资源
