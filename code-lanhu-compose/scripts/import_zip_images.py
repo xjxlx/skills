@@ -48,9 +48,28 @@ def project_relative(path: Path, project_root: Path) -> str:
     return path.resolve().relative_to(project_root.resolve()).as_posix()
 
 
+def artifact_directory(zip_path: Path, source_hash: str, project_root: Path) -> Path:
+    name = f"{safe_file_token(zip_path.stem)}-{source_hash[:6]}"
+    return project_root / ".code-lanhu-compose" / name
+
+
 def default_manifest_path(zip_path: Path, source_hash: str, project_root: Path) -> Path:
-    name = f"{safe_file_token(zip_path.stem)}-{source_hash[:8]}.json"
-    return project_root / ".code-lanhu-compose/images" / name
+    return artifact_directory(zip_path, source_hash, project_root) / "images.json"
+
+
+def verify_manifest_identity(manifest_path: Path, source_hash: str) -> None:
+    if not manifest_path.exists():
+        return
+    try:
+        existing = json.loads(manifest_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as error:
+        raise ValueError(f"已有图片清单不是有效 JSON，无法安全覆盖：{manifest_path}") from error
+    existing_hash = existing.get("sourceSha256")
+    if existing_hash != source_hash:
+        raise ValueError(
+            "图片清单已属于另一个 ZIP，拒绝覆盖："
+            f"{manifest_path}（已有 {existing_hash or '缺失 Hash'}，当前 {source_hash}）"
+        )
 
 
 def import_images(zip_path: Path, target_dir: Path, manifest_path: Path, project_root: Path) -> dict:
@@ -65,6 +84,7 @@ def import_images(zip_path: Path, target_dir: Path, manifest_path: Path, project
         raise ValueError(f"目标 mipmap 位于项目外：{target_dir}") from error
 
     source_hash = sha256_file(zip_path)
+    verify_manifest_identity(manifest_path, source_hash)
     target_dir.mkdir(parents=True, exist_ok=True)
     images = []
     with ZipFile(zip_path) as archive:
@@ -112,7 +132,10 @@ def main() -> int:
     parser.add_argument("--zip", required=True, help="蓝湖 ZIP 文件")
     parser.add_argument("--mipmap-path", required=True, help="目标 mipmap 或 mipmap-<density> 目录")
     parser.add_argument("--project-root", default=".", help="Android 项目根目录")
-    parser.add_argument("--manifest", help="导入清单路径，默认 .code-lanhu-compose/images/<zip>-<hash>.json")
+    parser.add_argument(
+        "--manifest",
+        help="导入清单路径，默认 .code-lanhu-compose/<zip>-<hash前6位>/images.json",
+    )
     args = parser.parse_args()
 
     project_root = Path(args.project_root).resolve()

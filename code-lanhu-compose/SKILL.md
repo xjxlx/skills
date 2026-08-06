@@ -32,10 +32,11 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 - 确认 ZIP、当前工作目录中的 Android 项目、目标模块和 Gradle Wrapper 可访问。
 - 计算 ZIP 完整 SHA-256；禁止根据文件名判断是否为同一设计。
+- 以规范化的 ZIP 文件名和完整 SHA-256 前六位确定本次专属工作目录：`.code-lanhu-compose/<zip-stem>-<sha256前6位>/`。目录内保存 `design.json`、`images.json` 与 `runs/`；完整 SHA-256 必须写入 JSON 供身份校验。
 - 安全解压到当前用户下载目录的 `<zip-stem>-<sha256前8位>/`，解压前拒绝绝对路径、`..` 路径穿越和指向目录外的符号链接。
 - 找到唯一有效的 `index.html`，并找到它实际引用的 `index.css`。存在多个候选页面根目录时，列出候选并让用户选择。
 - 缺少入口、CSS 无法加载或资源路径越界时停止，不生成猜测代码。
-- 创建或复用截图运行目录前，必须确认 `.code-lanhu-compose/designs/index.json` 及其 `artifactPath` 指向的设计 JSON 都存在；缺失时先完成设计解析和索引写入，不得只创建 `runs/` 并把截图当作完整缓存。
+- 创建或复用截图运行目录前，必须确认本次专属工作目录中的 `design.json` 存在、可解析且其 `sourceSha256` 与当前 ZIP 一致；缺失时先完成设计解析写入，不得只创建 `runs/` 并把截图当作完整缓存。
 
 缓存目录和设计产物遵循 [缓存与设计解析](references/cache-and-parsing.md)。缓存只复用设计解析结果，不复用最终 Compose 代码。
 
@@ -45,7 +46,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 在浏览器中加载页面，等待字体和图片完成，读取 `getComputedStyle()`、`getBoundingClientRect()`、可见性、层叠顺序、变换和最终资源 URL。
 - 同时处理继承、层叠覆盖、行内样式、flex 计算、绝对定位、伪元素、字体加载、遮挡和 `z-index`。
 - 保留“声明来源”和“最终计算结果”：前者用于判断间距归属，后者用于确认最终边界和视觉验证。
-- 将标准化设计 JSON 写入 `.code-lanhu-compose/designs/`，并更新同目录下的 `.code-lanhu-compose/designs/index.json` 路由。
+- 将标准化设计 JSON 原子写入本次专属工作目录的 `design.json`。相同完整 SHA-256 的 ZIP 可以更新覆盖该目录内的当前产物；不同完整 SHA-256 禁止写入同一目录。
 
 详细字段和缓存命中条件见 [缓存与设计解析](references/cache-and-parsing.md)。
 
@@ -71,7 +72,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 ### 4. 接入图片资源
 
 - 从解析结果取得图片的真实相对路径和内容 Hash，禁止使用模糊文件名猜测资源。
-- 先用 `scripts/import_zip_images.py` 将 ZIP 图片导入目标 mipmap，并在 `.code-lanhu-compose/images/<zip-stem>-<sha256前8位>.json` 写入本次导入清单；同名 ZIP 必须通过 Hash 区分。
+- 先用 `scripts/import_zip_images.py` 将 ZIP 图片导入目标 mipmap，并在 `.code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json` 写入本次导入清单；同名 ZIP 必须通过 Hash 区分。
 - 需要规范 Android 资源名时调用 `$code-image`，同时传递目标 Compose 文件、目标 mipmap 路径和导入清单的 `--input-manifest`。它只重命名清单中的 `targetPath`，共享 mipmap 中其余图片只用于冲突检测。
 - 只使用实际存在且映射成功的资源；禁止用文字、猜测圆角或临时 `Canvas` 替代已有设计切图。
 - 图片匹配失败时列出设计节点、源路径、Hash 和候选文件，停止处理该资源并请求确认。

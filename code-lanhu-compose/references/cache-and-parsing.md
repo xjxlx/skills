@@ -6,16 +6,16 @@
 
 ```text
 .code-lanhu-compose/
-├── designs/
-│   ├── index.json
-│   └── yyyyMMdd-HHmmss-<sha256前8位>.json
-├── images/
-│   └── <zip-stem>-<sha256前8位>.json
-└── runs/
-    └── yyyyMMdd-HHmmss/
+└── <zip-stem>-<sha256前6位>/
+    ├── design.json
+    ├── images.json
+    └── runs/
+        └── yyyyMMdd-HHmmss/
 ```
 
-`designs/index.json` 只路由设计源和解析产物，不保存最终 Compose 代码。项目文件始终依据当前代码、主题和组件重新适配。`artifactPath` 使用相对于 `.code-lanhu-compose` 的路径，例如 `designs/yyyyMMdd-HHmmss-<sha256前8位>.json`。必须先创建并写入 `designs/index.json`，再创建本轮 `runs/yyyyMMdd-HHmmss/`。
+`<zip-stem>` 必须经过安全文件名规范化；目录名由 ZIP 文件名和完整 SHA-256 前六位组成。`design.json`、`images.json` 和每次运行证据均只属于这个 ZIP，不保存最终 Compose 代码。项目文件始终依据当前代码、主题和组件重新适配。
+
+两个 JSON 都必须记录完整 `sourceSha256`。首次创建和后续写入前先校验已有完整 Hash：相同 Hash 可以原子更新当前产物，不同 Hash 必须拒绝覆盖，即使前六位恰好相同。旧版根目录下的 `designs/`、`images/`、`runs/` 不得当作新布局的缓存命中，也不得自动移动或删除。
 
 ## 图片导入清单
 
@@ -28,46 +28,43 @@ python3 scripts/import_zip_images.py \
   --project-root <project-root>
 ```
 
-脚本把图片暂存到目标 mipmap，默认生成 `images/<zip-stem>-<sha256前8位>.json`。每项至少记录 ZIP 内相对路径、原始文件名、内容 Hash 与实际 `targetPath`；临时导入名由 ZIP 内路径和内容 Hash 生成，禁止覆盖共享目录原文件。随后调用 `$code-image` 时必须传入该 JSON：
+脚本把图片暂存到目标 mipmap，默认生成 `<zip-stem>-<sha256前6位>/images.json`。每项至少记录 ZIP 内相对路径、原始文件名、内容 Hash 与实际 `targetPath`；临时导入名由 ZIP 内路径和内容 Hash 生成，禁止覆盖共享目录原文件。随后调用 `$code-image` 时必须传入该 JSON：
 
 ```bash
 python3 normalize_images.py \
   --compose <target-compose> \
   --mipmap-path <target-mipmap> \
-  --input-manifest .code-lanhu-compose/images/<zip-stem>-<sha256前8位>.json \
+  --input-manifest .code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json \
   --apply
 ```
 
 `$code-image` 必须校验每个 `targetPath` 的 Hash，只改清单列出的图片；扫描整个 mipmap 仅用于避免最终资源名冲突。
 
-## 索引格式
+## 设计产物格式
 
 ```json
 {
-  "a1b2c3d4完整SHA256": {
-    "sourceName": "report-home.zip",
-    "sourcePath": "/Users/name/Downloads/report-home.zip",
-    "sourceSize": 123456,
-    "sourceSha256": "a1b2c3d4完整SHA256",
-    "artifactPath": "designs/20260805-143025-a1b2c3d4.json",
-    "canvasWidthPx": 1920,
-    "canvasHeightPx": 720
-  }
+  "sourceName": "report-home.zip",
+  "sourcePath": "/Users/name/Downloads/report-home.zip",
+  "sourceSize": 123456,
+  "sourceSha256": "a1b2c3d4完整SHA256",
+  "canvasWidthPx": 1920,
+  "canvasHeightPx": 720
 }
 ```
 
-使用 `yyyyMMdd-HHmmss-<sha256前8位>.json` 命名解析文件。同一 SHA-256 只保留一个当前有效路由，运行证据保留在 `runs/yyyyMMdd-HHmmss/`。运行目录只使用年月日、时分秒命名，不再拼接 SHA 或其他参数。
+解析结果固定写入专属目录内的 `design.json`。同一完整 SHA-256 只保留一个当前解析结果，运行证据保留在同一目录的 `runs/yyyyMMdd-HHmmss/`。运行目录只使用年月日、时分秒命名，不再拼接 SHA 或其他参数。
 
 ## 缓存命中
 
 只有以下条件全部成立才复用：
 
-1. ZIP 完整 SHA-256 存在于 `designs/index.json`。
-2. `artifactPath` 指向的文件真实存在且可解析。
+1. 当前 ZIP 对应的专属目录存在。
+2. `design.json` 真实存在且可解析。
 3. 解析文件记录的源 SHA-256 与当前 ZIP 一致。
 4. 解析结构与当前读取逻辑兼容。
 
-任一条件失败时重新解析并修复索引；只有截图证据而没有 `designs/index.json` 或设计 JSON 时，不得判定为缓存命中。写入 JSON 时先写临时文件，再原子替换，避免中断造成半文件。
+任一条件失败时重新解析并原子更新 `design.json`；只有截图证据而没有设计 JSON 时，不得判定为缓存命中。写入 JSON 时先写临时文件，再原子替换，避免中断造成半文件。
 
 ## 标准化设计产物
 

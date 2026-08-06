@@ -64,7 +64,7 @@ description: Use when 蓝湖下载的图片文件名不符合 Android 资源命�
 python3 scripts/normalize_images.py \
   --compose app/src/main/java/com/jollyeng/www/compose/ui/activity/report/ReportHomeV2Layout.kt \
   --mipmap-path res.layouts.report.mipmap \
-  --input-manifest .code-lanhu-compose/images/report-home-a1b2c3d4.json
+  --input-manifest .code-lanhu-compose/report-home-a1b2c3/images.json
 ```
 
 确认 Dry Run 输出后执行：
@@ -73,7 +73,7 @@ python3 scripts/normalize_images.py \
 python3 scripts/normalize_images.py \
   --compose app/src/main/java/com/jollyeng/www/compose/ui/activity/report/ReportHomeV2Layout.kt \
   --mipmap-path res.layouts.report.mipmap \
-  --input-manifest .code-lanhu-compose/images/report-home-a1b2c3d4.json \
+  --input-manifest .code-lanhu-compose/report-home-a1b2c3/images.json \
   --apply
 ```
 

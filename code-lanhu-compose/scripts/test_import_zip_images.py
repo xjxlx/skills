@@ -20,7 +20,7 @@ class ImportZipImagesTest(unittest.TestCase):
             root = Path(temporary)
             archive = root / "design.zip"
             target = root / "app/src/main/res/mipmap-nodpi"
-            manifest = root / ".code-lanhu-compose/images/design-a1b2c3d4.json"
+            manifest = root / ".code-lanhu-compose/design-a1b2c3/images.json"
             compose = root / "app/src/main/java/com/example/report/TestPage.kt"
             compose.parent.mkdir(parents=True)
             compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
@@ -81,6 +81,103 @@ class ImportZipImagesTest(unittest.TestCase):
             self.assertEqual(normalized.returncode, 0, normalized.stderr)
             self.assertTrue((target / "icon_test_group_62.png").is_file())
             self.assertTrue(legacy.is_file())
+
+    def test_default_manifest_is_scoped_to_the_zip_artifact_directory(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "report-home.zip"
+            target = root / "app/src/main/res/mipmap-nodpi"
+            target.mkdir(parents=True)
+            with zipfile.ZipFile(archive, "w") as zip_file:
+                zip_file.writestr("report/icon.png", b"image-data")
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--zip",
+                    str(archive),
+                    "--mipmap-path",
+                    str(target),
+                    "--project-root",
+                    str(root),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+            manifest = root / ".code-lanhu-compose" / f"report-home-{source_hash[:6]}" / "images.json"
+            self.assertTrue(manifest.is_file())
+            data = json.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(data["sourceSha256"], source_hash)
+
+            repeated = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--zip",
+                    str(archive),
+                    "--mipmap-path",
+                    str(target),
+                    "--project-root",
+                    str(root),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(repeated.returncode, 0, repeated.stderr)
+
+    def test_manifest_refuses_to_overwrite_a_different_zip(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            target = root / "app/src/main/res/mipmap-nodpi"
+            target.mkdir(parents=True)
+            first_archive = root / "first.zip"
+            second_archive = root / "second.zip"
+            manifest = root / ".code-lanhu-compose/shared/images.json"
+            with zipfile.ZipFile(first_archive, "w") as zip_file:
+                zip_file.writestr("first/icon.png", b"first")
+            with zipfile.ZipFile(second_archive, "w") as zip_file:
+                zip_file.writestr("second/icon.png", b"second")
+
+            first = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--zip",
+                    str(first_archive),
+                    "--mipmap-path",
+                    str(target),
+                    "--project-root",
+                    str(root),
+                    "--manifest",
+                    str(manifest),
+                ],
+                capture_output=True,
+                text=True,
+            )
+            second = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--zip",
+                    str(second_archive),
+                    "--mipmap-path",
+                    str(target),
+                    "--project-root",
+                    str(root),
+                    "--manifest",
+                    str(manifest),
+                ],
+                capture_output=True,
+                text=True,
+            )
+
+            self.assertEqual(first.returncode, 0, first.stderr)
+            self.assertNotEqual(second.returncode, 0)
+            self.assertIn("拒绝覆盖", second.stderr)
 
 
 if __name__ == "__main__":

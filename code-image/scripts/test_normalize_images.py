@@ -140,7 +140,7 @@ class NormalizeImagesTest(unittest.TestCase):
     def test_input_manifest_limits_plan_to_imported_images(self):
         imported = self.write_resource("mipmap-nodpi", ".lanhu-imported.png", b"new")
         retained = self.write_resource("mipmap-nodpi", "legacy.png", b"legacy")
-        input_manifest = self.project / ".code-lanhu-compose/images/design-a1b2c3d4.json"
+        input_manifest = self.project / ".code-lanhu-compose/design-a1b2c3/images.json"
         input_manifest.parent.mkdir(parents=True)
         input_manifest.write_text(
             json.dumps(
@@ -176,7 +176,7 @@ class NormalizeImagesTest(unittest.TestCase):
         outside = self.project / "app/src/main/res/drawable-nodpi/not-an-import.png"
         outside.parent.mkdir(parents=True)
         outside.write_bytes(b"outside")
-        input_manifest = self.project / ".code-lanhu-compose/images/design-a1b2c3d4.json"
+        input_manifest = self.project / ".code-lanhu-compose/design-a1b2c3/images.json"
         input_manifest.parent.mkdir(parents=True)
         input_manifest.write_text(
             json.dumps(
