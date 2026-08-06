@@ -9,11 +9,36 @@
 ├── designs/
 │   ├── index.json
 │   └── yyyyMMdd-HHmmss-<sha256前8位>.json
+├── images/
+│   └── <zip-stem>-<sha256前8位>.json
 └── runs/
     └── yyyyMMdd-HHmmss/
 ```
 
 `designs/index.json` 只路由设计源和解析产物，不保存最终 Compose 代码。项目文件始终依据当前代码、主题和组件重新适配。`artifactPath` 使用相对于 `.code-lanhu-compose` 的路径，例如 `designs/yyyyMMdd-HHmmss-<sha256前8位>.json`。必须先创建并写入 `designs/index.json`，再创建本轮 `runs/yyyyMMdd-HHmmss/`。
+
+## 图片导入清单
+
+ZIP 图片复制到共享 mipmap 时，先运行：
+
+```bash
+python3 scripts/import_zip_images.py \
+  --zip <zip-path> \
+  --mipmap-path <target-mipmap> \
+  --project-root <project-root>
+```
+
+脚本把图片暂存到目标 mipmap，默认生成 `images/<zip-stem>-<sha256前8位>.json`。每项至少记录 ZIP 内相对路径、原始文件名、内容 Hash 与实际 `targetPath`；临时导入名由 ZIP 内路径和内容 Hash 生成，禁止覆盖共享目录原文件。随后调用 `$code-image` 时必须传入该 JSON：
+
+```bash
+python3 normalize_images.py \
+  --compose <target-compose> \
+  --mipmap-path <target-mipmap> \
+  --input-manifest .code-lanhu-compose/images/<zip-stem>-<sha256前8位>.json \
+  --apply
+```
+
+`$code-image` 必须校验每个 `targetPath` 的 Hash，只改清单列出的图片；扫描整个 mipmap 仅用于避免最终资源名冲突。
 
 ## 索引格式
 

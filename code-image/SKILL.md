@@ -23,6 +23,7 @@ description: Use when 蓝湖下载的图片文件名不符合 Android 资源命�
 
 1. 当前资源对应的 Compose 文件路径或完整文件名，例如 `ReportHomeV2Layout.kt`。
 2. mipmap 路径，例如 `res/mipmap` 或 `res.layouts.report.mipmap`。
+3. 若图片由蓝湖 ZIP 导入，导入清单路径；必须作为 `--input-manifest` 传入。
 
 用户未提供 mipmap 路径时，使用项目根目录下的 `res/mipmap`；实际项目存在 `app/src/main/res` 时，同时尝试解析为 `app/src/main/res/mipmap`。禁止根据图片内容或当前目录猜测 Compose 文件名。路径解析规则见 [resource-cache.md](references/resource-cache.md)。
 
@@ -48,20 +49,22 @@ description: Use when 蓝湖下载的图片文件名不符合 Android 资源命�
 
 ## 工作流程
 
-1. 确认 Compose 文件和 mipmap 路径，解析基础 mipmap 目录及其密度目录。
+1. 确认 Compose 文件、mipmap 路径和可选导入清单，解析基础 mipmap 目录及其密度目录。
 2. 读取两个缓存，计算当前图片 Hash，并扫描项目已有资源名。
-3. 生成重命名计划：列出原名、新名、Hash 前缀、资源路径和冲突原因。
-4. 默认执行 Dry Run；只有用户明确要求执行或确认计划后，才使用 `--apply`。
-5. 应用计划时禁止覆盖文件，使用临时文件避免多个资源互换名称时丢失数据。
-6. 更新两个缓存；已有 Compose 引用需要同步时，额外使用 `--update-compose`，只修改用户指定的 Compose 文件。
-7. 验证目标目录无重名、缓存映射指向实际文件，并报告未处理或无法判断的资源。
+3. 提供 `--input-manifest` 时，只读取清单的 `targetPath`，校验其 Hash；整个 mipmap 仅用于检测目标名冲突。
+4. 生成重命名计划：列出原名、新名、Hash 前缀、资源路径和冲突原因。
+5. 默认执行 Dry Run；只有用户明确要求执行或确认计划后，才使用 `--apply`。
+6. 应用计划时禁止覆盖文件，使用临时文件避免多个资源互换名称时丢失数据。
+7. 更新两个缓存；已有 Compose 引用需要同步时，额外使用 `--update-compose`，只修改用户指定的 Compose 文件。
+8. 验证目标目录无重名、缓存映射指向实际文件，并报告未处理或无法判断的资源。
 
 ## 使用脚本
 
 ```bash
 python3 scripts/normalize_images.py \
   --compose app/src/main/java/com/jollyeng/www/compose/ui/activity/report/ReportHomeV2Layout.kt \
-  --mipmap-path res.layouts.report.mipmap
+  --mipmap-path res.layouts.report.mipmap \
+  --input-manifest .code-lanhu-compose/images/report-home-a1b2c3d4.json
 ```
 
 确认 Dry Run 输出后执行：
@@ -70,10 +73,11 @@ python3 scripts/normalize_images.py \
 python3 scripts/normalize_images.py \
   --compose app/src/main/java/com/jollyeng/www/compose/ui/activity/report/ReportHomeV2Layout.kt \
   --mipmap-path res.layouts.report.mipmap \
+  --input-manifest .code-lanhu-compose/images/report-home-a1b2c3d4.json \
   --apply
 ```
 
-默认只处理指定 mipmap 路径及其密度目录，不处理项目其他图片。缓存已存在时，脚本会根据 Hash 和历史输出路径恢复关系，保证重复执行具有幂等性。
+未提供导入清单时，默认处理指定 mipmap 路径及其密度目录；提供后只处理清单记录的图片。缓存已存在时，脚本会根据 Hash 和历史输出路径恢复关系，保证重复执行具有幂等性。
 
 ## 禁止事项
 
@@ -82,6 +86,7 @@ python3 scripts/normalize_images.py \
 - 禁止覆盖已有图片、删除旧缓存或自动合并内容相同的图片。
 - 禁止只更新图片文件而不更新 `lanhu-resources.json`。
 - 禁止扫描整个项目后批量重命名未被用户指定的资源。
+- 禁止在共享 mipmap 中省略 ZIP 导入清单后声称只处理本次导入图片。
 
 ## 验证
 

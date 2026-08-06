@@ -137,6 +137,71 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(normalize_namespace(Path("ReportHomeV2Layout.kt")), "report_home_v2")
         self.assertEqual(normalize_namespace(Path("Test3Page.kt")), "test3")
 
+    def test_input_manifest_limits_plan_to_imported_images(self):
+        imported = self.write_resource("mipmap-nodpi", ".lanhu-imported.png", b"new")
+        retained = self.write_resource("mipmap-nodpi", "legacy.png", b"legacy")
+        input_manifest = self.project / ".code-lanhu-compose/images/design-a1b2c3d4.json"
+        input_manifest.parent.mkdir(parents=True)
+        input_manifest.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "images": [
+                        {
+                            "sourcePath": "design/img/Group 62.png",
+                            "originalName": "Group 62.png",
+                            "sha256": hashlib.sha256(b"new").hexdigest(),
+                            "targetPath": str(imported.relative_to(self.project)),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        plan = build_plan(
+            self.compose,
+            self.report_root / "mipmap-nodpi",
+            input_manifest_path=input_manifest,
+        )
+
+        planned_sources = {item.source.resolve() for item in plan}
+        self.assertEqual(planned_sources, {imported.resolve()})
+        self.assertNotIn(retained.resolve(), planned_sources)
+        self.assertEqual(plan[0].original_name, "Group 62.png")
+        self.assertEqual(plan[0].output_name, "icon_report_home_v2_group_62.png")
+
+    def test_input_manifest_rejects_image_outside_requested_mipmap(self):
+        imported = self.write_resource("mipmap-nodpi", ".lanhu-imported.png", b"new")
+        outside = self.project / "app/src/main/res/drawable-nodpi/not-an-import.png"
+        outside.parent.mkdir(parents=True)
+        outside.write_bytes(b"outside")
+        input_manifest = self.project / ".code-lanhu-compose/images/design-a1b2c3d4.json"
+        input_manifest.parent.mkdir(parents=True)
+        input_manifest.write_text(
+            json.dumps(
+                {
+                    "version": 1,
+                    "images": [
+                        {
+                            "sourcePath": "design/img/Group 62.png",
+                            "originalName": "Group 62.png",
+                            "sha256": hashlib.sha256(b"outside").hexdigest(),
+                            "targetPath": str(outside.relative_to(self.project)),
+                        }
+                    ],
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        with self.assertRaisesRegex(ValueError, "不在指定 mipmap"):
+            build_plan(
+                self.compose,
+                imported.parent,
+                input_manifest_path=input_manifest,
+            )
+
     def test_already_normalized_names_are_kept_not_double_prefixed(self):
         self.write_resource("mipmap-xhdpi", "icon_report_home_v2_bg.png", b"bg")
         self.write_resource("mipmap-xxhdpi", "icon_report_home_v2_bg.png", b"bg")

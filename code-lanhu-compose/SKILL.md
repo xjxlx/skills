@@ -71,7 +71,8 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 ### 4. 接入图片资源
 
 - 从解析结果取得图片的真实相对路径和内容 Hash，禁止使用模糊文件名猜测资源。
-- 需要导入或规范 Android 资源名时调用 `$code-image`，向它提供目标 Compose 文件和明确的 mipmap/drawable 路径。
+- 先用 `scripts/import_zip_images.py` 将 ZIP 图片导入目标 mipmap，并在 `.code-lanhu-compose/images/<zip-stem>-<sha256前8位>.json` 写入本次导入清单；同名 ZIP 必须通过 Hash 区分。
+- 需要规范 Android 资源名时调用 `$code-image`，同时传递目标 Compose 文件、目标 mipmap 路径和导入清单的 `--input-manifest`。它只重命名清单中的 `targetPath`，共享 mipmap 中其余图片只用于冲突检测。
 - 只使用实际存在且映射成功的资源；禁止用文字、猜测圆角或临时 `Canvas` 替代已有设计切图。
 - 图片匹配失败时列出设计节点、源路径、Hash 和候选文件，停止处理该资源并请求确认。
 

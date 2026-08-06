@@ -162,6 +162,43 @@ def load_manifest(path: Path) -> dict:
     return data
 
 
+def load_input_manifest(path: Path, project_root: Path) -> dict[Path, dict]:
+    """读取蓝湖导入清单，并校验待改名文件仍位于项目中且内容未变化。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as error:
+        raise ValueError(f"无法读取导入清单 {path}: {error}") from error
+    if not isinstance(data, dict) or not isinstance(data.get("images"), list):
+        raise ValueError(f"导入清单格式错误：{path}")
+
+    selected = {}
+    for asset in data["images"]:
+        if not isinstance(asset, dict):
+            raise ValueError(f"导入清单图片记录格式错误：{path}")
+        target_value = asset.get("targetPath")
+        original_name = asset.get("originalName")
+        expected_hash = asset.get("sha256")
+        if not all(isinstance(value, str) and value for value in (target_value, original_name, expected_hash)):
+            raise ValueError(f"导入清单缺少 targetPath、originalName 或 sha256：{path}")
+        target = Path(target_value)
+        target = target if target.is_absolute() else project_root / target
+        target = target.resolve()
+        try:
+            target.relative_to(project_root.resolve())
+        except ValueError as error:
+            raise ValueError(f"导入清单图片位于项目外：{target}") from error
+        if not target.is_file() or target.suffix.lower() not in IMAGE_EXTENSIONS:
+            raise ValueError(f"导入清单图片不存在或不是支持格式：{target}")
+        if sha256_file(target) != expected_hash:
+            raise ValueError(f"导入清单图片 Hash 不匹配：{target}")
+        if target in selected:
+            raise ValueError(f"导入清单重复引用同一目标文件：{target}")
+        selected[target] = asset
+    if not selected:
+        raise ValueError(f"导入清单没有可处理图片：{path}")
+    return selected
+
+
 def _find_cached_record(
     records: list[dict],
     current_path: str,
@@ -219,12 +256,24 @@ def build_plan(
     compose_path: Path,
     mipmap_path: Path,
     manifest_path: Path | None = None,
+    input_manifest_path: Path | None = None,
 ) -> list[RenamePlan]:
     """只生成计划，不修改文件；默认覆盖同一 mipmap 族的全部密度目录。"""
     compose_path = Path(compose_path).resolve()
     project_root = find_project_root(compose_path)
     directories = resolve_mipmap_dirs(Path(mipmap_path))
-    source_files = iter_image_files(directories)
+    selected_assets = (
+        load_input_manifest(Path(input_manifest_path), project_root)
+        if input_manifest_path
+        else {}
+    )
+    allowed_directories = {directory.resolve() for directory in directories}
+    outside_mipmap = [
+        source for source in selected_assets if source.parent.resolve() not in allowed_directories
+    ]
+    if outside_mipmap:
+        raise ValueError(f"导入清单图片不在指定 mipmap 路径中：{outside_mipmap[0]}")
+    source_files = sorted(selected_assets) if selected_assets else iter_image_files(directories)
     if not source_files:
         raise ValueError(f"mipmap 路径中没有可处理的图片：{mipmap_path}")
 
@@ -242,6 +291,9 @@ def build_plan(
         source_hash = sha256_file(source)
         family = relative_path(family_root(source), project_root)
         current_path = relative_path(source, project_root)
+        input_asset = selected_assets.get(source.resolve())
+        original_from_import = input_asset.get("originalName") if input_asset else None
+        identity_from_import = input_asset.get("sourcePath") if input_asset else None
         cached = _find_cached_record(
             manifest.get("resources", []), current_path, source_hash, family
         )
@@ -262,8 +314,8 @@ def build_plan(
             previous_output = None
             previous_original_name = None
         else:
-            original_name = source.name
-            identity = f"{family}:{original_name}"
+            original_name = original_from_import or source.name
+            identity = f"{family}:{identity_from_import or original_name}"
             previous_output = None
             previous_original_name = None
 
@@ -458,6 +510,10 @@ def main() -> int:
     parser.add_argument("--project-root", help="项目根目录，默认从 Compose 文件推断")
     parser.add_argument("--manifest", help="Hash 与历史关系清单路径")
     parser.add_argument("--mapping", help="code-compose 映射路径")
+    parser.add_argument(
+        "--input-manifest",
+        help="本次 ZIP 导入图片清单；提供后只处理清单 targetPath 指向的文件",
+    )
     parser.add_argument("--apply", action="store_true", help="实际重命名；默认只输出预览")
     parser.add_argument(
         "--update-compose",
@@ -475,7 +531,10 @@ def main() -> int:
         manifest_path = project_root / manifest_path
     if not mapping_path.is_absolute():
         mapping_path = project_root / mapping_path
-    plans = build_plan(compose, mipmap_path, manifest_path)
+    input_manifest_path = Path(args.input_manifest) if args.input_manifest else None
+    if input_manifest_path and not input_manifest_path.is_absolute():
+        input_manifest_path = project_root / input_manifest_path
+    plans = build_plan(compose, mipmap_path, manifest_path, input_manifest_path)
     _print_plan(plans)
     if args.apply:
         apply_plan(plans, manifest_path, mapping_path, project_root)
