@@ -5,15 +5,17 @@
 每次运行创建：
 
 ```text
-<project>/.code-compose/runs/<run-id>/
+<project>/.code-lanhu-compose/runs/yyyyMMdd-HHmmss/
 ├── lanhu-design.png
-├── app-screenshot-00.png
 ├── app-screenshot-01.png
-├── diff-00.json
+├── app-screenshot-02.png
+├── diff-01.json
 └── logs/
 ```
 
 把最近一次设计稿截图复制到 `~/Downloads/lanhu_design.png`，最近一次 App 截图复制到 `~/Downloads/app_screenshot.png`。下载目录文件允许覆盖，`runs/` 内历史证据不得覆盖。
+
+同一运行目录内的 App 截图从 `app-screenshot-01.png` 开始按截图顺序递增为 `02`、`03`……；设计稿截图固定命名为 `lanhu-design.png`。多轮修正不得覆盖已有截图。
 
 ## 设计稿截图
 
@@ -35,16 +37,12 @@ await element.screenshot({ path: "<run-dir>/lanhu-design.png" });
 
 ```bash
 adb -s <serial> shell screencap -p /sdcard/lanhu_compose_screen.png
-adb -s <serial> pull /sdcard/lanhu_compose_screen.png <run-dir>/app-screenshot-00.png
+adb -s <serial> pull /sdcard/lanhu_compose_screen.png <run-dir>/app-screenshot-01.png
 ```
 
-<<<<<<< HEAD
-截图前确认目标页面、数据和滚动位置正确，动画已经稳定，并且没有键盘、Toast 或弹窗遮挡。
-=======
 截图前必须完成启动稳定性检查：等待启动页/启动图标消失，确认目标 Activity 已处于 resumed 状态，并通过 UI 树、页面标识或稳定的目标节点确认目标页面已显示；连续两次检查结果一致后，才允许截图。空白加载态、启动图、首页或过渡动画截图必须标记为无效证据，不得用于视觉对比。
 
 同时确认目标数据和滚动位置正确，动画已经稳定，并且没有键盘、Toast 或弹窗遮挡。把启动稳定性检查结果和目标页面标识写入本轮 `logs/`，便于追溯截图是否有效。
->>>>>>> e6d2138 (更新skill的逻辑)
 
 ## 对齐后再比较
 

@@ -5,15 +5,15 @@
 在调用 Skill 时的当前工作目录（即 Android 项目根目录）维护：
 
 ```text
-.code-compose/
-├── index.json
+.code-lanhu-compose/
 ├── designs/
+│   ├── index.json
 │   └── yyyyMMdd-HHmmss-<sha256前8位>.json
 └── runs/
-    └── <run-id>/
+    └── yyyyMMdd-HHmmss/
 ```
 
-`index.json` 只路由设计源和解析产物，不保存最终 Compose 代码。项目文件始终依据当前代码、主题和组件重新适配。
+`designs/index.json` 只路由设计源和解析产物，不保存最终 Compose 代码。项目文件始终依据当前代码、主题和组件重新适配。`artifactPath` 使用相对于 `.code-lanhu-compose` 的路径，例如 `designs/yyyyMMdd-HHmmss-<sha256前8位>.json`。
 
 ## 索引格式
 
@@ -31,7 +31,7 @@
 }
 ```
 
-使用 `yyyyMMdd-HHmmss-<sha256前8位>.json` 命名解析文件。同一 SHA-256 只保留一个当前有效路由，运行证据保留在 `runs/`。
+使用 `yyyyMMdd-HHmmss-<sha256前8位>.json` 命名解析文件。同一 SHA-256 只保留一个当前有效路由，运行证据保留在 `runs/yyyyMMdd-HHmmss/`。运行目录只使用年月日、时分秒命名，不再拼接 SHA 或其他参数。
 
 ## 缓存命中
 
