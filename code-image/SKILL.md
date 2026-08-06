@@ -28,7 +28,7 @@ description: Use when 蓝湖下载的图片文件名不符合 Android 资源命�
 
 ## 命名规则
 
-- 使用 Compose 文件 stem 生成 snake_case 命名空间；文件名末尾为 `Layout` 时必须去掉该后缀：`ReportHomeV2Layout.kt` → `report_home_v2`。
+- 使用 Compose 文件 stem 生成 snake_case 命名空间；文件名末尾为 `Layout` 或 `Page` 时必须去掉该后缀：`ReportHomeV2Layout.kt` → `report_home_v2`，`Test3Page.kt` → `test3`。
 - 图片基础名统一使用小写 snake_case：`Group 62.png` → `group_62.png`；名称以数字开头时加 `image_` 前缀，中文或无可用英文字符时使用 `image_` 加稳定 Hash。
 - 所有输出文件名必须以 `icon_` 开头；最终名称为 `icon_ + Compose命名空间 + 图片基础名 + 原扩展名`，例如 `icon_report_home_v2_group_62.png`。禁止输出驼峰拼接或无分隔符名称。
 - 同一资源族在 `mipmap-xhdpi`、`mipmap-xxhdpi` 等密度目录中必须使用同一个文件名。

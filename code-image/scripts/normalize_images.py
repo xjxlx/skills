@@ -57,8 +57,8 @@ def _snake_token(value: str) -> str:
 
 
 def normalize_namespace(compose_path: Path) -> str:
-    """使用 Compose 文件名生成 snake_case 命名空间，并去掉末尾 Layout。"""
-    stem = re.sub(r"(?i)layout$", "", compose_path.stem)
+    """使用 Compose 文件名生成 snake_case 命名空间，并去掉末尾 Layout 或 Page。"""
+    stem = re.sub(r"(?i)(?:layout|page)$", "", compose_path.stem)
     token = _snake_token(stem)
     if not token:
         token = "screen_" + hashlib.sha256(compose_path.stem.encode()).hexdigest()[:6]

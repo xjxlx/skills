@@ -11,6 +11,7 @@ from normalize_images import (
     apply_plan,
     build_plan,
     load_manifest,
+    normalize_namespace,
     namespace_prefixes,
     resolve_mipmap_dirs,
     resolve_mipmap_path,
@@ -131,6 +132,10 @@ class NormalizeImagesTest(unittest.TestCase):
             ["icon_report_home_v2_", "icon_report_home_"],
         )
         self.assertEqual(namespace_prefixes("lesson_yflx"), ["icon_lesson_yflx_"])
+
+    def test_namespace_removes_layout_or_page_suffix(self):
+        self.assertEqual(normalize_namespace(Path("ReportHomeV2Layout.kt")), "report_home_v2")
+        self.assertEqual(normalize_namespace(Path("Test3Page.kt")), "test3")
 
     def test_already_normalized_names_are_kept_not_double_prefixed(self):
         self.write_resource("mipmap-xhdpi", "icon_report_home_v2_bg.png", b"bg")
