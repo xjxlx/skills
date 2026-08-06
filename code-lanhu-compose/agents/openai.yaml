@@ -1,0 +1,4 @@
+interface:
+  display_name: "code-lanhu-compose"
+  short_description: "将蓝湖 HTML/CSS ZIP 转换为项目化 Compose 页面"
+  default_prompt: "使用 $code-lanhu-compose 将蓝湖导出的 ZIP 转换为当前 Android 项目的 Compose 页面并完成截图校验。"
