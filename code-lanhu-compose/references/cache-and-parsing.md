@@ -13,7 +13,7 @@
     └── yyyyMMdd-HHmmss/
 ```
 
-`designs/index.json` 只路由设计源和解析产物，不保存最终 Compose 代码。项目文件始终依据当前代码、主题和组件重新适配。`artifactPath` 使用相对于 `.code-lanhu-compose` 的路径，例如 `designs/yyyyMMdd-HHmmss-<sha256前8位>.json`。
+`designs/index.json` 只路由设计源和解析产物，不保存最终 Compose 代码。项目文件始终依据当前代码、主题和组件重新适配。`artifactPath` 使用相对于 `.code-lanhu-compose` 的路径，例如 `designs/yyyyMMdd-HHmmss-<sha256前8位>.json`。必须先创建并写入 `designs/index.json`，再创建本轮 `runs/yyyyMMdd-HHmmss/`。
 
 ## 索引格式
 
@@ -37,12 +37,12 @@
 
 只有以下条件全部成立才复用：
 
-1. ZIP 完整 SHA-256 存在于 `index.json`。
+1. ZIP 完整 SHA-256 存在于 `designs/index.json`。
 2. `artifactPath` 指向的文件真实存在且可解析。
 3. 解析文件记录的源 SHA-256 与当前 ZIP 一致。
 4. 解析结构与当前读取逻辑兼容。
 
-任一条件失败时重新解析并修复索引。写入 JSON 时先写临时文件，再原子替换，避免中断造成半文件。
+任一条件失败时重新解析并修复索引；只有截图证据而没有 `designs/index.json` 或设计 JSON 时，不得判定为缓存命中。写入 JSON 时先写临时文件，再原子替换，避免中断造成半文件。
 
 ## 标准化设计产物
 

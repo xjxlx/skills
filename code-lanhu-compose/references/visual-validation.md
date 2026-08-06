@@ -17,6 +17,8 @@
 
 同一运行目录内的 App 截图从 `app-screenshot-01.png` 开始按截图顺序递增为 `02`、`03`……；设计稿截图固定命名为 `lanhu-design.png`。多轮修正不得覆盖已有截图。
 
+创建本目录前必须确认 `.code-lanhu-compose/designs/index.json` 和对应设计 JSON 已完成；只有运行目录而没有设计索引的结果属于不完整证据，必须先回到设计解析阶段补齐。
+
 ## 设计稿截图
 
 使用 Playwright 等待页面资源完成后截取解析阶段确定的设计根节点：

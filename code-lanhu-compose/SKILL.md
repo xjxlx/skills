@@ -35,6 +35,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 安全解压到当前用户下载目录的 `<zip-stem>-<sha256前8位>/`，解压前拒绝绝对路径、`..` 路径穿越和指向目录外的符号链接。
 - 找到唯一有效的 `index.html`，并找到它实际引用的 `index.css`。存在多个候选页面根目录时，列出候选并让用户选择。
 - 缺少入口、CSS 无法加载或资源路径越界时停止，不生成猜测代码。
+- 创建或复用截图运行目录前，必须确认 `.code-lanhu-compose/designs/index.json` 及其 `artifactPath` 指向的设计 JSON 都存在；缺失时先完成设计解析和索引写入，不得只创建 `runs/` 并把截图当作完整缓存。
 
 缓存目录和设计产物遵循 [缓存与设计解析](references/cache-and-parsing.md)。缓存只复用设计解析结果，不复用最终 Compose 代码。
 
@@ -64,7 +65,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 - 根层级背景图片必须直接使用项目的 `ImageItem`，`modifier = Modifier.fillMaxSize()`，并显式设置 `contentScale = ContentScale.FillBounds`；不得把根背景放进固定设计尺寸容器后再用局部缩放代替屏幕适配。
 - 标题、标签、数值、单位和右侧图标组成的复合内容必须使用 `Row`/`Column` 的对齐关系或项目已有标签组件表达；禁止用互不关联的固定 `offset` 拼接，完成后检查文字是否裁剪、标签文字是否真实存在、数值和单位是否同一基线。
-- 重复视觉单元必须先建数据列表再用 `Column`、`Row`、`LazyColumn` 或 `LazyVerticalGrid` 展示；复合卡片必须逐项保留设计中可见的图片、左右装饰、标签和操作入口，不得只保留中心文字或主数值。
+- 重复视觉单元必须先建数据列表；只要 item 数量超过可视范围、页面本身支持滑动或用户要求查看滑动效果，就必须使用 `LazyColumn`、`LazyRow` 或 `LazyVerticalGrid` 等滑动组件，禁止逐个硬编码同类 Composable 或用固定 `Row`/`Column` 堆叠可能超出视口的 item。复合卡片必须逐项保留设计中可见的图片、左右装饰、标签和操作入口，不得只保留中心文字或主数值。
 布局映射和间距归属必须遵循 [Compose 映射规则](references/compose-mapping.md)。
 
 ### 4. 接入图片资源
