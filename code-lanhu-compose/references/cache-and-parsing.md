@@ -2,7 +2,7 @@
 
 ## 目录结构
 
-在当前 Android 项目根目录维护：
+在调用 Skill 时的当前工作目录（即 Android 项目根目录）维护：
 
 ```text
 .code-compose/
