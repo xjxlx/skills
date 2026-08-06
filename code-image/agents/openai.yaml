@@ -1,4 +1,4 @@
 interface:
   display_name: "Code Image"
-  short_description: "规范蓝湖图片资源名称并处理 Compose 页面资源冲突"
-  default_prompt: "Use $code-image 为指定 Compose 文件关联的蓝湖图片生成稳定且不重复的 Android 资源名称"
+  short_description: "逐张规范 Android mipmap 图片资源名并保存映射"
+  default_prompt: "Use $code-image 处理一张指定图片；可选提供 Compose 文件作为页面命名参考。"
