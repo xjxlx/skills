@@ -38,7 +38,9 @@ adb -s <serial> shell screencap -p /sdcard/lanhu_compose_screen.png
 adb -s <serial> pull /sdcard/lanhu_compose_screen.png <run-dir>/app-screenshot-00.png
 ```
 
-截图前确认目标页面、数据和滚动位置正确，动画已经稳定，并且没有键盘、Toast 或弹窗遮挡。
+截图前必须完成启动稳定性检查：等待启动页/启动图标消失，确认目标 Activity 已处于 resumed 状态，并通过 UI 树、页面标识或稳定的目标节点确认目标页面已显示；连续两次检查结果一致后，才允许截图。空白加载态、启动图、首页或过渡动画截图必须标记为无效证据，不得用于视觉对比。
+
+同时确认目标数据和滚动位置正确，动画已经稳定，并且没有键盘、Toast 或弹窗遮挡。把启动稳定性检查结果和目标页面标识写入本轮 `logs/`，便于追溯截图是否有效。
 
 ## 对齐后再比较
 
