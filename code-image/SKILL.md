@@ -21,7 +21,7 @@ description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并�
 
 - 必须且只能提供其中一项：`--image <path>` 或 `--zip <path>`。重复参数、目录、通配符和同时传递两者均无效。
 - `--image` 只接受一张 `.png`、`.jpg`、`.jpeg`、`.webp` 或 `.gif` 图片；源文件保留不动。
-- `--zip` 只接受一个 ZIP；只导入其中路径位于 `mipmap` 或 `mipmap-*` 目录的图片，拒绝绝对路径、`..` 路径穿越和符号链接。
+- `--zip` 只接受一个 ZIP，且其中必须至少有一张图片位于 `mipmap` 或 `mipmap-*` 目录；否则在解压前拒绝，不能按 ZIP 处理。需要处理其中内容时，改为向 `--image` 传入一张实际图片。
 - `--compose <path>` 可选。提供时必须是实际存在的 Compose 文件，仅用于生成页面命名空间。
 - `--project-root <path>` 可选，默认当前工作目录。
 
@@ -77,7 +77,7 @@ python3 scripts/normalize_images.py \
 
 - 禁止覆盖已有图片、自动合并不同来源的图片或修改 Compose 引用。
 - 禁止把单图输出到输入所在目录；必须使用 `mipmap-xxhdpi`。
-- 禁止从 ZIP 导入非 `mipmap*` 目录下的图片。
+- 禁止把不含 `mipmap*` 图片目录的 ZIP 当作合格 ZIP；必须改用单张实际图片的 `--image` 逻辑。
 - 禁止写入 `.codex/`，或因外部 Skill 调用、日常执行而自行修改本 Skill。
 
 ## 验证

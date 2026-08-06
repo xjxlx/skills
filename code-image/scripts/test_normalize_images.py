@@ -115,6 +115,19 @@ class NormalizeImagesTest(unittest.TestCase):
         )
         self.assertEqual(len(self.resources()), 2)
 
+    def test_zip_without_mipmap_images_is_rejected_before_extraction(self):
+        archive = self.input_dir / "not-mipmap.zip"
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("design/images/Group 62.png", b"image")
+
+        result = self.run_skill("--zip", archive)
+
+        source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+        extracted = self.home / "Downloads" / f"not-mipmap-{source_hash[:6]}"
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("--image", result.stderr)
+        self.assertFalse(extracted.exists())
+
     def test_multiple_images_or_mixed_image_and_zip_are_rejected(self):
         first = self.input_dir / "first.png"
         second = self.input_dir / "second.png"

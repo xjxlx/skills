@@ -212,11 +212,26 @@ def _safe_zip_entries(archive: ZipFile):
     return entries
 
 
+def archive_mipmap_directory(entry_name: str) -> str | None:
+    path = PurePosixPath(entry_name)
+    if path.suffix.lower() not in IMAGE_EXTENSIONS:
+        return None
+    for part in reversed(path.parts[:-1]):
+        if part == "mipmap" or part.startswith("mipmap-"):
+            return part
+    return None
+
+
 def extract_zip_to_downloads(zip_path: Path) -> Path:
     source_hash = sha256_file(zip_path)
     destination = Path.home() / "Downloads" / f"{safe_token(zip_path.stem)}-{source_hash[:6]}"
     with ZipFile(zip_path) as archive:
         entries = _safe_zip_entries(archive)
+        if not any(
+            not entry.is_dir() and archive_mipmap_directory(entry.filename)
+            for entry in entries
+        ):
+            raise ValueError("ZIP 不含 mipmap 图片，不能按 ZIP 处理；请传入单个图片使用 --image")
         for entry in entries:
             if entry.is_dir():
                 continue
