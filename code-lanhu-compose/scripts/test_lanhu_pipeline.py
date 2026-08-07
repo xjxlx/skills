@@ -9,6 +9,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 
 SCRIPT_PATH = Path(__file__).with_name("lanhu_pipeline.py")
@@ -20,6 +21,18 @@ SPEC.loader.exec_module(PIPELINE)
 
 
 class LanhuPipelineContractTest(unittest.TestCase):
+    def test_gradle_command_prefers_project_wrapper(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            (project_root / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+
+            self.assertEqual(PIPELINE.gradle_command(project_root), ["./gradlew"])
+
+    def test_gradle_command_falls_back_to_system_gradle(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch.object(PIPELINE.shutil, "which", return_value="/usr/local/bin/gradle"):
+                self.assertEqual(PIPELINE.gradle_command(Path(temp_dir)), ["gradle"])
+
     def test_inspect_writes_source_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
