@@ -10,9 +10,12 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import posixpath
 import re
+import signal
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -38,6 +41,7 @@ PHASES = (
 ALLOWED_ACTIONS = {"ask_user", "apply_patch", "continue", "stop"}
 SAFE_TASK = re.compile(r"^:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
 SAFE_SERIAL = re.compile(r"^[A-Za-z0-9_.:-]+$")
+DESIGN_SERVER_PROCESSES: dict[int, subprocess.Popen[Any]] = {}
 
 
 class PipelineError(RuntimeError):
@@ -188,6 +192,175 @@ def load_source(archive: Path, project_root: Path) -> tuple[Path, dict[str, Any]
     if source.get("sourceSha256") != source_sha or state.get("sourceSha256") != source_sha:
         raise PipelineError("输入 ZIP 已变化，不能复用旧状态；请重新 inspect")
     return artifact, source, state
+
+
+def design_server_state_path(artifact: Path) -> Path:
+    """返回本次 ZIP 专属的本地设计稿服务状态文件。"""
+    return artifact / "design-server.json"
+
+
+def is_pid_alive(pid: int) -> bool:
+    """判断 PID 是否仍然存在，不把权限错误误判为服务已停止。"""
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _safe_extract_archive(archive: Path, destination: Path) -> None:
+    """安全解压 ZIP，供仅本机的静态服务读取。"""
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    with zipfile.ZipFile(archive) as zipped:
+        for info in zip_entries(archive):
+            relative = safe_zip_name(info.filename)
+            target = (root / relative).resolve()
+            if root not in target.parents:
+                raise PipelineError(f"ZIP 解压路径越界：{relative}")
+            target.parent.mkdir(parents=True, exist_ok=True)
+            with zipped.open(info) as source, target.open("wb") as output:
+                shutil.copyfileobj(source, output)
+
+
+def _wait_for_loopback_server(port: int, process: subprocess.Popen[bytes]) -> None:
+    """确认 http.server 已能接受本机连接，避免浏览器读到尚未启动的页面。"""
+    deadline = time.monotonic() + 3
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            raise PipelineError(f"本地静态服务启动失败，退出码：{process.returncode}")
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as connection:
+            connection.settimeout(0.1)
+            if connection.connect_ex(("127.0.0.1", port)) == 0:
+                return
+        time.sleep(0.05)
+    raise PipelineError("本地静态服务在 3 秒内未就绪")
+
+
+def _server_command_matches(pid: int, serving_root: Path) -> bool:
+    """macOS 上只终止由本脚本启动且仍指向该解压目录的 http.server。"""
+    inspected = subprocess.run(
+        ["ps", "-p", str(pid), "-o", "command="],
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    command = inspected.stdout.strip()
+    return (
+        inspected.returncode == 0
+        and "http.server" in command
+        and "--bind 127.0.0.1" in command
+        and str(serving_root) in command
+    )
+
+
+def stop_design_server(archive: Path, project_root: Path) -> dict[str, Any]:
+    """停止本次 ZIP 启动的静态服务，不触碰其他本地进程。"""
+    artifact, _, _ = load_source(archive, project_root)
+    state_path = design_server_state_path(artifact)
+    if not state_path.is_file():
+        return {"artifactPath": str(artifact), "status": "not_running"}
+    try:
+        server_state = json.loads(state_path.read_text(encoding="utf-8"))
+        pid = int(server_state["pid"])
+        serving_root = Path(server_state["servingRoot"]).resolve()
+    except (KeyError, TypeError, ValueError, OSError) as error:
+        raise PipelineError(f"静态服务状态文件无效：{state_path}") from error
+
+    if is_pid_alive(pid):
+        if not _server_command_matches(pid, serving_root):
+            raise PipelineError(f"拒绝终止未验证的进程 PID {pid}；请手动检查：{state_path}")
+        process = DESIGN_SERVER_PROCESSES.pop(pid, None)
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        if process is not None:
+            try:
+                process.wait(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=2)
+        else:
+            deadline = time.monotonic() + 2
+            while is_pid_alive(pid) and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if is_pid_alive(pid):
+                os.kill(pid, signal.SIGKILL)
+    state_path.unlink(missing_ok=True)
+    return {"artifactPath": str(artifact), "status": "stopped", "pid": pid}
+
+
+def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dict[str, Any]:
+    """启动只监听 127.0.0.1 的设计稿静态服务，并记录可安全回收的 PID。"""
+    if not 0 <= port <= 65535:
+        raise PipelineError(f"端口必须在 0 到 65535 之间：{port}")
+    artifact, source, _ = load_source(archive, project_root)
+    state_path = design_server_state_path(artifact)
+    if state_path.is_file():
+        previous = json.loads(state_path.read_text(encoding="utf-8"))
+        previous_pid = int(previous.get("pid", -1))
+        if is_pid_alive(previous_pid):
+            raise PipelineError(f"设计稿静态服务已在运行（PID {previous_pid}）；请先执行 stop-design-server")
+        state_path.unlink()
+
+    serving_root = artifact / "design-server-source"
+    if serving_root.exists():
+        shutil.rmtree(serving_root)
+    _safe_extract_archive(archive.expanduser().resolve(), serving_root)
+    html_path = serving_root / source["html"]["path"]
+    if not html_path.is_file():
+        raise PipelineError(f"解压后找不到设计入口 HTML：{html_path}")
+
+    listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    listener.bind(("127.0.0.1", port))
+    selected_port = listener.getsockname()[1]
+    listener.close()
+    command = [sys.executable, "-m", "http.server", str(selected_port), "--bind", "127.0.0.1", "--directory", str(serving_root)]
+    process = subprocess.Popen(
+        command,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    DESIGN_SERVER_PROCESSES[process.pid] = process
+    try:
+        _wait_for_loopback_server(selected_port, process)
+    except Exception:
+        if is_pid_alive(process.pid):
+            os.kill(process.pid, signal.SIGTERM)
+        process.wait(timeout=2)
+        DESIGN_SERVER_PROCESSES.pop(process.pid, None)
+        raise
+    state = {
+        "version": 1,
+        "pid": process.pid,
+        "port": selected_port,
+        "url": f"http://127.0.0.1:{selected_port}/{source['html']['path']}",
+        "servingRoot": str(serving_root.resolve()),
+        "sourceSha256": source["sourceSha256"],
+        "startedAt": utc_now(),
+    }
+    atomic_json(state_path, state)
+    return {"artifactPath": str(artifact), "statePath": str(state_path), **state}
+
+
+def complete_design_screenshot(archive: Path, project_root: Path, image: Path) -> dict[str, Any]:
+    """登记浏览器已保存的设计截图，并在任何结果下回收本地静态服务。"""
+    artifact, _, state = load_source(archive, project_root)
+    try:
+        image = image.expanduser().resolve()
+        runs_root = (artifact / "runs").resolve()
+        if runs_root not in image.parents or image.name != "lanhu-design.png" or not image.is_file():
+            raise PipelineError("设计截图必须是 artifact/runs/<run>/lanhu-design.png")
+        state["designScreenshot"] = {"image": str(image), "capturedAt": utc_now()}
+        state.setdefault("history", []).append({"phase": "design_screenshot", "at": utc_now(), "detail": state["designScreenshot"]})
+        _write_state(artifact, state)
+        return {"artifactPath": str(artifact), "image": str(image), "status": "recorded"}
+    finally:
+        stop_design_server(archive, project_root)
 
 
 def validate_project(archive: Path, project_root: Path, compose_file: Path | None = None) -> dict[str, Any]:
@@ -435,6 +608,17 @@ def build_parser() -> argparse.ArgumentParser:
     screenshot.add_argument("--serial", required=True)
     screenshot.add_argument("--expected-avd", default="K80")
     screenshot.add_argument("--run-dir", type=Path)
+    start_design_server_command = subparsers.add_parser("start-design-server")
+    start_design_server_command.add_argument("--zip", required=True, type=Path)
+    start_design_server_command.add_argument("--project-root", required=True, type=Path)
+    start_design_server_command.add_argument("--port", type=int, default=0)
+    screenshot_design = subparsers.add_parser("screenshot-design")
+    screenshot_design.add_argument("--zip", required=True, type=Path)
+    screenshot_design.add_argument("--project-root", required=True, type=Path)
+    screenshot_design.add_argument("--image", required=True, type=Path)
+    stop_design_server_command = subparsers.add_parser("stop-design-server")
+    stop_design_server_command.add_argument("--zip", required=True, type=Path)
+    stop_design_server_command.add_argument("--project-root", required=True, type=Path)
     diff = subparsers.add_parser("mark-diff")
     diff.add_argument("--zip", required=True, type=Path)
     diff.add_argument("--project-root", required=True, type=Path)
@@ -498,6 +682,12 @@ def main(argv: list[str] | None = None) -> int:
             result = install_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.apk)
         elif args.command == "screenshot-k80":
             result = screenshot_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.run_dir)
+        elif args.command == "start-design-server":
+            result = start_design_server(args.zip, args.project_root, args.port)
+        elif args.command == "screenshot-design":
+            result = complete_design_screenshot(args.zip, args.project_root, args.image)
+        elif args.command == "stop-design-server":
+            result = stop_design_server(args.zip, args.project_root)
         elif args.command == "mark-diff":
             result = mark_diff(args.zip, args.project_root, args.report, args.outcome)
         elif args.command == "complete":

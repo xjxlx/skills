@@ -21,7 +21,13 @@
 
 ## 设计稿截图
 
-使用 Playwright 等待页面资源完成后截取解析阶段确定的设计根节点：
+本地 `file://` 地址可能被 Codex 浏览器策略拒绝，因此必须由固定管线启动仅本机可访问的静态服务，不能手动启动一个无法追溯的服务：
+
+```bash
+python3 scripts/lanhu_pipeline.py start-design-server --zip <zip> --project-root <project>
+```
+
+读取返回 JSON 的 `url`，让 Codex 浏览器访问它。等待页面资源完成后截取解析阶段确定的设计根节点：
 
 ```javascript
 await page.evaluate(() => document.fonts.ready);
@@ -32,6 +38,16 @@ await element.screenshot({ path: "<run-dir>/lanhu-design.png" });
 ```
 
 根节点选择器必须来自解析结果，`.page` 只是蓝湖常见示例。去掉预览外壳的缩小 `transform`，保留设计元素自身的 transform；固定 viewport、背景和 `deviceScaleFactor`。
+
+截图保存后立即登记并回收服务；即使图片路径、选择器或浏览器操作失败，也必须执行 `stop-design-server`：
+
+```bash
+python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <project> --image <run-dir>/lanhu-design.png
+# 浏览器截图失败时改为执行：
+python3 scripts/lanhu_pipeline.py stop-design-server --zip <zip> --project-root <project>
+```
+
+服务固定绑定 `127.0.0.1`，端口默认由系统自动分配。`screenshot-design` 会校验图片位于本次 artifact 的 `runs/` 目录且命名为 `lanhu-design.png`，随后停止脚本自身启动且已核验的 `http.server` PID；它不会终止用户手动启动的其他服务。
 
 ## App 截图
 

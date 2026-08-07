@@ -10,6 +10,7 @@ import unittest
 import zipfile
 from pathlib import Path
 from unittest.mock import patch
+from urllib.request import urlopen
 
 
 SCRIPT_PATH = Path(__file__).with_name("lanhu_pipeline.py")
@@ -63,6 +64,57 @@ class LanhuPipelineContractTest(unittest.TestCase):
                 PIPELINE.inspect_archive(archive, Path(temp_dir) / "project")
 
             self.assertIn("多个 HTML", str(error.exception))
+
+    def test_design_server_serves_entry_and_stops_after_capture(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr(
+                    "lanhu/index.html",
+                    '<html><head><link href="style.css" rel="stylesheet"></head><body>design-server-ok</body></html>',
+                )
+                zipped.writestr("lanhu/style.css", ".page { width: 100px; }")
+
+            PIPELINE.inspect_archive(archive, project_root)
+            started = PIPELINE.start_design_server(archive, project_root, port=0)
+            state_path = Path(started["statePath"])
+            try:
+                self.assertTrue(started["url"].startswith("http://127.0.0.1:"))
+                self.assertTrue(state_path.is_file())
+                with urlopen(started["url"], timeout=3) as response:
+                    self.assertIn(b"design-server-ok", response.read())
+            finally:
+                stopped = PIPELINE.stop_design_server(archive, project_root)
+
+            self.assertEqual(stopped["status"], "stopped")
+            self.assertFalse(state_path.exists())
+            self.assertFalse(PIPELINE.is_pid_alive(started["pid"]))
+
+    def test_design_screenshot_registration_always_reclaims_server(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr(
+                    "lanhu/index.html",
+                    '<html><head><link href="style.css" rel="stylesheet"></head><body>design-server-ok</body></html>',
+                )
+                zipped.writestr("lanhu/style.css", ".page { width: 100px; }")
+
+            inspected = PIPELINE.inspect_archive(archive, project_root)
+            started = PIPELINE.start_design_server(archive, project_root)
+            image = Path(inspected["artifactPath"]) / "runs" / "test-run" / "lanhu-design.png"
+            image.parent.mkdir(parents=True)
+            image.write_bytes(b"png")
+
+            result = PIPELINE.complete_design_screenshot(archive, project_root, image)
+
+            self.assertEqual(result["status"], "recorded")
+            self.assertFalse(Path(started["statePath"]).exists())
+            self.assertFalse(PIPELINE.is_pid_alive(started["pid"]))
 
     def test_transition_requires_previous_phase(self) -> None:
         state = PIPELINE.new_state("abc", "Page.kt")
