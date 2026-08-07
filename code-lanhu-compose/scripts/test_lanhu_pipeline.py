@@ -79,6 +79,29 @@ class LanhuPipelineContractTest(unittest.TestCase):
             PIPELINE.validate_device_name("Pixel_8_API_35", "K80")
         self.assertIn("K80", str(error.exception))
 
+    def test_repair_round_is_bounded(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("index.html", '<link href="style.css" rel="stylesheet">')
+                zipped.writestr("style.css", ".box { width: 10px; }")
+            PIPELINE.inspect_archive(archive, root / "project")
+            artifact, _, state = PIPELINE.load_source(archive, root / "project")
+            for phase in ("validated", "preflight", "assets_imported", "generated", "compiled", "installed", "screenshot"):
+                PIPELINE.transition(state, phase)
+            PIPELINE.atomic_json(artifact / "diff.json", {"pixelError": 1})
+            PIPELINE._write_state(artifact, state)
+            for _ in range(3):
+                PIPELINE.mark_diff(archive, root / "project", artifact / "diff.json", "repair")
+                _, _, state = PIPELINE.load_source(archive, root / "project")
+                PIPELINE.transition(state, "compiled")
+                PIPELINE.transition(state, "installed")
+                PIPELINE.transition(state, "screenshot")
+                PIPELINE._write_state(artifact, state)
+            with self.assertRaises(PIPELINE.PipelineError):
+                PIPELINE.mark_diff(archive, root / "project", artifact / "diff.json", "repair")
+
 
 if __name__ == "__main__":
     unittest.main()

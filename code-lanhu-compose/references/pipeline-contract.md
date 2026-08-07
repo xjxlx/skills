@@ -6,7 +6,8 @@
 
 ```text
 inspect -> validate -> preflight -> assets -> mark-generated -> compile
-        -> install-k80 -> screenshot-k80 -> diff/complete
+        -> install-k80 -> screenshot-k80 -> mark-diff -> complete
+                                      \-> repair（最多三轮后回到 compile）
 ```
 
 每个阶段都必须使用脚本子命令，阶段不能跳过。`assets` 只调用现有的 `import_zip_images.py`；Gradle 只接受明确的 `:module:task`；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。
@@ -22,6 +23,8 @@ python3 scripts/lanhu_pipeline.py mark-generated --zip <zip> --project-root <pro
 python3 scripts/lanhu_pipeline.py compile --zip <zip> --project-root <project> --task :app:compileDebugKotlin
 python3 scripts/lanhu_pipeline.py install-k80 --zip <zip> --project-root <project> --serial emulator-5554 --expected-avd K80 --apk <apk>
 python3 scripts/lanhu_pipeline.py screenshot-k80 --zip <zip> --project-root <project> --serial emulator-5554
+python3 scripts/lanhu_pipeline.py mark-diff --zip <zip> --project-root <project> --report <diff.json> --outcome pass
+python3 scripts/lanhu_pipeline.py complete --zip <zip> --project-root <project>
 ```
 
 ## 模型决策契约

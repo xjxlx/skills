@@ -328,6 +328,36 @@ def screenshot_k80(archive: Path, project_root: Path, serial: str, run_dir: Path
     return {"artifactPath": str(artifact), "phase": state["phase"], "image": str(image)}
 
 
+def mark_diff(archive: Path, project_root: Path, report: Path, outcome: str) -> dict[str, Any]:
+    if outcome not in {"pass", "repair", "stop"}:
+        raise PipelineError("diff outcome 必须是 pass、repair 或 stop")
+    artifact, _, state = load_source(archive, project_root)
+    if state["phase"] != "screenshot":
+        raise PipelineError(f"当前阶段不能 mark-diff：{state['phase']}")
+    if not report.is_file():
+        raise PipelineError(f"差异报告不存在：{report}")
+    state["lastDiffOutcome"] = outcome
+    if outcome == "repair":
+        state["attempts"]["repair"] = state["attempts"].get("repair", 0) + 1
+        if state["attempts"]["repair"] > 3:
+            raise PipelineError("视觉修正已达到最多三轮")
+        state["phase"] = "generated"
+        state.setdefault("history", []).append({"phase": "repair_requested", "at": utc_now(), "detail": {"report": str(report), "round": state["attempts"]["repair"]}})
+    else:
+        transition(state, "diffed", {"report": str(report), "outcome": outcome})
+    _write_state(artifact, state)
+    return {"artifactPath": str(artifact), "phase": state["phase"], "outcome": outcome, "report": str(report)}
+
+
+def complete_pipeline(archive: Path, project_root: Path) -> dict[str, Any]:
+    artifact, _, state = load_source(archive, project_root)
+    if state["phase"] != "diffed" or state.get("lastDiffOutcome") != "pass":
+        raise PipelineError("只有差异报告 outcome=pass 时才能完成流程")
+    transition(state, "completed", {"reason": "visual-diff-pass"})
+    _write_state(artifact, state)
+    return {"artifactPath": str(artifact), "phase": state["phase"]}
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="固定执行 code-lanhu-compose 的可重放流程")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -367,6 +397,14 @@ def build_parser() -> argparse.ArgumentParser:
     screenshot.add_argument("--project-root", required=True, type=Path)
     screenshot.add_argument("--serial", required=True)
     screenshot.add_argument("--run-dir", type=Path)
+    diff = subparsers.add_parser("mark-diff")
+    diff.add_argument("--zip", required=True, type=Path)
+    diff.add_argument("--project-root", required=True, type=Path)
+    diff.add_argument("--report", required=True, type=Path)
+    diff.add_argument("--outcome", required=True, choices=("pass", "repair", "stop"))
+    complete = subparsers.add_parser("complete")
+    complete.add_argument("--zip", required=True, type=Path)
+    complete.add_argument("--project-root", required=True, type=Path)
     decision = subparsers.add_parser("record-decision")
     decision.add_argument("--zip", required=True, type=Path)
     decision.add_argument("--project-root", required=True, type=Path)
@@ -420,6 +458,10 @@ def main(argv: list[str] | None = None) -> int:
             result = install_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.apk)
         elif args.command == "screenshot-k80":
             result = screenshot_k80(args.zip, args.project_root, args.serial, args.run_dir)
+        elif args.command == "mark-diff":
+            result = mark_diff(args.zip, args.project_root, args.report, args.outcome)
+        elif args.command == "complete":
+            result = complete_pipeline(args.zip, args.project_root)
         elif args.command == "record-decision":
             result = record_decision(args.zip, args.project_root, args.decision)
         elif args.command == "status":
