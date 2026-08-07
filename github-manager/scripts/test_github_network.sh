@@ -54,6 +54,7 @@ source "$SCRIPT_DIR/github_network.sh"
 
 [[ "$(github_system_proxy)" == "http://127.0.0.1:12000" ]]
 github_gh api user >/dev/null
+"$SCRIPT_DIR/github_network.sh" gh api user >/dev/null
 github_git push origin main >/dev/null
 github_git_clone --depth 1 https://github.com/xjxlx/skills.git "$TEST_ROOT/repo" >/dev/null
 

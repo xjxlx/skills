@@ -78,10 +78,17 @@ git rev-parse --verify HEAD >/dev/null
 # 6. 创建 GitHub 仓库并推送
 echo "创建 GitHub 公开仓库..."
 if [[ -n "$ORG" ]]; then
-  github_gh repo create "$ORG/$REPO_NAME" --public --source=. --remote=origin --push
+  github_gh repo create "$ORG/$REPO_NAME" --public --source=. --remote=origin
 else
-  github_gh repo create "$REPO_NAME" --public --source=. --remote=origin --push
+  github_gh repo create "$REPO_NAME" --public --source=. --remote=origin
 fi
+
+CURRENT_BRANCH=$(git branch --show-current)
+[[ -n "$CURRENT_BRANCH" ]] || {
+  echo "当前处于 detached HEAD，无法安全推送" >&2
+  exit 2
+}
+github_git push -u origin "$CURRENT_BRANCH"
 
 # 6. 获取仓库信息
 REPO_FULL=$(github_gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo "$REPO_NAME")

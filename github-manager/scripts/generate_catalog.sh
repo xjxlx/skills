@@ -8,5 +8,6 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILLS_ROOT="${1:-$HOME/.codex/skills}"
 OUTPUT_FILE="${2:-$SCRIPT_DIR/../SKILLS_CATALOG.md}"
 
-env -u PYTHONINSPECT python3 \
+GITHUB_NETWORK_SCRIPT="$SCRIPT_DIR/github_network.sh" \
+  env -u PYTHONINSPECT python3 \
   "$SCRIPT_DIR/_gen_catalog.py" "$SKILLS_ROOT" "$OUTPUT_FILE"

@@ -106,3 +106,24 @@ github_git_clone() {
   echo "Git 克隆直连失败，使用系统代理重试: $proxy" >&2
   git -c "http.proxy=$proxy" clone "$@"
 }
+
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  case "${1:-}" in
+    gh)
+      shift
+      github_gh "$@"
+      ;;
+    git)
+      shift
+      github_git "$@"
+      ;;
+    git-clone)
+      shift
+      github_git_clone "$@"
+      ;;
+    *)
+      echo "用法: github_network.sh {gh|git|git-clone} <参数...>" >&2
+      exit 2
+      ;;
+  esac
+fi

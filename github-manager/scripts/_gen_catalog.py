@@ -15,6 +15,7 @@ output_file = (
     else Path(__file__).resolve().parent.parent / "SKILLS_CATALOG.md"
 )
 unified_repo = os.environ.get("GITHUB_MANAGER_UNIFIED_REPO", "")
+github_network_script = os.environ.get("GITHUB_NETWORK_SCRIPT", "")
 
 EXCLUDE = {".system", "android-cli"}
 NEGATIVE_WORDS = ("不得", "禁止", "不负责", "不复制", "无需", "无明确", "避免", "除外")
@@ -51,8 +52,11 @@ def dependencies(content: str, skill_name: str) -> list[str]:
 
 def github_user() -> str:
     try:
+        command = ["gh", "api", "user", "-q", ".login"]
+        if github_network_script:
+            command = [github_network_script, "gh", *command[1:]]
         return subprocess.check_output(
-            ["gh", "api", "user", "-q", ".login"],
+            command,
             text=True,
             stderr=subprocess.DEVNULL,
         ).strip()
