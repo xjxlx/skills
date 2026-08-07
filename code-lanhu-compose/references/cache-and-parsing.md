@@ -31,7 +31,7 @@ python3 scripts/import_zip_images.py \
 
 脚本安全解压 ZIP 到 `~/Downloads/<zip-stem>-<sha256前6位>/`，按 ZIP 内图片逐个调用 `$code-image --image <extracted-image> --compose <target-compose> --project-root <project-root> --apply`。每次调用只复制和改名这一张图片，输出位于 `$code-image` 规定的 `mipmap-xxhdpi`；它同时更新项目 `.code-image/resources.json`。
 
-随后将本 ZIP 的来源和实际导入结果写入 `<zip-stem>-<sha256前6位>/images.json`。每项至少记录 ZIP 内 `sourcePath`、解压后路径、原始文件名、内容 Hash、真实 `outputPath` 和 `outputName`。该文件仅用于本 ZIP 的设计资源与 Compose 引用对应，不再作为 `$code-image` 的输入。
+随后将本 ZIP 的来源和实际导入结果写入 `<zip-stem>-<sha256前6位>/images.json`。每项至少记录 ZIP 内 `sourcePath`、解压后路径、原始文件名、解析出的 `assetName`、内容 Hash、真实 `outputPath` 和 `outputName`。该文件仅用于本 ZIP 的设计资源与 Compose 引用对应，不再作为 `$code-image` 的输入。
 
 ## 设计产物格式
 

@@ -37,7 +37,7 @@ description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并�
 - 图片基础名转为小写 snake_case：`Group 62.png` → `group_62.png`；无可用英文字符时使用稳定 Hash；数字开头时加 `image_`。
 - 无 `--compose` 时输出 `icon_<图片基础名>.<扩展名>`，例如 `icon_group_62.png`。
 - 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`；提供 `--asset-name` 时图片基础名取该语义名，`Layout` 和 `Page` 后缀不参与命名空间。
-- 已以 `icon_` 开头的合规名称不再加前缀；重复导入已记录源时保留已有输出名。
+- 已以 `icon_` 开头的合规名称不再加前缀；重复导入已记录源时保留已有输出名，显式提供新的 `--asset-name` 时仅在旧文件内容未变时迁移到新语义名。
 - 目标 mipmap 目录已有同名文件时，从 `_1` 开始依次递增：`icon_group_62.png` → `icon_group_62_1.png` → `icon_group_62_2.png`。禁止覆盖已有图片。
 
 ## 记录与改名
