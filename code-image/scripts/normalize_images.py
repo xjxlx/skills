@@ -101,6 +101,35 @@ def load_resources(path: Path) -> dict:
     return data
 
 
+def new_resources_path(project_root: Path, source_path: Path) -> Path:
+    """为本次导入分配独立的资源清单，不与历史页面共用。"""
+    source_hash = sha256_file(source_path)
+    prefix = f"{safe_token(source_path.stem)}-{source_hash[:6]}"
+    records_directory = project_root / ".code-image"
+    pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)\.resources\.json$")
+    operation_numbers = [
+        int(match.group(1))
+        for path in records_directory.glob(f"{prefix}-*.resources.json")
+        if (match := pattern.match(path.name))
+    ]
+    return records_directory / f"{prefix}-{max(operation_numbers, default=0) + 1}.resources.json"
+
+
+def requested_resources_path(value: str, project_root: Path) -> Path:
+    path = Path(value).expanduser().resolve()
+    records_directory = (project_root / ".code-image").resolve()
+    if path.parent != records_directory or not re.fullmatch(
+        r".+-[0-9a-f]{6}-[1-9][0-9]*\.resources\.json", path.name
+    ):
+        raise ValueError(
+            "--resources-file 必须是项目 .code-image/ 下 "
+            "<来源名>-<hash前6位>-<操作编号>.resources.json 格式的新文件"
+        )
+    if path.exists():
+        raise FileExistsError(f"资源清单已存在，拒绝覆盖历史导入：{path}")
+    return path
+
+
 def _find_record(records: list[dict], current_path: str, file_hash: str) -> dict | None:
     for record in records:
         if current_path == record.get("originalPath") and file_hash == record.get("originalHash"):
@@ -312,6 +341,10 @@ def main() -> int:
     parser.add_argument("--compose", help="可选的 Compose 布局文件，用于生成页面命名空间")
     parser.add_argument("--asset-name", help="可选的语义资源名，仅支持单图导入")
     parser.add_argument("--project-root", default=".", help="Android 项目根目录，默认当前目录")
+    parser.add_argument(
+        "--resources-file",
+        help="可选的新资源清单路径；仅允许项目 .code-image/ 下的专属文件",
+    )
     parser.add_argument("--apply", action="store_true", help="实际复制/改名；默认只输出预览")
     args = parser.parse_args()
     if args.image and len(args.image) != 1:
@@ -325,11 +358,16 @@ def main() -> int:
     compose = Path(args.compose).resolve() if args.compose else None
     if compose and not compose.is_file():
         raise ValueError(f"Compose 文件不存在：{compose}")
-    resources_path = project_root / ".code-image/resources.json"
+    source_path = Path(args.image[0] if args.image else args.zip[0]).resolve()
+    resources_path = (
+        requested_resources_path(args.resources_file, project_root)
+        if args.resources_file
+        else new_resources_path(project_root, source_path)
+    )
     res_root = project_root / "app/src/main/res"
 
     if args.image:
-        source = Path(args.image[0]).resolve()
+        source = source_path
         plans = [
             build_plan(
                 source,
@@ -341,7 +379,7 @@ def main() -> int:
             )
         ]
     else:
-        extraction_root = extract_zip_to_downloads(Path(args.zip[0]).resolve())
+        extraction_root = extract_zip_to_downloads(source_path)
         reserved: set[Path] = set()
         plans = []
         for source, directory_name in zip_image_sources(extraction_root):

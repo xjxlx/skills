@@ -31,6 +31,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 ### 1. 预检项目和设计包
 
 - 确认 ZIP、当前工作目录中的 Android 项目、目标模块和 Gradle Wrapper 可访问。
+- 在解析 ZIP、导入图片或生成 Compose 前，从项目任务列表确定唯一最小相关编译任务并执行一次 Gradle 编译。编译失败时立即停止本次 Skill：只报告该次命令和首个可行动的失败原因，不再运行其他 Gradle 任务，也不继续检查、解析或修改任何设计与资源文件。
 - 计算 ZIP 完整 SHA-256；禁止根据文件名判断是否为同一设计。
 - 以规范化的 ZIP 文件名和完整 SHA-256 前六位确定本次专属工作目录：`.code-lanhu-compose/<zip-stem>-<sha256前6位>/`。目录内保存 `design.json`、`images.json` 与 `runs/`；完整 SHA-256 必须写入 JSON 供身份校验。
 - 安全解压到当前用户下载目录的 `<zip-stem>-<sha256前6位>/`，解压前拒绝绝对路径、`..` 路径穿越和指向目录外的符号链接。
@@ -72,7 +73,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 ### 4. 接入图片资源
 
 - 从解析结果取得图片的真实相对路径和内容 Hash，禁止使用模糊文件名猜测资源。
-- 运行 `scripts/import_zip_images.py --zip <zip> --compose <target-compose> --project-root <project> --apply`。它安全解压 ZIP 后，从 HTML/CSS 中解析图片对应的节点类名或 ID，并对每张图片调用 `$code-image --image --asset-name <节点名>`；每张图片由 `$code-image` 复制到 `mipmap-xxhdpi`、规范命名并写入项目 `.code-image/resources.json`。
+- 运行 `scripts/import_zip_images.py --zip <zip> --compose <target-compose> --project-root <project> --apply`。它安全解压 ZIP 后，从 HTML/CSS 中解析图片对应的节点类名或 ID，并对每张图片调用 `$code-image --image --asset-name <节点名>`；每张图片由 `$code-image` 复制到 `mipmap-xxhdpi`、规范命名并写入以 ZIP 名、ZIP Hash 前六位和操作编号命名的独立清单。
 - 将每张实际导入结果（ZIP 内源路径、Hash、真实 `outputPath`、`outputName`）原子写入 `.code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json`。Compose 只能引用其中真实存在的 `outputName`；禁止根据 ZIP 文件名或旧 staging 文件猜测资源名。
 - 蓝湖 HTML/CSS ZIP 通常不是 `mipmap*` 资源包，禁止把整个 ZIP 传给 `$code-image --zip`；必须先解压并逐图调用 `$code-image --image`。
 - 只使用实际存在且映射成功的资源；禁止用文字、猜测圆角或临时 `Canvas` 替代已有设计切图。
@@ -80,7 +81,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 ### 5. 编译、安装并打开目标页面
 
-- 从项目任务列表确定真实模块和 variant，运行最小相关编译任务；禁止把模糊的 `compileDebugKotlin` 当成所有项目的固定命令。
+- 复用预检阶段已确定的真实模块和 variant；每轮修正只重新运行同一个最小相关编译任务，禁止把模糊的 `compileDebugKotlin` 当成所有项目的固定命令。任何一次编译失败时，只报告当前命令的首个可行动失败原因并立即停止，不再执行后续任务或额外错误检查。
 - 编译成功后安装到明确的模拟器或设备，固定分辨率、density、字体缩放、语言、主题和测试数据。
 - 按 deeplink、目标 Activity、debug 路由、稳定导航步骤的顺序打开页面。
 - 截图前通过当前 Activity、UI 结构或页面标识确认目标页面已经显示，并确认启动页、启动图标、空白加载态和过渡动画已经消失；只启动首页或截取启动画面不算完成。

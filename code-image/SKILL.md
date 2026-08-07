@@ -42,16 +42,16 @@ description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并�
 
 ## 记录与改名
 
-运行记录固定写入项目根目录 `.code-image/resources.json`。除用户要求的 ZIP 解压目录和项目资源输出外，Skill 不得在 `.code-image/` 之外创建缓存、映射或日志。记录格式见 [resource-cache.md](references/resource-cache.md)。
+每次导入都在项目 `.code-image/` 新建专属清单：`<来源名>-<来源SHA-256前6位>-<操作编号>.resources.json`，例如 `1600-xxxxxx-1.resources.json`。禁止读写共享 `resources.json`，禁止覆盖或合并历史清单；编号从同一来源身份已有最大值加一。ZIP 用 ZIP 名称和 Hash，单图用图片名称和 Hash。记录格式见 [resource-cache.md](references/resource-cache.md)。
 
-每项记录原始路径和名称、原始 Hash、输出路径和名称、可选 Compose 文件及稳定身份。重复导入按原始路径和 Hash 或当前输出路径和 Hash 匹配；命中后更新同一记录，不重复添加前缀。
+每项记录原始路径和名称、原始 Hash、输出路径和名称、可选 Compose 文件及稳定身份。每次操作只读取和写入自己的新清单；历史资源及其清单必须保留。协调脚本可通过 `--resources-file` 指定符合上述命名的新清单。
 
 ## 工作流程
 
 1. 校验唯一输入及可选 Compose 文件。
 2. 单图确定 `mipmap-xxhdpi` 目标；ZIP 安全解压到下载目录并收集各 `mipmap*` 图片。
 3. 为每张图片独立生成名称；只检查目标目录重名。
-4. 输出 Dry Run；确认后以 `--apply` 复制图片并原子更新 `resources.json`。
+4. 输出 Dry Run；确认后以 `--apply` 复制图片并原子写入本次专属清单。
 
 ## 使用脚本
 

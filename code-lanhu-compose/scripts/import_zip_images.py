@@ -102,6 +102,30 @@ def load_code_image_record(resources_path: Path, source_path: Path, file_hash: s
     raise ValueError(f"code-image 未记录刚导入的图片：{source_path}")
 
 
+def resource_manifest_path(
+    project_root: Path,
+    zip_path: Path,
+    source_hash: str,
+    operation_number: int,
+) -> Path:
+    return (
+        project_root
+        / ".code-image"
+        / f"{safe_file_token(zip_path.stem)}-{source_hash[:6]}-{operation_number}.resources.json"
+    )
+
+
+def next_resource_operation_number(project_root: Path, zip_path: Path, source_hash: str) -> int:
+    prefix = f"{safe_file_token(zip_path.stem)}-{source_hash[:6]}-"
+    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)\.resources\.json$")
+    numbers = [
+        int(match.group(1))
+        for path in (project_root / ".code-image").glob(f"{prefix}*.resources.json")
+        if (match := pattern.match(path.name))
+    ]
+    return max(numbers, default=0) + 1
+
+
 def resolve_asset_reference(document_path: PurePosixPath, raw_reference: str) -> PurePosixPath | None:
     reference = raw_reference.strip().strip("'\"").split("?", 1)[0].split("#", 1)[0]
     if not reference or "://" in reference or reference.startswith("data:"):
@@ -161,6 +185,7 @@ def run_code_image(
     image_path: Path,
     compose_path: Path,
     project_root: Path,
+    resources_path: Path,
     apply: bool,
     asset_name: str | None,
 ) -> None:
@@ -173,6 +198,8 @@ def run_code_image(
         str(compose_path),
         "--project-root",
         str(project_root),
+        "--resources-file",
+        str(resources_path),
     ]
     if asset_name:
         command.extend(["--asset-name", asset_name])
@@ -199,12 +226,27 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
     verify_manifest_identity(manifest_path, source_hash)
     extraction_root, images = extract_zip(zip_path, source_hash)
     asset_names = lanhu_asset_names(extraction_root, images)
-    resources_path = project_root / ".code-image/resources.json"
     records = []
-    for zip_entry, image_path in images:
+    first_operation_number = next_resource_operation_number(project_root, zip_path, source_hash)
+    for index, (zip_entry, image_path) in enumerate(images):
         content_hash = sha256_file(image_path)
         asset_name = asset_names.get(zip_entry)
-        run_code_image(image_path, compose_path, project_root, apply, asset_name)
+        resources_path = resource_manifest_path(
+            project_root,
+            zip_path,
+            source_hash,
+            first_operation_number + index,
+        )
+        if resources_path.exists():
+            raise FileExistsError(f"本次导入资源清单已存在，拒绝覆盖：{resources_path}")
+        run_code_image(
+            image_path,
+            compose_path,
+            project_root,
+            resources_path,
+            apply,
+            asset_name,
+        )
         record = load_code_image_record(resources_path, image_path, content_hash, project_root) if apply else None
         records.append(
             {
@@ -215,6 +257,7 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
                 "sha256": content_hash,
                 "outputPath": record.get("outputPath") if record else None,
                 "outputName": record.get("outputName") if record else None,
+                "resourceManifest": project_relative(resources_path, project_root),
             }
         )
 
