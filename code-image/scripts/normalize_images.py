@@ -28,6 +28,7 @@ class RenamePlan:
     identity: str
     compose_file: str | None
     file_hash: str
+    previous_target: Path | None
 
 
 def sha256_file(path: Path) -> str:
@@ -59,8 +60,12 @@ def normalize_namespace(compose_path: Path) -> str:
     return "screen_" + token if token[0].isdigit() else token
 
 
-def normalize_asset_stem(original_stem: str) -> str:
-    without_copy_suffix = re.sub(r"(?:\(\d+\)|[_-]\d+)$", "", original_stem)
+def normalize_asset_stem(original_stem: str, remove_copy_suffix: bool = True) -> str:
+    without_copy_suffix = (
+        re.sub(r"(?:\(\d+\)|[_-]\d+)$", "", original_stem)
+        if remove_copy_suffix
+        else original_stem
+    )
     token = snake_token(without_copy_suffix)
     if not token:
         token = "image_" + hashlib.sha256(original_stem.encode()).hexdigest()[:6]
@@ -109,9 +114,18 @@ def _is_normalized(name: str) -> bool:
     return Path(name).stem.lower().startswith("icon_")
 
 
-def next_output_path(target_dir: Path, output_name: str, source: Path, reserved: set[Path]) -> Path:
+def next_output_path(
+    target_dir: Path,
+    output_name: str,
+    source: Path,
+    reserved: set[Path],
+    replaceable: set[Path],
+) -> Path:
     candidate = target_dir / output_name
-    if not candidate.exists() and candidate.resolve() not in reserved:
+    if (
+        (not candidate.exists() or candidate.resolve() in replaceable)
+        and candidate.resolve() not in reserved
+    ):
         return candidate
     if candidate.resolve() == source.resolve() and candidate.resolve() not in reserved:
         return candidate
@@ -132,6 +146,7 @@ def build_plan(
     compose_path: Path | None,
     resources_path: Path,
     reserved: set[Path] | None = None,
+    asset_name: str | None = None,
 ) -> RenamePlan:
     source = Path(source_path).resolve()
     if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -146,16 +161,29 @@ def build_plan(
     original_name = record.get("originalName") if record else source.name
     compose_file = relative_path(compose_path, project_root) if compose_path else (record.get("composeFile") if record else None)
 
-    if record and compose_path is None:
+    previous_target = (
+        project_root / record["outputPath"]
+        if record and not Path(record["outputPath"]).is_absolute()
+        else Path(record["outputPath"])
+        if record
+        else None
+    )
+    if record and compose_path is None and asset_name is None:
         output_name = record["outputName"]
     elif _is_normalized(source.name):
         output_name = source.name
     else:
         namespace = normalize_namespace(compose_path) if compose_path else None
         prefix = f"icon_{namespace}_" if namespace else "icon_"
-        output_name = prefix + normalize_asset_stem(Path(original_name).stem) + source.suffix.lower()
+        name_source = asset_name if asset_name else Path(original_name).stem
+        output_name = (
+            prefix
+            + normalize_asset_stem(name_source, remove_copy_suffix=asset_name is None)
+            + source.suffix.lower()
+        )
 
-    target = next_output_path(target_dir, output_name, source, reserved or set())
+    replaceable = {previous_target.resolve()} if previous_target else set()
+    target = next_output_path(target_dir, output_name, source, reserved or set(), replaceable)
     identity = record.get("identity") if record else f"{original_path}:{file_hash}"
     return RenamePlan(
         source=source,
@@ -166,6 +194,7 @@ def build_plan(
         identity=identity,
         compose_file=compose_file,
         file_hash=file_hash,
+        previous_target=previous_target,
     )
 
 
@@ -187,6 +216,11 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
                     raise FileExistsError(f"目标文件已存在，拒绝覆盖：{plan.target}")
             else:
                 shutil.copyfile(plan.source, plan.target)
+        if plan.previous_target and plan.previous_target.resolve() != plan.target.resolve():
+            if plan.previous_target.is_file():
+                if sha256_file(plan.previous_target) != plan.file_hash:
+                    raise FileExistsError(f"旧资源内容已变化，拒绝删除：{plan.previous_target}")
+                plan.previous_target.unlink()
         records[plan.identity] = {
             "identity": plan.identity,
             "originalPath": plan.original_path,
@@ -276,6 +310,7 @@ def main() -> int:
     source_group.add_argument("--image", action="append", help="单个图片文件路径；每次只能提供一次")
     source_group.add_argument("--zip", action="append", help="包含 mipmap 图片目录的 ZIP；每次只能提供一次")
     parser.add_argument("--compose", help="可选的 Compose 布局文件，用于生成页面命名空间")
+    parser.add_argument("--asset-name", help="可选的语义资源名，仅支持单图导入")
     parser.add_argument("--project-root", default=".", help="Android 项目根目录，默认当前目录")
     parser.add_argument("--apply", action="store_true", help="实际复制/改名；默认只输出预览")
     args = parser.parse_args()
@@ -283,6 +318,8 @@ def main() -> int:
         parser.error("每次只允许一个 --image")
     if args.zip and len(args.zip) != 1:
         parser.error("每次只允许一个 --zip")
+    if args.asset_name and args.zip:
+        parser.error("--asset-name 仅支持与 --image 一起使用")
 
     project_root = Path(args.project_root).resolve()
     compose = Path(args.compose).resolve() if args.compose else None
@@ -293,7 +330,16 @@ def main() -> int:
 
     if args.image:
         source = Path(args.image[0]).resolve()
-        plans = [build_plan(source, res_root / "mipmap-xxhdpi", project_root, compose, resources_path)]
+        plans = [
+            build_plan(
+                source,
+                res_root / "mipmap-xxhdpi",
+                project_root,
+                compose,
+                resources_path,
+                asset_name=args.asset_name,
+            )
+        ]
     else:
         extraction_root = extract_zip_to_downloads(Path(args.zip[0]).resolve())
         reserved: set[Path] = set()

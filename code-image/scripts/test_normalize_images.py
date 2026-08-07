@@ -80,6 +80,77 @@ class NormalizeImagesTest(unittest.TestCase):
         )
         self.assertEqual(self.resources()[0]["composeFile"], "app/src/main/java/com/example/ReportHomePage.kt")
 
+    def test_explicit_asset_name_replaces_hash_style_export_name(self):
+        image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
+        image.write_bytes(b"new")
+
+        result = self.run_skill(
+            "--image",
+            image,
+            "--compose",
+            str(self.compose),
+            "--asset-name",
+            "back_button",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(
+            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_report_home_back_button.png").is_file()
+        )
+        self.assertEqual(self.resources()[0]["outputName"], "icon_report_home_back_button.png")
+
+    def test_explicit_asset_name_migrates_an_existing_hash_style_resource(self):
+        image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
+        image.write_bytes(b"new")
+
+        first = self.run_skill("--image", image, "--compose", str(self.compose))
+        migrated = self.run_skill(
+            "--image",
+            image,
+            "--compose",
+            str(self.compose),
+            "--asset-name",
+            "back_button",
+        )
+
+        old_output = self.project / "app/src/main/res/mipmap-xxhdpi/icon_report_home_sketch_png0c6fdffe6b77d5b64d693c16b86d3bfb.png"
+        new_output = self.project / "app/src/main/res/mipmap-xxhdpi/icon_report_home_back_button.png"
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(migrated.returncode, 0, migrated.stderr)
+        self.assertFalse(old_output.exists())
+        self.assertTrue(new_output.is_file())
+        self.assertEqual(self.resources()[0]["outputName"], new_output.name)
+
+        repeated = self.run_skill(
+            "--image",
+            image,
+            "--compose",
+            str(self.compose),
+            "--asset-name",
+            "back_button",
+        )
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        self.assertTrue(new_output.is_file())
+        self.assertFalse(new_output.with_stem(f"{new_output.stem}_1").exists())
+
+    def test_explicit_asset_name_preserves_semantic_trailing_number(self):
+        image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
+        image.write_bytes(b"new")
+
+        result = self.run_skill(
+            "--image",
+            image,
+            "--compose",
+            str(self.compose),
+            "--asset-name",
+            "group_4",
+        )
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(
+            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_report_home_group_4.png").is_file()
+        )
+
     def test_name_conflict_uses_incrementing_number_without_overwriting(self):
         target_dir = self.project / "app/src/main/res/mipmap-xxhdpi"
         target_dir.mkdir(parents=True)

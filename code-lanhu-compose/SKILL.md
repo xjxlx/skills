@@ -72,7 +72,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 ### 4. 接入图片资源
 
 - 从解析结果取得图片的真实相对路径和内容 Hash，禁止使用模糊文件名猜测资源。
-- 运行 `scripts/import_zip_images.py --zip <zip> --compose <target-compose> --project-root <project> --apply`。它安全解压 ZIP 后，对每张图片分别调用一次 `$code-image --image`；每张图片由 `$code-image` 复制到 `mipmap-xxhdpi`、规范命名并写入项目 `.code-image/resources.json`。
+- 运行 `scripts/import_zip_images.py --zip <zip> --compose <target-compose> --project-root <project> --apply`。它安全解压 ZIP 后，从 HTML/CSS 中解析图片对应的节点类名或 ID，并对每张图片调用 `$code-image --image --asset-name <节点名>`；每张图片由 `$code-image` 复制到 `mipmap-xxhdpi`、规范命名并写入项目 `.code-image/resources.json`。
 - 将每张实际导入结果（ZIP 内源路径、Hash、真实 `outputPath`、`outputName`）原子写入 `.code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json`。Compose 只能引用其中真实存在的 `outputName`；禁止根据 ZIP 文件名或旧 staging 文件猜测资源名。
 - 蓝湖 HTML/CSS ZIP 通常不是 `mipmap*` 资源包，禁止把整个 ZIP 传给 `$code-image --zip`；必须先解压并逐图调用 `$code-image --image`。
 - 只使用实际存在且映射成功的资源；禁止用文字、猜测圆角或临时 `Canvas` 替代已有设计切图。

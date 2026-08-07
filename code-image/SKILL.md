@@ -23,6 +23,7 @@ description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并�
 - `--image` 只接受一张 `.png`、`.jpg`、`.jpeg`、`.webp` 或 `.gif` 图片；源文件保留不动。
 - `--zip` 只接受一个 ZIP，且其中必须至少有一张图片位于 `mipmap` 或 `mipmap-*` 目录；否则在解压前拒绝，不能按 ZIP 处理。需要处理其中内容时，改为向 `--image` 传入一张实际图片。
 - `--compose <path>` 可选。提供时必须是实际存在的 Compose 文件，仅用于生成页面命名空间。
+- `--asset-name <name>` 可选，仅与 `--image` 一起使用；上游已解析设计节点语义时，用它替代导出文件名参与命名。
 - `--project-root <path>` 可选，默认当前工作目录。
 
 ## 导入位置
@@ -35,7 +36,7 @@ description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并�
 
 - 图片基础名转为小写 snake_case：`Group 62.png` → `group_62.png`；无可用英文字符时使用稳定 Hash；数字开头时加 `image_`。
 - 无 `--compose` 时输出 `icon_<图片基础名>.<扩展名>`，例如 `icon_group_62.png`。
-- 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`；`Layout` 和 `Page` 后缀不参与命名空间。
+- 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`；提供 `--asset-name` 时图片基础名取该语义名，`Layout` 和 `Page` 后缀不参与命名空间。
 - 已以 `icon_` 开头的合规名称不再加前缀；重复导入已记录源时保留已有输出名。
 - 目标 mipmap 目录已有同名文件时，从 `_1` 开始依次递增：`icon_group_62.png` → `icon_group_62_1.png` → `icon_group_62_2.png`。禁止覆盖已有图片。
 

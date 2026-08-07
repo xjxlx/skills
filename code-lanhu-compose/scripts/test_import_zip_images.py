@@ -96,6 +96,49 @@ class ImportZipImagesTest(unittest.TestCase):
             self.assertIn("没有图片", result.stderr)
             self.assertFalse((root / ".code-lanhu-compose").exists())
 
+    def test_lanhu_node_names_replace_hash_style_export_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "design.zip"
+            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
+            compose.parent.mkdir(parents=True)
+            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
+            with zipfile.ZipFile(archive, "w") as zip_file:
+                zip_file.writestr(
+                    "design/index.html",
+                    '<img class="back_button" src="./img/SketchPng0c6fdffe.png" />',
+                )
+                zip_file.writestr(
+                    "design/index.css",
+                    ".summary_panel { background: url(./img/39dc4c3c_mergeImage.png); }",
+                )
+                zip_file.writestr("design/img/SketchPng0c6fdffe.png", b"back")
+                zip_file.writestr("design/img/39dc4c3c_mergeImage.png", b"panel")
+
+            environment = dict(os.environ)
+            environment["HOME"] = str(root / "home")
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--zip",
+                    str(archive),
+                    "--compose",
+                    str(compose),
+                    "--project-root",
+                    str(root),
+                    "--apply",
+                ],
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            target = root / "app/src/main/res/mipmap-xxhdpi"
+            self.assertTrue((target / "icon_test_back_button.png").is_file())
+            self.assertTrue((target / "icon_test_summary_panel.png").is_file())
+
 
 if __name__ == "__main__":
     unittest.main()

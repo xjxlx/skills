@@ -102,7 +102,68 @@ def load_code_image_record(resources_path: Path, source_path: Path, file_hash: s
     raise ValueError(f"code-image 未记录刚导入的图片：{source_path}")
 
 
-def run_code_image(image_path: Path, compose_path: Path, project_root: Path, apply: bool) -> None:
+def resolve_asset_reference(document_path: PurePosixPath, raw_reference: str) -> PurePosixPath | None:
+    reference = raw_reference.strip().strip("'\"").split("?", 1)[0].split("#", 1)[0]
+    if not reference or "://" in reference or reference.startswith("data:"):
+        return None
+    parts = []
+    for part in (*document_path.parent.parts, *PurePosixPath(reference).parts):
+        if part in ("", "."):
+            continue
+        if part == "..":
+            if not parts:
+                return None
+            parts.pop()
+        else:
+            parts.append(part)
+    return PurePosixPath(*parts)
+
+
+def attribute_value(attributes: str, name: str) -> str | None:
+    match = re.search(rf"\b{name}\s*=\s*(['\"])(.*?)\1", attributes, flags=re.IGNORECASE | re.DOTALL)
+    return match.group(2) if match else None
+
+
+def selector_asset_name(selector: str) -> str | None:
+    match = re.search(r"[.#]([A-Za-z][A-Za-z0-9_-]*)", selector)
+    return match.group(1) if match else None
+
+
+def lanhu_asset_names(extraction_root: Path, image_entries: list[tuple[PurePosixPath, Path]]) -> dict[PurePosixPath, str]:
+    names: dict[PurePosixPath, str] = {}
+    image_paths = {entry for entry, _ in image_entries}
+    documents = sorted(extraction_root.rglob("*.html"))
+    for document in documents:
+        relative_document = PurePosixPath(document.relative_to(extraction_root).as_posix())
+        content = document.read_text(encoding="utf-8", errors="ignore")
+        for attributes in re.findall(r"<img\b([^>]*)>", content, flags=re.IGNORECASE | re.DOTALL):
+            source = attribute_value(attributes, "src")
+            classes = attribute_value(attributes, "class")
+            name = (classes or attribute_value(attributes, "id") or "").split()[0]
+            resolved = resolve_asset_reference(relative_document, source) if source else None
+            if resolved in image_paths and name and resolved not in names:
+                names[resolved] = name
+    for document in sorted(extraction_root.rglob("*.css")):
+        relative_document = PurePosixPath(document.relative_to(extraction_root).as_posix())
+        content = document.read_text(encoding="utf-8", errors="ignore")
+        for selector, body in re.findall(r"([^{}]+)\{([^{}]*)\}", content, flags=re.DOTALL):
+            name = selector_asset_name(selector)
+            if not name:
+                continue
+            for raw_reference in re.findall(r"url\(\s*([^)]*?)\s*\)", body, flags=re.IGNORECASE):
+                resolved = resolve_asset_reference(relative_document, raw_reference)
+                if resolved in image_paths and resolved not in names:
+                    names[resolved] = name
+    return names
+
+
+def run_code_image(
+    image_path: Path,
+    compose_path: Path,
+    project_root: Path,
+    apply: bool,
+    asset_name: str | None,
+) -> None:
     command = [
         "python3",
         str(CODE_IMAGE_SCRIPT),
@@ -113,6 +174,8 @@ def run_code_image(image_path: Path, compose_path: Path, project_root: Path, app
         "--project-root",
         str(project_root),
     ]
+    if asset_name:
+        command.extend(["--asset-name", asset_name])
     if apply:
         command.append("--apply")
     result = subprocess.run(command, capture_output=True, text=True)
@@ -135,17 +198,20 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
     manifest_path = manifest_path_for(zip_path, source_hash, project_root)
     verify_manifest_identity(manifest_path, source_hash)
     extraction_root, images = extract_zip(zip_path, source_hash)
+    asset_names = lanhu_asset_names(extraction_root, images)
     resources_path = project_root / ".code-image/resources.json"
     records = []
     for zip_entry, image_path in images:
         content_hash = sha256_file(image_path)
-        run_code_image(image_path, compose_path, project_root, apply)
+        asset_name = asset_names.get(zip_entry)
+        run_code_image(image_path, compose_path, project_root, apply, asset_name)
         record = load_code_image_record(resources_path, image_path, content_hash, project_root) if apply else None
         records.append(
             {
                 "sourcePath": zip_entry.as_posix(),
                 "extractedPath": str(image_path.resolve()),
                 "originalName": image_path.name,
+                "assetName": asset_name,
                 "sha256": content_hash,
                 "outputPath": record.get("outputPath") if record else None,
                 "outputName": record.get("outputName") if record else None,
