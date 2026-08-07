@@ -26,6 +26,9 @@ description: 实现个人 Codex Skills 的变更检测、凭据扫描、GitHub �
 GitHub 网络异常、远端分支领先以及拉取/推送顺序，执行前先阅读
 [references/github-workflow.md](references/github-workflow.md)。
 
+所有发布和恢复脚本通过 `scripts/github_network.sh` 访问 GitHub：先执行直连，失败后自动读取
+`HTTP_PROXY`/`HTTPS_PROXY` 或 macOS `scutil --proxy`，再用显式代理重试。代理重试仍失败时保留原始失败状态并停止，不更新发布标记或 hash。
+
 ### 第一步：安全扫描
 
 对所有目标 skill 执行安全扫描，检测敏感信息。
@@ -156,6 +159,8 @@ graph LR
 | `scripts/publish_skill.sh` | 首次发布 skill 到 GitHub |
 | `scripts/update_skill.sh` | 更新已发布 skill |
 | `scripts/generate_catalog.sh` | 生成 SKILLS_CATALOG.md |
+| `scripts/github_network.sh` | GitHub CLI/Git 直连失败后的代理检测与重试 |
+| `scripts/test_github_network.sh` | 验证直连失败后的代理回退 |
 | `scripts/restore_skills.sh` | 从统一仓库恢复单个或全部 skill |
 | `scripts/check_and_publish.sh` | 检测全部 skill 并按需统一发布 |
 

@@ -47,8 +47,11 @@ scripts/check_and_publish.sh
 ## GitHub 代理与分支同步
 
 当浏览器可以打开 GitHub，但 Git 的 `push` 或 `pull` 卡住、连接超时或出现
-`HTTP2 framing` 错误时，先执行 `scutil --proxy` 检查系统代理。若 HTTP/HTTPS
-代理已启用，使用实际代理地址显式执行 Git 操作：
+`HTTP2 framing` 错误时，发布和恢复脚本会先直连，失败后由
+`scripts/github_network.sh` 自动读取环境变量或 `scutil --proxy`，并使用实际代理地址重试。
+代理重试仍失败才报告错误；只有 push 成功后才更新发布标记和 hash。
+
+手动排查或脚本外执行 Git 操作时，可显式指定代理：
 
 ```bash
 git -c http.proxy=http://<代理地址>:<端口> fetch origin

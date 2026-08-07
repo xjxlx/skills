@@ -5,6 +5,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/github_network.sh"
 SKILLS_ROOT="$HOME/.codex/skills"
 UNIFIED_DIR="$SCRIPT_DIR/../codex-skills"
 HASHES_FILE="$SCRIPT_DIR/../.hashes.json"
@@ -38,15 +39,15 @@ if [[ ! -d "$UNIFIED_DIR/.git" ]]; then
 fi
 
 if ! git -C "$UNIFIED_DIR" remote get-url origin >/dev/null 2>&1; then
-  if gh repo view "$REPO_NAME" >/dev/null 2>&1; then
-    OWNER=$(gh api user -q .login)
+  if github_gh repo view "$REPO_NAME" >/dev/null 2>&1; then
+    OWNER=$(github_gh api user -q .login)
     git -C "$UNIFIED_DIR" remote add origin "https://github.com/$OWNER/$REPO_NAME.git"
   else
-    gh repo create "$REPO_NAME" --public --source="$UNIFIED_DIR" --remote=origin
+    github_gh repo create "$REPO_NAME" --public --source="$UNIFIED_DIR" --remote=origin
   fi
 fi
 
-REPO_FULL=$(gh repo view "$(git -C "$UNIFIED_DIR" remote get-url origin)" \
+REPO_FULL=$(github_gh repo view "$(git -C "$UNIFIED_DIR" remote get-url origin)" \
   --json nameWithOwner -q .nameWithOwner)
 UPDATED=()
 NOCHANGE=()
@@ -211,7 +212,7 @@ CURRENT_BRANCH=$(git -C "$UNIFIED_DIR" branch --show-current)
   echo "统一仓库处于 detached HEAD，无法安全推送" >&2
   exit 2
 }
-git -C "$UNIFIED_DIR" push -u origin "$CURRENT_BRANCH"
+github_git -C "$UNIFIED_DIR" push -u origin "$CURRENT_BRANCH"
 
 # 只有远端同步成功后，才更新本地发布状态。
 COMMIT_SHA=$(git -C "$UNIFIED_DIR" rev-parse HEAD)

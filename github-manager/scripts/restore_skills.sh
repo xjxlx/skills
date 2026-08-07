@@ -6,6 +6,9 @@
 
 set -euo pipefail
 
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/github_network.sh"
+
 REPO="xjxlx/codex-skills"
 DEST="${CODEX_HOME:-$HOME/.codex}/skills"
 SKILL_NAME=""
@@ -63,7 +66,7 @@ TEMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TEMP_DIR"' EXIT
 
 echo "拉取仓库: $REPO_URL"
-git clone --depth 1 "$REPO_URL" "$TEMP_DIR/repo"
+github_git_clone --depth 1 "$REPO_URL" "$TEMP_DIR/repo"
 
 is_excluded() {
   local candidate="$1"

@@ -6,6 +6,7 @@
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+source "$SCRIPT_DIR/github_network.sh"
 SKILL_DIR="${1:?用法: update_skill.sh <skill_dir>}"
 HASHES_FILE="$SCRIPT_DIR/../.hashes.json"
 
@@ -84,7 +85,7 @@ CURRENT_BRANCH=$(git branch --show-current)
   echo "当前处于 detached HEAD，无法安全推送" >&2
   exit 2
 }
-git push origin "$CURRENT_BRANCH"
+github_git push origin "$CURRENT_BRANCH"
 
 # 更新标记
 COMMIT_SHA=$(git rev-parse HEAD)
