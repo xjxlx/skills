@@ -106,24 +106,12 @@ def resource_manifest_path(
     project_root: Path,
     zip_path: Path,
     source_hash: str,
-    operation_number: int,
 ) -> Path:
     return (
         project_root
         / ".code-image"
-        / f"{safe_file_token(zip_path.stem)}-{source_hash[:6]}-{operation_number}.resources.json"
+        / f"{safe_file_token(zip_path.stem)}-{source_hash[:6]}.resources.json"
     )
-
-
-def next_resource_operation_number(project_root: Path, zip_path: Path, source_hash: str) -> int:
-    prefix = f"{safe_file_token(zip_path.stem)}-{source_hash[:6]}-"
-    pattern = re.compile(rf"^{re.escape(prefix)}(\d+)\.resources\.json$")
-    numbers = [
-        int(match.group(1))
-        for path in (project_root / ".code-image").glob(f"{prefix}*.resources.json")
-        if (match := pattern.match(path.name))
-    ]
-    return max(numbers, default=0) + 1
 
 
 def resolve_asset_reference(document_path: PurePosixPath, raw_reference: str) -> PurePosixPath | None:
@@ -226,19 +214,11 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
     verify_manifest_identity(manifest_path, source_hash)
     extraction_root, images = extract_zip(zip_path, source_hash)
     asset_names = lanhu_asset_names(extraction_root, images)
+    resources_path = resource_manifest_path(project_root, zip_path, source_hash)
     records = []
-    first_operation_number = next_resource_operation_number(project_root, zip_path, source_hash)
-    for index, (zip_entry, image_path) in enumerate(images):
+    for zip_entry, image_path in images:
         content_hash = sha256_file(image_path)
         asset_name = asset_names.get(zip_entry)
-        resources_path = resource_manifest_path(
-            project_root,
-            zip_path,
-            source_hash,
-            first_operation_number + index,
-        )
-        if resources_path.exists():
-            raise FileExistsError(f"本次导入资源清单已存在，拒绝覆盖：{resources_path}")
         run_code_image(
             image_path,
             compose_path,

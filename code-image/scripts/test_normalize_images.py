@@ -72,7 +72,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertFalse((self.project / ".code-image/resources.json").exists())
         source_hash = hashlib.sha256(image.read_bytes()).hexdigest()
         self.assertTrue(
-            (self.project / ".code-image" / f"Group_62-{source_hash[:6]}-1.resources.json").is_file()
+            (self.project / ".code-image" / f"Group_62-{source_hash[:6]}.resources.json").is_file()
         )
 
     def test_optional_compose_adds_page_namespace_for_single_image(self):
@@ -106,7 +106,7 @@ class NormalizeImagesTest(unittest.TestCase):
         )
         self.assertEqual(self.resources()[0]["outputName"], "icon_report_home_back_button.png")
 
-    def test_new_operation_preserves_existing_resource_instead_of_migrating_it(self):
+    def test_reimport_reuses_existing_resource_mapping(self):
         image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
         image.write_bytes(b"new")
 
@@ -125,13 +125,10 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(first.returncode, 0, first.stderr)
         self.assertEqual(migrated.returncode, 0, migrated.stderr)
         self.assertTrue(old_output.is_file())
-        self.assertTrue(new_output.is_file())
+        self.assertFalse(new_output.exists())
         manifests = sorted((self.project / ".code-image").glob("*.resources.json"))
-        self.assertEqual(len(manifests), 2)
-        self.assertEqual(
-            {json.loads(path.read_text(encoding="utf-8"))["resources"][0]["outputName"] for path in manifests},
-            {old_output.name, new_output.name},
-        )
+        self.assertEqual(len(manifests), 1)
+        self.assertEqual(json.loads(manifests[0].read_text(encoding="utf-8"))["resources"][0]["outputName"], old_output.name)
 
         repeated = self.run_skill(
             "--image",
@@ -142,8 +139,8 @@ class NormalizeImagesTest(unittest.TestCase):
             "back_button",
         )
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
-        self.assertTrue(new_output.is_file())
-        self.assertTrue(new_output.with_stem(f"{new_output.stem}_1").is_file())
+        self.assertTrue(old_output.is_file())
+        self.assertFalse(new_output.exists())
 
     def test_explicit_asset_name_preserves_semantic_trailing_number(self):
         image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
@@ -198,7 +195,14 @@ class NormalizeImagesTest(unittest.TestCase):
         )
         self.assertEqual(len(self.resources()), 2)
         self.assertTrue(
-            (self.project / ".code-image" / f"design-{source_hash[:6]}-1.resources.json").is_file()
+            (self.project / ".code-image" / f"design-{source_hash[:6]}.resources.json").is_file()
+        )
+
+        repeated = self.run_skill("--zip", archive)
+        self.assertEqual(repeated.returncode, 0, repeated.stderr)
+        self.assertEqual(len(self.resources()), 2)
+        self.assertFalse(
+            (self.project / "app/src/main/res/mipmap-xhdpi/icon_group_62_1.png").exists()
         )
 
     def test_zip_without_mipmap_images_is_rejected_before_extraction(self):

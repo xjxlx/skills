@@ -62,7 +62,7 @@ class ImportZipImagesTest(unittest.TestCase):
             data = json.loads(manifest.read_text(encoding="utf-8"))
             self.assertEqual(data["sourceSha256"], source_hash)
             self.assertEqual(data["images"][0]["outputPath"], str(output.relative_to(root)))
-            resources_path = root / ".code-image" / f"design-{source_hash[:6]}-1.resources.json"
+            resources_path = root / ".code-image" / f"design-{source_hash[:6]}.resources.json"
             resources = json.loads(resources_path.read_text(encoding="utf-8"))
             self.assertEqual(len(resources["resources"]), 1)
             self.assertEqual(resources["resources"][0]["outputName"], output.name)
@@ -101,8 +101,37 @@ class ImportZipImagesTest(unittest.TestCase):
             for archive in (first_archive, second_archive):
                 archive_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
                 self.assertTrue(
-                    (root / ".code-image" / f"{archive.stem}-{archive_hash[:6]}-1.resources.json").is_file()
+                    (root / ".code-image" / f"{archive.stem}-{archive_hash[:6]}.resources.json").is_file()
                 )
+
+    def test_same_zip_reuses_its_images_and_resource_manifest(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "1600.zip"
+            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
+            compose.parent.mkdir(parents=True)
+            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
+            with zipfile.ZipFile(archive, "w") as zip_file:
+                zip_file.writestr("design/img/Group 62.png", b"shared")
+
+            environment = dict(os.environ)
+            environment["HOME"] = str(root / "home")
+            command = [
+                "python3", str(SCRIPT), "--zip", str(archive), "--compose", str(compose),
+                "--project-root", str(root), "--apply",
+            ]
+            for _ in range(2):
+                result = subprocess.run(command, capture_output=True, text=True, env=environment)
+                self.assertEqual(result.returncode, 0, result.stderr)
+
+            source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+            target = root / "app/src/main/res/mipmap-xxhdpi"
+            self.assertEqual((target / "icon_test_group_62.png").read_bytes(), b"shared")
+            self.assertFalse((target / "icon_test_group_62_1.png").exists())
+            manifests = list((root / ".code-image").glob("*.resources.json"))
+            self.assertEqual(manifests, [root / ".code-image" / f"1600-{source_hash[:6]}.resources.json"])
+            resources = json.loads(manifests[0].read_text(encoding="utf-8"))
+            self.assertEqual(len(resources["resources"]), 1)
 
     def test_zip_without_images_stops_without_writing_an_image_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:

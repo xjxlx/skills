@@ -101,32 +101,23 @@ def load_resources(path: Path) -> dict:
     return data
 
 
-def new_resources_path(project_root: Path, source_path: Path) -> Path:
-    """为本次导入分配独立的资源清单，不与历史页面共用。"""
+def resources_path_for_source(project_root: Path, source_path: Path) -> Path:
+    """以稳定来源身份定位可复用的资源清单。"""
     source_hash = sha256_file(source_path)
     prefix = f"{safe_token(source_path.stem)}-{source_hash[:6]}"
-    records_directory = project_root / ".code-image"
-    pattern = re.compile(rf"^{re.escape(prefix)}-(\d+)\.resources\.json$")
-    operation_numbers = [
-        int(match.group(1))
-        for path in records_directory.glob(f"{prefix}-*.resources.json")
-        if (match := pattern.match(path.name))
-    ]
-    return records_directory / f"{prefix}-{max(operation_numbers, default=0) + 1}.resources.json"
+    return project_root / ".code-image" / f"{prefix}.resources.json"
 
 
 def requested_resources_path(value: str, project_root: Path) -> Path:
     path = Path(value).expanduser().resolve()
     records_directory = (project_root / ".code-image").resolve()
     if path.parent != records_directory or not re.fullmatch(
-        r".+-[0-9a-f]{6}-[1-9][0-9]*\.resources\.json", path.name
+        r".+-[0-9a-f]{6}\.resources\.json", path.name
     ):
         raise ValueError(
             "--resources-file 必须是项目 .code-image/ 下 "
-            "<来源名>-<hash前6位>-<操作编号>.resources.json 格式的新文件"
+            "<来源名>-<hash前6位>.resources.json 格式的来源清单"
         )
-    if path.exists():
-        raise FileExistsError(f"资源清单已存在，拒绝覆盖历史导入：{path}")
     return path
 
 
@@ -197,7 +188,7 @@ def build_plan(
         if record
         else None
     )
-    if record and compose_path is None and asset_name is None:
+    if record:
         output_name = record["outputName"]
     elif _is_normalized(source.name):
         output_name = source.name
@@ -362,7 +353,7 @@ def main() -> int:
     resources_path = (
         requested_resources_path(args.resources_file, project_root)
         if args.resources_file
-        else new_resources_path(project_root, source_path)
+        else resources_path_for_source(project_root, source_path)
     )
     res_root = project_root / "app/src/main/res"
 
