@@ -22,7 +22,7 @@ python3 scripts/lanhu_pipeline.py assets --zip <zip> --project-root <project> --
 python3 scripts/lanhu_pipeline.py mark-generated --zip <zip> --project-root <project> --compose <Compose.kt>
 python3 scripts/lanhu_pipeline.py compile --zip <zip> --project-root <project> --task :app:compileDebugKotlin
 python3 scripts/lanhu_pipeline.py install-k80 --zip <zip> --project-root <project> --serial emulator-5554 --expected-avd K80 --apk <apk>
-python3 scripts/lanhu_pipeline.py screenshot-k80 --zip <zip> --project-root <project> --serial emulator-5554
+python3 scripts/lanhu_pipeline.py screenshot-k80 --zip <zip> --project-root <project> --serial emulator-5554 --expected-avd K80
 python3 scripts/lanhu_pipeline.py mark-diff --zip <zip> --project-root <project> --report <diff.json> --outcome pass
 python3 scripts/lanhu_pipeline.py complete --zip <zip> --project-root <project>
 ```

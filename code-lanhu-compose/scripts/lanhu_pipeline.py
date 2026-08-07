@@ -10,6 +10,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import posixpath
 import re
 import shutil
 import subprocess
@@ -86,19 +87,21 @@ def _entry_path(name: str) -> str:
     return safe_zip_name(name).lower()
 
 
-def _referenced_css(html: str, names: Iterable[str]) -> list[str]:
+def _referenced_css(html: str, names: Iterable[str], html_name: str) -> list[str]:
     available = {safe_zip_name(name): safe_zip_name(name) for name in names}
     links = re.findall(r"(?:href|src)=[\"']([^\"']+\.css(?:\?[^\"']*)?)[\"']", html, re.I)
     selected: list[str] = []
     for link in links:
-        clean = link.split("?", 1)[0].lstrip("./")
-        for candidate in available:
-            if candidate.endswith(clean) or candidate.lower().endswith(clean.lower()):
-                if candidate not in selected:
-                    selected.append(candidate)
-    if selected:
-        return selected
-    return [name for name in available if name.lower().endswith(".css")]
+        clean = link.split("?", 1)[0]
+        resolved = posixpath.normpath(posixpath.join(posixpath.dirname(html_name), clean))
+        candidates = [candidate for candidate in available if candidate == resolved]
+        if len(candidates) != 1:
+            raise PipelineError(f"HTML 引用的 CSS 无法唯一解析：{link} -> {resolved}")
+        if candidates[0] not in selected:
+            selected.append(candidates[0])
+    if not selected:
+        raise UserInputRequired("HTML 未声明 CSS 引用，请确认要采用哪个 CSS 文件")
+    return selected
 
 
 def artifact_dir(archive: Path, project_root: Path, source_sha: str) -> Path:
@@ -154,9 +157,7 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
     with zipfile.ZipFile(archive) as zipped:
         html_text = zipped.read(html_info).decode("utf-8", errors="replace")
     names = [safe_zip_name(info.filename) for info in entries]
-    css_files = _referenced_css(html_text, names)
-    if not css_files:
-        raise PipelineError("ZIP 未找到 CSS，无法建立可重放的设计输入")
+    css_files = _referenced_css(html_text, names, safe_zip_name(html_info.filename))
     source_manifest = {
         "version": 1,
         "sourceName": archive.name,
@@ -194,6 +195,8 @@ def validate_project(archive: Path, project_root: Path, compose_file: Path | Non
     if state["phase"] not in {"inspected", "validated"}:
         raise PipelineError(f"当前阶段不能 validate：{state['phase']}")
     target = compose_file or (Path(state["composeFile"]) if state.get("composeFile") else None)
+    if target is None:
+        raise PipelineError("validate 必须提供目标 Compose 文件")
     if target is not None:
         target = target.expanduser().resolve()
         root = project_root.expanduser().resolve()
@@ -239,8 +242,13 @@ def _run_fixed(command: list[str], cwd: Path, log_path: Path) -> subprocess.Comp
 
 
 def record_decision(archive: Path, project_root: Path, decision_path: Path) -> dict[str, Any]:
-    artifact, _, state = load_source(archive, project_root)
+    artifact, source, state = load_source(archive, project_root)
     decision = validate_decision(json.loads(decision_path.read_text(encoding="utf-8")))
+    if decision["action"] == "apply_patch":
+        root = project_root.expanduser().resolve()
+        target = (root / decision["target"]).resolve()
+        if root not in target.parents:
+            raise PipelineError("apply_patch target 必须解析到项目根目录内")
     index = len(list(artifact.glob("decision-*.json"))) + 1
     atomic_json(artifact / f"decision-{index:02d}.json", {**decision, "recordedAt": utc_now(), "phase": state["phase"]})
     if decision["action"] == "ask_user":
@@ -252,13 +260,15 @@ def record_decision(archive: Path, project_root: Path, decision_path: Path) -> d
 def compile_project(archive: Path, project_root: Path, task: str) -> dict[str, Any]:
     if not SAFE_TASK.fullmatch(task):
         raise PipelineError(f"Gradle task 不在白名单中：{task}")
-    artifact, _, state = load_source(archive, project_root)
+    artifact, source, state = load_source(archive, project_root)
     if state["phase"] not in {"generated", "compiled"}:
         raise PipelineError(f"当前阶段不能 compile：{state['phase']}")
     gradlew = project_root / "gradlew"
     if not gradlew.is_file():
         raise PipelineError(f"项目缺少 gradlew：{gradlew}")
     state["attempts"]["compile"] = state["attempts"].get("compile", 0) + 1
+    if state.get("preflightTask") != task:
+        raise PipelineError(f"compile 必须复用 preflight 任务：{state.get('preflightTask')!r} != {task!r}")
     log = artifact / "logs" / f"compile-{state['attempts']['compile']:02d}.log"
     result = _run_fixed([str(gradlew), task, "--console=plain"], project_root, log)
     if result.returncode != 0:
@@ -284,11 +294,14 @@ def preflight_project(archive: Path, project_root: Path, task: str) -> dict[str,
         raise PipelineError(f"预检编译失败，日志已写入：{log}")
     if state["phase"] != "preflight":
         transition(state, "preflight", {"task": task, "log": str(log)})
+    state["preflightTask"] = task
     _write_state(artifact, state)
     return {"artifactPath": str(artifact), "phase": state["phase"], "log": str(log)}
 
 
 def install_k80(archive: Path, project_root: Path, serial: str, expected_avd: str, apk: Path) -> dict[str, Any]:
+    if expected_avd != "K80":
+        raise PipelineError("install-k80 固定要求项目约束中的 K80 模拟器")
     if not SAFE_SERIAL.fullmatch(serial):
         raise PipelineError(f"ADB serial 不安全：{serial}")
     artifact, _, state = load_source(archive, project_root)
@@ -309,13 +322,22 @@ def install_k80(archive: Path, project_root: Path, serial: str, expected_avd: st
     return {"artifactPath": str(artifact), "phase": state["phase"], "serial": serial, "avd": expected_avd}
 
 
-def screenshot_k80(archive: Path, project_root: Path, serial: str, run_dir: Path | None = None) -> dict[str, Any]:
+def screenshot_k80(archive: Path, project_root: Path, serial: str, expected_avd: str = "K80", run_dir: Path | None = None) -> dict[str, Any]:
     if not SAFE_SERIAL.fullmatch(serial):
         raise PipelineError(f"ADB serial 不安全：{serial}")
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] not in {"installed", "screenshot"}:
         raise PipelineError(f"当前阶段不能 screenshot：{state['phase']}")
+    if expected_avd != "K80":
+        raise PipelineError("screenshot-k80 固定要求项目约束中的 K80 模拟器")
+    probe = subprocess.run(["adb", "-s", serial, "shell", "getprop", "ro.boot.qemu.avd_name"], text=True, capture_output=True, check=False)
+    if probe.returncode != 0:
+        raise PipelineError(f"无法读取模拟器名称：{probe.stderr.strip()}")
+    validate_device_name(probe.stdout.strip(), expected_avd)
     destination = run_dir or artifact / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    destination = destination.expanduser().resolve()
+    if artifact not in destination.parents:
+        raise PipelineError("截图目录必须位于本次 artifact 目录内")
     destination.mkdir(parents=True, exist_ok=True)
     image = destination / "app-screenshot.png"
     with image.open("wb") as output:
@@ -331,11 +353,20 @@ def screenshot_k80(archive: Path, project_root: Path, serial: str, run_dir: Path
 def mark_diff(archive: Path, project_root: Path, report: Path, outcome: str) -> dict[str, Any]:
     if outcome not in {"pass", "repair", "stop"}:
         raise PipelineError("diff outcome 必须是 pass、repair 或 stop")
-    artifact, _, state = load_source(archive, project_root)
+    artifact, source, state = load_source(archive, project_root)
     if state["phase"] != "screenshot":
         raise PipelineError(f"当前阶段不能 mark-diff：{state['phase']}")
-    if not report.is_file():
+    report = report.expanduser().resolve()
+    if artifact not in report.parents or not report.is_file():
         raise PipelineError(f"差异报告不存在：{report}")
+    try:
+        report_data = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise PipelineError(f"差异报告不是有效 JSON：{report}") from error
+    if not isinstance(report_data, dict):
+        raise PipelineError(f"差异报告必须是 JSON 对象：{report}")
+    if report_data.get("sourceSha256") not in (None, source["sourceSha256"]):
+        raise PipelineError("差异报告 sourceSha256 与当前 ZIP 不一致")
     state["lastDiffOutcome"] = outcome
     if outcome == "repair":
         state["attempts"]["repair"] = state["attempts"].get("repair", 0) + 1
@@ -368,7 +399,7 @@ def build_parser() -> argparse.ArgumentParser:
     validate = subparsers.add_parser("validate")
     validate.add_argument("--zip", required=True, type=Path)
     validate.add_argument("--project-root", required=True, type=Path)
-    validate.add_argument("--compose", type=Path)
+    validate.add_argument("--compose", required=True, type=Path)
     assets = subparsers.add_parser("assets")
     assets.add_argument("--zip", required=True, type=Path)
     assets.add_argument("--project-root", required=True, type=Path)
@@ -396,6 +427,7 @@ def build_parser() -> argparse.ArgumentParser:
     screenshot.add_argument("--zip", required=True, type=Path)
     screenshot.add_argument("--project-root", required=True, type=Path)
     screenshot.add_argument("--serial", required=True)
+    screenshot.add_argument("--expected-avd", default="K80")
     screenshot.add_argument("--run-dir", type=Path)
     diff = subparsers.add_parser("mark-diff")
     diff.add_argument("--zip", required=True, type=Path)
@@ -434,10 +466,12 @@ def main(argv: list[str] | None = None) -> int:
             (artifact / "logs" / "assets.log").write_text(completed.stdout + "\n" + completed.stderr, encoding="utf-8")
             if completed.returncode != 0:
                 raise PipelineError(f"资源导入失败，日志已写入：{artifact / 'logs' / 'assets.log'}")
-            if state["phase"] != "assets_imported":
+            if not args.apply:
+                result = {"artifactPath": str(artifact), "phase": state["phase"], "preview": True}
+            elif state["phase"] != "assets_imported":
                 transition(state, "assets_imported", {"composeFile": str(args.compose.resolve()), "apply": args.apply})
-            _write_state(artifact, state)
-            result = {"artifactPath": str(artifact), "phase": state["phase"]}
+                _write_state(artifact, state)
+                result = {"artifactPath": str(artifact), "phase": state["phase"]}
         elif args.command == "mark-generated":
             artifact, _, state = load_source(args.zip, args.project_root)
             if state["phase"] not in {"assets_imported", "generated"}:
@@ -457,7 +491,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "install-k80":
             result = install_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.apk)
         elif args.command == "screenshot-k80":
-            result = screenshot_k80(args.zip, args.project_root, args.serial, args.run_dir)
+            result = screenshot_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.run_dir)
         elif args.command == "mark-diff":
             result = mark_diff(args.zip, args.project_root, args.report, args.outcome)
         elif args.command == "complete":
@@ -476,6 +510,9 @@ def main(argv: list[str] | None = None) -> int:
         return 2
     except PipelineError as error:
         print(json.dumps({"status": "blocked", "error": str(error)}, ensure_ascii=False), file=sys.stderr)
+        return 1
+    except (OSError, ValueError, zipfile.BadZipFile) as error:
+        print(json.dumps({"status": "blocked", "error": f"输入或状态文件无法处理：{error}"}, ensure_ascii=False), file=sys.stderr)
         return 1
 
 
