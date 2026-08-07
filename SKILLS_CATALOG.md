@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-07 10:57:14，由 github-manager 维护
+> 自动生成于 2026-08-07 13:03:57，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -73,7 +73,7 @@ graph LR
 - **目录名**：`code-lanhu-compose`
 - **用途**：Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，需要在 Android 项目中生成或还原 Jetpack Compose 页面，...
 - **依赖**：code-image
-- **文件数**：9
+- **文件数**：14
 - **UI 元数据**：有 agents/openai.yaml
 - **路径**：`~/.codex/skills/code-lanhu-compose/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-lanhu-compose

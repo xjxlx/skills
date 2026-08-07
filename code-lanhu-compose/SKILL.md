@@ -14,6 +14,8 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 不调用、不继承旧 `$code-compose`，也不读取它的规则或缓存。
 - 图片接入时调用 `$code-image`；对蓝湖 ZIP 解压出的每张图片分别传递一次 `--image`、目标 Compose 文件和项目根目录，不调用其 ZIP 批量入口，也不复制其内部规则。
 - 模拟器验证能力可用时调用 `test-android-apps:android-emulator-qa`；不可用时才执行本 Skill 规定的显式 ADB 流程。
+- 以 `scripts/lanhu_pipeline.py` 作为固定编排入口；大模型只选择脚本子命令或提交契约化 JSON 决策，不得临时生成同职责脚本或绕过状态机。
+- 无法从设计、编译或截图证据确定语义时，写入 `needs-user-input.json` 并暂停，交由用户确认，不用猜测推进。
 
 ## 必需输入
 
@@ -30,6 +32,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 ### 1. 预检项目和设计包
 
+- 首次处理 ZIP 先执行 `python3 scripts/lanhu_pipeline.py inspect ...`，复用 `pipeline.json` 与完整 `sourceSha256`；inspect 未通过时不进入后续阶段。固定阶段和参数见 [固定编排链路契约](references/pipeline-contract.md)。
 - 确认 ZIP、当前工作目录中的 Android 项目、目标模块和 Gradle Wrapper 可访问。
 - 在解析 ZIP、导入图片或生成 Compose 前，从项目任务列表确定唯一最小相关编译任务并执行一次 Gradle 编译。编译失败时立即停止本次 Skill：只报告该次命令和首个可行动的失败原因，不再运行其他 Gradle 任务，也不继续检查、解析或修改任何设计与资源文件。
 - 计算 ZIP 完整 SHA-256；禁止根据文件名判断是否为同一设计。
@@ -73,7 +76,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 ### 4. 接入图片资源
 
 - 从解析结果取得图片的真实相对路径和内容 Hash，禁止使用模糊文件名猜测资源。
-- 运行 `scripts/import_zip_images.py --zip <zip> --compose <target-compose> --project-root <project> --apply`。它安全解压 ZIP 后，从 HTML/CSS 中解析图片对应的节点类名或 ID，并对每张图片调用 `$code-image --image --asset-name <节点名>`；同一 ZIP 的全部图片复用以 ZIP 名和 ZIP Hash 前六位命名的清单及已导入资源。
+- 运行 `python3 scripts/lanhu_pipeline.py assets --zip <zip> --compose <target-compose> --project-root <project> --apply`。编排器再调用图片导入脚本；它安全解压 ZIP 后，从 HTML/CSS 中解析图片对应的节点类名或 ID，并对每张图片调用 `$code-image --image --asset-name <节点名>`；同一 ZIP 的全部图片复用以 ZIP 名和 ZIP Hash 前六位命名的清单及已导入资源。
 - 将每张实际导入结果（ZIP 内源路径、Hash、真实 `outputPath`、`outputName`）原子写入 `.code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json`。Compose 只能引用其中真实存在的 `outputName`；禁止根据 ZIP 文件名或旧 staging 文件猜测资源名。
 - 蓝湖 HTML/CSS ZIP 通常不是 `mipmap*` 资源包，禁止把整个 ZIP 传给 `$code-image --zip`；必须先解压并逐图调用 `$code-image --image`。
 - 只使用实际存在且映射成功的资源；禁止用文字、猜测圆角或临时 `Canvas` 替代已有设计切图。
@@ -81,6 +84,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 ### 5. 编译、安装并打开目标页面
 
+- 预检、资源导入、生成检查、编译、K80 安装和截图必须通过 `scripts/lanhu_pipeline.py` 的固定子命令执行；模型决策只能通过契约化 JSON 记录。
 - 复用预检阶段已确定的真实模块和 variant；每轮修正只重新运行同一个最小相关编译任务，禁止把模糊的 `compileDebugKotlin` 当成所有项目的固定命令。
 - 生成后的编译失败先定位首个可行动原因：若错误只涉及本次修改的 Compose 文件或新导入资源，且可由诊断直接确定最小修复（如作用域接收者、导入、类型、资源 ID），自动修复并重跑同一编译任务，最多三轮。预检失败、用户既有文件错误、ZIP/资源映射错误、构建环境错误或需业务决策的错误仍须立即停止并报告。
 - 编译成功后安装到明确的模拟器或设备，固定分辨率、density、字体缩放、语言、主题和测试数据。
