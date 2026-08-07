@@ -68,7 +68,8 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 实现细节约束：
 
-- 根层级背景图片必须直接使用项目的 `ImageItem`，`modifier = Modifier.fillMaxSize()`，并显式设置 `contentScale = ContentScale.FillBounds`；不得把根背景放进固定设计尺寸容器后再用局部缩放代替屏幕适配。
+- 最底层存在背景图片时，必须直接使用 `ImageItem(parameter = ImageParameter(data = resId, modifier = modifier, contentScale = ContentScale.FillBounds))` 并让 `modifier` 为全屏布局；不得把根背景放进固定设计尺寸容器后再用局部缩放代替屏幕适配。
+- 禁止定义或调用 `Modifier.offsetPx`、`Modifier.sizePx` 等自定义像素换算 Modifier；间距和定位使用布局层级、`padding`/`Arrangement`，尺寸使用 `width`、`height`、`size` 或 `fillMax*` 表达。
 - 标题、标签、数值、单位和右侧图标组成的复合内容必须使用 `Row`/`Column` 的对齐关系或项目已有标签组件表达；禁止用互不关联的固定 `offset` 拼接，完成后检查文字是否裁剪、标签文字是否真实存在、数值和单位是否同一基线。
 - 重复视觉单元必须先建数据列表；只要 item 数量超过可视范围、页面本身支持滑动或用户要求查看滑动效果，就必须使用 `LazyColumn`、`LazyRow` 或 `LazyVerticalGrid` 等滑动组件，禁止逐个硬编码同类 Composable 或用固定 `Row`/`Column` 堆叠可能超出视口的 item。复合卡片必须逐项保留设计中可见的图片、左右装饰、标签和操作入口，不得只保留中心文字或主数值。
 布局映射和间距归属必须遵循 [Compose 映射规则](references/compose-mapping.md)。

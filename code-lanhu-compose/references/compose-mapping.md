@@ -67,6 +67,8 @@ Column(
 ## 尺寸和代码结构
 
 - 用设计画布宽度、目标设备宽度和 density 建立换算基准；线宽、字体和图片像素可单独校准。
+- 最底层背景图统一使用 `ImageItem(parameter = ImageParameter(data = resId, modifier = modifier, contentScale = ContentScale.FillBounds))`，并由全屏 `modifier` 承载。
+- 不创建 `offsetPx`、`sizePx` 等自定义像素 Modifier；位置用父子布局和 `padding`，尺寸用 `width`、`height`、`size` 或 `fillMax*`。
 - 内容可伸缩时优先使用 `fillMaxWidth`、`weight`、`aspectRatio` 和项目已有适配方案，不把所有最终边界固化为尺寸常量。
 - 颜色和间距只有重复使用或具有语义时才提取常量，避免为每个单次值制造 Token。
 - 每个私有 Composable 对应清晰的视觉或语义分组，不按每个 HTML 标签机械拆函数。
