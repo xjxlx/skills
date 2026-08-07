@@ -33,7 +33,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 ### 1. 预检项目和设计包
 
 - 首次处理 ZIP 先执行 `python3 scripts/lanhu_pipeline.py inspect ...`，复用 `pipeline.json` 与完整 `sourceSha256`；inspect 未通过时不进入后续阶段。固定阶段和参数见 [固定编排链路契约](references/pipeline-contract.md)。
-- 确认 ZIP、当前工作目录中的 Android 项目、目标模块和 Gradle Wrapper 可访问。
+- 确认 ZIP、当前工作目录中的 Android 项目、目标模块和构建入口可访问；在项目根目录优先执行 `./gradlew`，仅当 Wrapper 缺失且系统存在 `gradle` 时才回退到 `gradle`。
 - 在解析 ZIP、导入图片或生成 Compose 前，从项目任务列表确定唯一最小相关编译任务并执行一次 Gradle 编译。编译失败时立即停止本次 Skill：只报告该次命令和首个可行动的失败原因，不再运行其他 Gradle 任务，也不继续检查、解析或修改任何设计与资源文件。
 - 计算 ZIP 完整 SHA-256；禁止根据文件名判断是否为同一设计。
 - 以规范化的 ZIP 文件名和完整 SHA-256 前六位确定本次专属工作目录：`.code-lanhu-compose/<zip-stem>-<sha256前6位>/`。目录内保存 `design.json`、`images.json` 与 `runs/`；完整 SHA-256 必须写入 JSON 供身份校验。

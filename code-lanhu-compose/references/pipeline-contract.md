@@ -10,7 +10,7 @@ inspect -> validate -> preflight -> assets -> mark-generated -> compile
                                       \-> repair（最多三轮后回到 compile）
 ```
 
-每个阶段都必须使用脚本子命令，阶段不能跳过。`assets` 只调用现有的 `import_zip_images.py`；Gradle 只接受明确的 `:module:task`；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。
+每个阶段都必须使用脚本子命令，阶段不能跳过。`assets` 只调用现有的 `import_zip_images.py`；Gradle 只接受明确的 `:module:task`，并在项目根目录优先运行 `./gradlew`（仅 Wrapper 缺失且系统存在 `gradle` 时回退）；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。
 
 常用入口：
 

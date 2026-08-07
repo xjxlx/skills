@@ -241,6 +241,16 @@ def _run_fixed(command: list[str], cwd: Path, log_path: Path) -> subprocess.Comp
     return completed
 
 
+def gradle_command(project_root: Path) -> list[str]:
+    """在项目根目录优先执行 Gradle Wrapper，缺失时回退系统 Gradle。"""
+    root = project_root.expanduser().resolve()
+    if (root / "gradlew").is_file():
+        return ["./gradlew"]
+    if shutil.which("gradle"):
+        return ["gradle"]
+    raise PipelineError(f"项目根目录缺少 ./gradlew，且系统未安装 gradle：{root}")
+
+
 def record_decision(archive: Path, project_root: Path, decision_path: Path) -> dict[str, Any]:
     artifact, source, state = load_source(archive, project_root)
     decision = validate_decision(json.loads(decision_path.read_text(encoding="utf-8")))
@@ -263,14 +273,12 @@ def compile_project(archive: Path, project_root: Path, task: str) -> dict[str, A
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] not in {"generated", "compiled"}:
         raise PipelineError(f"当前阶段不能 compile：{state['phase']}")
-    gradlew = project_root / "gradlew"
-    if not gradlew.is_file():
-        raise PipelineError(f"项目缺少 gradlew：{gradlew}")
+    gradle = gradle_command(project_root)
     state["attempts"]["compile"] = state["attempts"].get("compile", 0) + 1
     if state.get("preflightTask") != task:
         raise PipelineError(f"compile 必须复用 preflight 任务：{state.get('preflightTask')!r} != {task!r}")
     log = artifact / "logs" / f"compile-{state['attempts']['compile']:02d}.log"
-    result = _run_fixed([str(gradlew), task, "--console=plain"], project_root, log)
+    result = _run_fixed([*gradle, task, "--console=plain"], project_root, log)
     if result.returncode != 0:
         raise PipelineError(f"编译失败，日志已写入：{log}")
     if state["phase"] != "compiled":
@@ -285,11 +293,9 @@ def preflight_project(archive: Path, project_root: Path, task: str) -> dict[str,
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] not in {"validated", "preflight"}:
         raise PipelineError(f"当前阶段不能 preflight：{state['phase']}")
-    gradlew = project_root / "gradlew"
-    if not gradlew.is_file():
-        raise PipelineError(f"项目缺少 gradlew：{gradlew}")
+    gradle = gradle_command(project_root)
     log = artifact / "logs" / "preflight.log"
-    result = _run_fixed([str(gradlew), task, "--console=plain"], project_root, log)
+    result = _run_fixed([*gradle, task, "--console=plain"], project_root, log)
     if result.returncode != 0:
         raise PipelineError(f"预检编译失败，日志已写入：{log}")
     if state["phase"] != "preflight":
