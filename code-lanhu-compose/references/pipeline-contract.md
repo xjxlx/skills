@@ -13,7 +13,7 @@ inspect -> validate -> preflight -> assets -> mark-generated -> compile
 设计稿浏览器采集与截图是 `inspect` 后可执行的独立证据生命周期，不改变 Android 编译阶段：
 
 ```text
-start-design-server -> 采集设计（写入设计解析.json 与 设计截图.png）
+start-design-server -> 采集设计（写入设计解析.json，并首次保存 runs/设计截图.png）
                     -> screenshot-design（登记并停止服务）
                     \-> stop-design-server（采集失败时清理）
 ```
@@ -27,8 +27,8 @@ python3 scripts/lanhu_pipeline.py inspect --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py start-design-server --zip <zip> --project-root <project>
 # 采集浏览器最终布局，并写入本次 ZIP 的 设计解析.json：
 python3 scripts/lanhu_pipeline.py 采集设计 --zip <zip> --project-root <project>
-# 从采集结果的 screenshotPath 取得 <运行目录>/设计截图.png 后：
-python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <project> --image <运行目录>/设计截图.png
+# 从采集结果的 screenshotPath 取得 runs/设计截图.png 后：
+python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <project> --image <artifact>/runs/设计截图.png
 # 若浏览器操作失败，仍必须执行：
 python3 scripts/lanhu_pipeline.py stop-design-server --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py validate --zip <zip> --project-root <project> --compose <Compose.kt>

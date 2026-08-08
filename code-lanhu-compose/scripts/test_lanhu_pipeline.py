@@ -9,6 +9,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.request import urlopen
 
@@ -137,6 +138,7 @@ class LanhuPipelineContractTest(unittest.TestCase):
             inspected = PIPELINE.inspect_archive(archive, project_root)
             PIPELINE.start_design_server(archive, project_root)
             try:
+                first_result = PIPELINE.capture_rendered_design(archive, project_root)
                 result = PIPELINE.capture_rendered_design(archive, project_root)
             finally:
                 PIPELINE.stop_design_server(archive, project_root)
@@ -144,8 +146,10 @@ class LanhuPipelineContractTest(unittest.TestCase):
             design_path = Path(result["designPath"])
             design = json.loads(design_path.read_text(encoding="utf-8"))
             self.assertEqual(design_path.name, "设计解析.json")
-            self.assertEqual(Path(result["screenshotPath"]).name, "设计截图.png")
-            self.assertTrue(Path(result["screenshotPath"]).is_file())
+            screenshot_path = Path(result["screenshotPath"])
+            self.assertEqual(screenshot_path, Path(inspected["artifactPath"]) / "runs" / "设计截图.png")
+            self.assertEqual(screenshot_path, Path(first_result["screenshotPath"]))
+            self.assertTrue(screenshot_path.is_file())
             self.assertEqual(design["sourceSha256"], inspected["sourceSha256"])
             self.assertEqual(design["设计根节点"]["选择器"], ".page")
             self.assertEqual(design["设计画布"]["宽度像素"], 344)
@@ -169,7 +173,7 @@ class LanhuPipelineContractTest(unittest.TestCase):
                 Path(inspected["artifactPath"]) / "设计解析.json",
                 {"sourceSha256": inspected["sourceSha256"]},
             )
-            image = Path(inspected["artifactPath"]) / "runs" / "test-run" / "设计截图.png"
+            image = Path(inspected["artifactPath"]) / "runs" / "设计截图.png"
             image.parent.mkdir(parents=True)
             image.write_bytes(b"png")
 
@@ -178,6 +182,33 @@ class LanhuPipelineContractTest(unittest.TestCase):
             self.assertEqual(result["status"], "recorded")
             self.assertFalse(Path(started["statePath"]).exists())
             self.assertFalse(PIPELINE.is_pid_alive(started["pid"]))
+
+    def test_k80_screenshots_share_runs_directory_and_increment_suffix(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("index.html", '<link href="style.css" rel="stylesheet">')
+                zipped.writestr("style.css", ".box { width: 10px; }")
+
+            inspected = PIPELINE.inspect_archive(archive, project_root)
+            artifact, _, state = PIPELINE.load_source(archive, project_root)
+            for phase in ("validated", "preflight", "assets_imported", "generated", "compiled", "installed"):
+                PIPELINE.transition(state, phase)
+            PIPELINE._write_state(artifact, state)
+            adb_result = SimpleNamespace(returncode=0, stdout="K80\n", stderr=b"")
+            with patch.object(PIPELINE.subprocess, "run", return_value=adb_result):
+                first = PIPELINE.screenshot_k80(archive, project_root, "emulator-5554")
+                second = PIPELINE.screenshot_k80(archive, project_root, "emulator-5554")
+
+            runs_root = Path(inspected["artifactPath"]) / "runs"
+            self.assertEqual(Path(first["image"]), runs_root / "应用截图.png")
+            self.assertEqual(Path(second["image"]), runs_root / "应用截图_1.png")
+            self.assertEqual(
+                sorted(path.name for path in runs_root.iterdir()),
+                ["应用截图.png", "应用截图_1.png"],
+            )
 
     def test_transition_requires_previous_phase(self) -> None:
         state = PIPELINE.new_state("abc", "Page.kt")

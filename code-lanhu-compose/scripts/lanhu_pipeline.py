@@ -463,22 +463,21 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
     }
     design_path = artifact / DESIGN_DOCUMENT_NAME
     atomic_json(design_path, design)
-    run_dir = artifact / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
-    if run_dir.exists():
-        raise PipelineError(f"本秒已有设计截图运行目录，请稍后重试：{run_dir}")
-    run_dir.mkdir(parents=True)
-    screenshot_path = run_dir / "设计截图.png"
-    try:
-        with sync_playwright() as runtime:
-            browser = runtime.chromium.launch(headless=True, executable_path=str(CHROME_EXECUTABLE))
-            try:
-                page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1)
-                page.goto(url, wait_until="networkidle")
-                page.locator(design["设计根节点"]["选择器"]).screenshot(path=str(screenshot_path))
-            finally:
-                browser.close()
-    except PlaywrightError as error:
-        raise PipelineError(f"浏览器截取设计图失败：{error}") from error
+    runs_root = artifact / "runs"
+    screenshot_path = runs_root / "设计截图.png"
+    if not screenshot_path.is_file():
+        runs_root.mkdir(parents=True, exist_ok=True)
+        try:
+            with sync_playwright() as runtime:
+                browser = runtime.chromium.launch(headless=True, executable_path=str(CHROME_EXECUTABLE))
+                try:
+                    page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1)
+                    page.goto(url, wait_until="networkidle")
+                    page.locator(design["设计根节点"]["选择器"]).screenshot(path=str(screenshot_path))
+                finally:
+                    browser.close()
+        except PlaywrightError as error:
+            raise PipelineError(f"浏览器截取设计图失败：{error}") from error
     return {
         "artifactPath": str(artifact),
         "designPath": str(design_path),
@@ -498,9 +497,9 @@ def complete_design_screenshot(archive: Path, project_root: Path, image: Path) -
         if design.get("sourceSha256") != source["sourceSha256"]:
             raise PipelineError(f"设计解析结果与当前 ZIP 不匹配：{design_path}")
         image = image.expanduser().resolve()
-        runs_root = (artifact / "runs").resolve()
-        if runs_root not in image.parents or image.name != "设计截图.png" or not image.is_file():
-            raise PipelineError("设计截图必须位于 artifact/runs/<运行目录>/设计截图.png")
+        expected_image = (artifact / "runs" / "设计截图.png").resolve()
+        if image != expected_image or not image.is_file():
+            raise PipelineError("设计截图必须位于 artifact/runs/设计截图.png")
         state["designScreenshot"] = {"image": str(image), "capturedAt": utc_now()}
         state.setdefault("history", []).append({"phase": "design_screenshot", "at": utc_now(), "detail": state["designScreenshot"]})
         _write_state(artifact, state)
@@ -647,7 +646,22 @@ def install_k80(archive: Path, project_root: Path, serial: str, expected_avd: st
     return {"artifactPath": str(artifact), "phase": state["phase"], "serial": serial, "avd": expected_avd}
 
 
-def screenshot_k80(archive: Path, project_root: Path, serial: str, expected_avd: str = "K80", run_dir: Path | None = None) -> dict[str, Any]:
+def next_evidence_path(directory: Path, filename: str) -> Path:
+    """返回目录内未占用的证据文件名：先用原名，再追加 _1、_2……。"""
+    candidate = directory / filename
+    if not candidate.exists():
+        return candidate
+    suffix = candidate.suffix
+    stem = candidate.stem
+    index = 1
+    while True:
+        candidate = directory / f"{stem}_{index}{suffix}"
+        if not candidate.exists():
+            return candidate
+        index += 1
+
+
+def screenshot_k80(archive: Path, project_root: Path, serial: str, expected_avd: str = "K80") -> dict[str, Any]:
     if not SAFE_SERIAL.fullmatch(serial):
         raise PipelineError(f"ADB serial 不安全：{serial}")
     artifact, _, state = load_source(archive, project_root)
@@ -659,12 +673,9 @@ def screenshot_k80(archive: Path, project_root: Path, serial: str, expected_avd:
     if probe.returncode != 0:
         raise PipelineError(f"无法读取模拟器名称：{probe.stderr.strip()}")
     validate_device_name(probe.stdout.strip(), expected_avd)
-    destination = run_dir or artifact / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
-    destination = destination.expanduser().resolve()
-    if artifact not in destination.parents:
-        raise PipelineError("截图目录必须位于本次 artifact 目录内")
+    destination = artifact / "runs"
     destination.mkdir(parents=True, exist_ok=True)
-    image = destination / "应用截图-01.png"
+    image = next_evidence_path(destination, "应用截图.png")
     with image.open("wb") as output:
         result = subprocess.run(["adb", "-s", serial, "exec-out", "screencap", "-p"], stdout=output, stderr=subprocess.PIPE, check=False)
     if result.returncode != 0:
@@ -753,7 +764,6 @@ def build_parser() -> argparse.ArgumentParser:
     screenshot.add_argument("--project-root", required=True, type=Path)
     screenshot.add_argument("--serial", required=True)
     screenshot.add_argument("--expected-avd", default="K80")
-    screenshot.add_argument("--run-dir", type=Path)
     start_design_server_command = subparsers.add_parser("start-design-server")
     start_design_server_command.add_argument("--zip", required=True, type=Path)
     start_design_server_command.add_argument("--project-root", required=True, type=Path)
@@ -830,7 +840,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "install-k80":
             result = install_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.apk)
         elif args.command == "screenshot-k80":
-            result = screenshot_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.run_dir)
+            result = screenshot_k80(args.zip, args.project_root, args.serial, args.expected_avd)
         elif args.command == "start-design-server":
             result = start_design_server(args.zip, args.project_root, args.port)
         elif args.command == "采集设计":

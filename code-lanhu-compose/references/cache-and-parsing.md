@@ -11,7 +11,9 @@
     ├── images.json
     ├── repeated-block-candidates.json
     └── runs/
-        └── yyyyMMdd-HHmmss/
+        ├── 设计截图.png
+        ├── 应用截图.png
+        └── 应用截图_1.png
 ```
 
 `<zip-stem>` 必须经过安全文件名规范化；目录名由 ZIP 文件名和完整 SHA-256 前六位组成。`设计解析.json`、`images.json` 和每次运行证据均只属于这个 ZIP，不保存最终 Compose 代码。项目文件始终依据当前代码、主题和组件重新适配。
@@ -47,7 +49,7 @@ python3 scripts/import_zip_images.py \
 }
 ```
 
-先用 `start-design-server` 启动仅本机可访问的设计服务，再执行 `采集设计`。解析结果固定写入专属目录内的 `设计解析.json`。同一完整 SHA-256 只保留一个当前解析结果，运行证据保留在同一目录的 `runs/yyyyMMdd-HHmmss/`。运行目录只使用年月日、时分秒命名，不再拼接 SHA 或其他参数。
+先用 `start-design-server` 启动仅本机可访问的设计服务，再执行 `采集设计`。解析结果固定写入专属目录内的 `设计解析.json`。同一完整 SHA-256 只保留一个当前解析结果和一份公共设计截图 `runs/设计截图.png`；后续采集复用该图，不再重复截取。所有运行证据直接保留在同一目录的 `runs/` 根目录，禁止创建时间戳子目录；App 截图按 `应用截图.png`、`应用截图_1.png`、`应用截图_2.png`……递增保存。
 
 ## 缓存命中
 
