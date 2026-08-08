@@ -32,7 +32,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 ### 1. 预检项目和设计包
 
-- 首次处理 ZIP 先执行 `python3 scripts/lanhu_pipeline.py inspect ...`，复用 `pipeline.json` 与完整 `sourceSha256`；inspect 未通过时不进入后续阶段。固定阶段和参数见 [固定编排链路契约](references/pipeline-contract.md)。
+- 首次处理 ZIP 先执行 `python3 scripts/lanhu_pipeline.py inspect ...`；同一完整 `sourceSha256` 命中完整缓存时直接返回当前阶段，不得重新解析 ZIP 或重置 `pipeline.json`。固定阶段和参数见 [固定编排链路契约](references/pipeline-contract.md)。
 - 确认 ZIP、当前工作目录中的 Android 项目、目标模块和构建入口可访问；在项目根目录优先执行 `./gradlew`，仅当 Wrapper 缺失且系统存在 `gradle` 时才回退到 `gradle`。
 - 在解析 ZIP、导入图片或生成 Compose 前，从项目任务列表确定唯一最小相关编译任务并执行一次 Gradle 编译。编译失败时立即停止本次 Skill：只报告该次命令和首个可行动的失败原因，不再运行其他 Gradle 任务，也不继续检查、解析或修改任何设计与资源文件。
 - 计算 ZIP 完整 SHA-256；禁止根据文件名判断是否为同一设计。
@@ -49,7 +49,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 以 `index.html` 的 DOM 父子关系建立结构树。
 - 拆分每个 `class` 的 token：节点和资源命名优先使用非 `flex-row`/`flex-col` 的主类；这两个工具类不单独生成设计节点或 Compose 组件。若实际加载的 CSS 为工具类声明样式，仍须参与层叠，布局方向以 `getComputedStyle()` 最终值映射为 `Row` 或 `Column`。
 - `inspect` 会写入 `repeated-block-candidates.json`：同一单位的宽、高、背景宽和背景高的总范围均不超过 `2`、且至少有两个共享父节点的兄弟项时，先按数据列表生成。候选的横竖方向只能由共享父节点的最终 DOM 布局决定；没有最终坐标证据时不得猜测方向或滚动性。
-- 通过 `start-design-server` 启动本机服务后执行 `采集设计`；该命令使用本机 Chrome 等待字体和图片完成，读取 `getComputedStyle()`、`getBoundingClientRect()`、可见性、层叠顺序、变换和最终资源 URL。
+- 仅当完整设计缓存未命中时，才通过 `start-design-server` 启动本机服务并执行 `采集设计`；该命令使用本机 Chrome 等待字体和图片完成，读取 `getComputedStyle()`、`getBoundingClientRect()`、可见性、层叠顺序、变换和最终资源 URL。
 - 同时处理继承、层叠覆盖、行内样式、flex 计算、绝对定位、伪元素、字体加载、遮挡和 `z-index`。
 - 保留“声明来源”和“最终计算结果”：前者用于判断间距归属，后者用于确认最终边界和视觉验证。
 - 将标准化设计 JSON 原子写入本次专属工作目录的 `设计解析.json`。相同完整 SHA-256 的 ZIP 可以更新覆盖该目录内的当前产物；不同完整 SHA-256 禁止写入同一目录。
@@ -98,7 +98,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 ### 6. 截图、对比和最多三轮修正
 
-- 设计稿先用 `start-design-server` 启动只监听 `127.0.0.1` 的静态服务，再执行 `采集设计`。同一 ZIP 的设计图只截取一次并固定复用 `runs/设计截图.png`；后续采集只更新最终布局解析，不再重复截图。随后必须调用 `screenshot-design --image runs/设计截图.png`。该命令无论截图校验成功或失败都会停止本次静态服务。去掉蓝湖预览外壳的缩小变换，但保留设计元素自身的变换。
+- `采集设计` 的完整缓存以 ZIP 完整 SHA-256、设计解析版本和 `runs/设计截图.png` 共同校验；命中时不得启动服务或浏览器。未命中时才执行 `start-design-server → 采集设计 → screenshot-design`，并在首次采集后固定复用 `runs/设计截图.png`。`screenshot-design` 无论登记成功或失败都会回收本次静态服务。去掉蓝湖预览外壳的缩小变换，但保留设计元素自身的变换。
 - `runs/` 禁止创建时间戳子目录。App 截图固定按顺序保存为 `应用截图.png`、`应用截图_1.png`、`应用截图_2.png`……，不得覆盖已有证据。
 - 将设计截图与 App 截图裁剪到相同有效区域，并统一画布尺寸、系统栏、颜色空间和缩放比例。
 - 逐项比较整体布局、元素边界、文本基线、字号、行高、字距、间距、颜色、圆角、阴影、图片裁剪和遮挡关系。

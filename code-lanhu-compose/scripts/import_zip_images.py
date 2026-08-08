@@ -17,6 +17,7 @@ IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 CODE_IMAGE_SCRIPT = Path(__file__).resolve().parents[2] / "code-image/scripts/normalize_images.py"
 LAYOUT_UTILITY_CLASSES = frozenset({"flex-row", "flex-col"})
 SELECTOR_TOKEN_PATTERN = re.compile(r"([.#])([A-Za-z][A-Za-z0-9_-]*)")
+EXTRACTION_MARKER_NAME = ".code-lanhu-compose-extraction.json"
 
 
 def sha256_file(path: Path) -> str:
@@ -58,6 +59,27 @@ def safe_entries(archive: ZipFile):
     return entries
 
 
+def extraction_cache_is_complete(destination: Path, entries, source_hash: str) -> bool:
+    marker = destination / EXTRACTION_MARKER_NAME
+    try:
+        cached = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False
+    if cached.get("sourceSha256") != source_hash:
+        return False
+    root = destination.resolve()
+    for entry in entries:
+        if entry.is_dir():
+            continue
+        candidate = root / PurePosixPath(entry.filename)
+        target = candidate.resolve()
+        if root not in target.parents or candidate.is_symlink() or not target.is_file():
+            return False
+        if target.stat().st_size != entry.file_size:
+            return False
+    return True
+
+
 def extract_zip(zip_path: Path, source_hash: str) -> tuple[Path, list[tuple[PurePosixPath, Path]]]:
     destination = Path.home() / "Downloads" / f"{safe_file_token(zip_path.stem)}-{source_hash[:6]}"
     with ZipFile(zip_path) as archive:
@@ -67,14 +89,19 @@ def extract_zip(zip_path: Path, source_hash: str) -> tuple[Path, list[tuple[Pure
         ]
         if not image_entries:
             raise ValueError("ZIP 中没有图片，无法逐图导入")
-        for entry in entries:
-            if entry.is_dir():
-                continue
-            target = destination / PurePosixPath(entry.filename)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(entry) as source, target.open("wb") as output:
-                while chunk := source.read(1024 * 1024):
-                    output.write(chunk)
+        if not extraction_cache_is_complete(destination, entries, source_hash):
+            for entry in entries:
+                if entry.is_dir():
+                    continue
+                target = destination / PurePosixPath(entry.filename)
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(entry) as source, target.open("wb") as output:
+                    while chunk := source.read(1024 * 1024):
+                        output.write(chunk)
+            write_json(
+                destination / EXTRACTION_MARKER_NAME,
+                {"version": 1, "sourceSha256": source_hash},
+            )
     return destination, [(PurePosixPath(entry.filename), destination / PurePosixPath(entry.filename)) for entry in image_entries]
 
 

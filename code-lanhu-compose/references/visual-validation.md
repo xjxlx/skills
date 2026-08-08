@@ -21,13 +21,13 @@
 
 ## 设计稿截图
 
-本地 `file://` 地址可能被 Codex 浏览器策略拒绝，因此必须由固定管线启动仅本机可访问的静态服务，不能手动启动一个无法追溯的服务：
+本地 `file://` 地址可能被 Codex 浏览器策略拒绝。仅在完整设计缓存未命中时，由固定管线启动仅本机可访问的静态服务；不能手动启动一个无法追溯的服务：
 
 ```bash
 python3 scripts/lanhu_pipeline.py start-design-server --zip <zip> --project-root <project>
 ```
 
-随后执行 `采集设计`。该命令使用本机 Chrome 等待页面资源完成，采集最终 DOM、计算样式与有效边界，写入 `设计解析.json`，并仅在公共设计图缺失时按其中的设计根节点自动保存 `runs/设计截图.png`。
+随后执行 `采集设计`。该命令使用本机 Chrome 等待页面资源完成，采集最终 DOM、计算样式与有效边界，写入 `设计解析.json`，并仅在公共设计图缺失时按其中的设计根节点自动保存 `runs/设计截图.png`。同一 ZIP 的完整缓存命中时，这两个命令均返回 `cacheHit: true`，不会启动服务或浏览器。
 
 根节点选择器必须来自解析结果，`.page` 只是蓝湖常见示例。去掉预览外壳的缩小 `transform`，保留设计元素自身的 transform；固定 viewport、背景和 `deviceScaleFactor`。
 

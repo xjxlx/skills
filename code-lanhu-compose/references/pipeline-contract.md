@@ -1,6 +1,6 @@
 # 固定编排链路契约
 
-`scripts/lanhu_pipeline.py` 是本 Skill 唯一的流程入口。它把一次蓝湖还原拆成可重放的阶段，并在 `.code-lanhu-compose/<name>-<sha6>/pipeline.json` 保存状态。压缩包的完整 `sourceSha256` 是唯一输入身份；输入变化时必须重新 `inspect`，不能沿用旧状态。`inspect` 同时运行 `detect_repeated_blocks.py`，把尺寸差不超过 `2` 的重复背景卡片写入 `repeated-block-candidates.json`，供后续确定性读取。
+`scripts/lanhu_pipeline.py` 是本 Skill 唯一的流程入口。它把一次蓝湖还原拆成可重放的阶段，并在 `.code-lanhu-compose/<name>-<sha6>/pipeline.json` 保存状态。压缩包的完整 `sourceSha256` 是唯一输入身份；输入变化时必须重新 `inspect`，不能沿用旧状态。相同 Hash 的 `inspect` 直接返回已有阶段，不重复运行 ZIP 检查和 `detect_repeated_blocks.py`，也不重置状态；首次检查才把尺寸差不超过 `2` 的重复背景卡片写入 `repeated-block-candidates.json`。
 
 ## 阶段与命令
 
@@ -13,9 +13,11 @@ inspect -> validate -> preflight -> assets -> mark-generated -> compile
 设计稿浏览器采集与截图是 `inspect` 后可执行的独立证据生命周期，不改变 Android 编译阶段：
 
 ```text
-start-design-server -> 采集设计（写入设计解析.json，并首次保存 runs/设计截图.png）
+start-design-server -> 采集设计（缓存未命中时写入设计解析.json，并首次保存 runs/设计截图.png）
                     -> screenshot-design（登记并停止服务）
                     \-> stop-design-server（采集失败时清理）
+
+完整设计缓存命中时，`start-design-server` 与 `采集设计` 都返回 `cacheHit: true`，不会启动静态服务、解压 ZIP 或启动浏览器；仍可调用 `screenshot-design` 登记公共设计图。
 ```
 
 每个阶段都必须使用脚本子命令，阶段不能跳过。`assets` 只调用现有的 `import_zip_images.py`；Gradle 只接受明确的 `:module:task`，并在项目根目录优先运行 `./gradlew`（仅 Wrapper 缺失且系统存在 `gradle` 时回退）；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。

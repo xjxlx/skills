@@ -54,6 +54,27 @@ class LanhuPipelineContractTest(unittest.TestCase):
             self.assertEqual(manifest["sourceSha256"], result["sourceSha256"])
             self.assertEqual(manifest["html"]["path"], "index.html")
 
+    def test_inspect_reuses_matching_manifest_without_resetting_pipeline_state(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("index.html", '<link href="style.css" rel="stylesheet">')
+                zipped.writestr("style.css", ".box { width: 10px; }")
+
+            first = PIPELINE.inspect_archive(archive, project_root)
+            artifact, _, state = PIPELINE.load_source(archive, project_root)
+            PIPELINE.transition(state, "validated")
+            PIPELINE._write_state(artifact, state)
+
+            with patch.object(PIPELINE, "detect_repeated_blocks", side_effect=AssertionError("不应重复解析 ZIP")):
+                second = PIPELINE.inspect_archive(archive, project_root)
+
+            self.assertTrue(second["cacheHit"])
+            self.assertEqual(second["phase"], "validated")
+            self.assertEqual(second["artifactPath"], first["artifactPath"])
+
     def test_inspect_writes_repeated_block_candidates(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -118,6 +139,30 @@ class LanhuPipelineContractTest(unittest.TestCase):
             self.assertFalse(state_path.exists())
             self.assertFalse(PIPELINE.is_pid_alive(started["pid"]))
 
+    def test_design_server_reuses_matching_extraction(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr(
+                    "lanhu/index.html",
+                    '<html><head><link href="style.css" rel="stylesheet"></head><body>cached-source</body></html>',
+                )
+                zipped.writestr("lanhu/style.css", ".page { width: 100px; }")
+
+            PIPELINE.inspect_archive(archive, project_root)
+            first = PIPELINE.start_design_server(archive, project_root)
+            PIPELINE.stop_design_server(archive, project_root)
+            with patch.object(PIPELINE, "_safe_extract_archive", side_effect=AssertionError("不应重复解压 ZIP")):
+                second = PIPELINE.start_design_server(archive, project_root)
+            try:
+                self.assertTrue(second["sourceReused"])
+                with urlopen(second["url"], timeout=3) as response:
+                    self.assertIn(b"cached-source", response.read())
+            finally:
+                PIPELINE.stop_design_server(archive, project_root)
+
     def test_采集设计会写入中文设计解析文件(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -139,9 +184,10 @@ class LanhuPipelineContractTest(unittest.TestCase):
             PIPELINE.start_design_server(archive, project_root)
             try:
                 first_result = PIPELINE.capture_rendered_design(archive, project_root)
-                result = PIPELINE.capture_rendered_design(archive, project_root)
             finally:
                 PIPELINE.stop_design_server(archive, project_root)
+            result = PIPELINE.capture_rendered_design(archive, project_root)
+            cached_start = PIPELINE.start_design_server(archive, project_root)
 
             design_path = Path(result["designPath"])
             design = json.loads(design_path.read_text(encoding="utf-8"))
@@ -150,6 +196,8 @@ class LanhuPipelineContractTest(unittest.TestCase):
             self.assertEqual(screenshot_path, Path(inspected["artifactPath"]) / "runs" / "设计截图.png")
             self.assertEqual(screenshot_path, Path(first_result["screenshotPath"]))
             self.assertTrue(screenshot_path.is_file())
+            self.assertTrue(result["cacheHit"])
+            self.assertTrue(cached_start["cacheHit"])
             self.assertEqual(design["sourceSha256"], inspected["sourceSha256"])
             self.assertEqual(design["设计根节点"]["选择器"], ".page")
             self.assertEqual(design["设计画布"]["宽度像素"], 344)

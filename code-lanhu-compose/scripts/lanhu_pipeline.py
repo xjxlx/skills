@@ -45,6 +45,7 @@ SAFE_TASK = re.compile(r"^:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
 SAFE_SERIAL = re.compile(r"^[A-Za-z0-9_.:-]+$")
 DESIGN_SERVER_PROCESSES: dict[int, subprocess.Popen[Any]] = {}
 DESIGN_DOCUMENT_NAME = "设计解析.json"
+DESIGN_DOCUMENT_VERSION = 1
 CHROME_EXECUTABLE = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 
 
@@ -151,16 +152,39 @@ def _write_state(artifact: Path, state: dict[str, Any]) -> None:
     atomic_json(artifact / "pipeline.json", state)
 
 
+def _load_cached_inspection(artifact: Path, source_sha: str) -> tuple[dict[str, Any], dict[str, Any]] | None:
+    """读取同一 ZIP 的已验证检查结果，避免重置后续阶段。"""
+    source_path = artifact / "source.json"
+    state_path = artifact / "pipeline.json"
+    if not source_path.is_file() or not state_path.is_file():
+        return None
+    try:
+        source = json.loads(source_path.read_text(encoding="utf-8"))
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if source.get("sourceSha256") != source_sha or state.get("sourceSha256") != source_sha:
+        return None
+    if state.get("phase") not in PHASES:
+        return None
+    return source, state
+
+
 def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None = None) -> dict[str, Any]:
     archive = archive.expanduser().resolve()
     project_root = project_root.expanduser().resolve()
+    source_sha = sha256_file(archive)
+    artifact = artifact_dir(archive, project_root, source_sha)
+    cached = _load_cached_inspection(artifact, source_sha)
+    if cached is not None:
+        source_manifest, state = cached
+        return {**source_manifest, "phase": state["phase"], "cacheHit": True}
+
     entries = zip_entries(archive)
     html_entries = [info for info in entries if _entry_path(info.filename).endswith((".html", ".htm"))]
     if len(html_entries) != 1:
         raise PipelineError(f"ZIP 必须恰好包含一个入口 HTML，实际发现多个 HTML：{len(html_entries)}")
     html_info = html_entries[0]
-    source_sha = sha256_file(archive)
-    artifact = artifact_dir(archive, project_root, source_sha)
     artifact.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive) as zipped:
         html_text = zipped.read(html_info).decode("utf-8", errors="replace")
@@ -190,7 +214,7 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
     state = new_state(source_sha, str(compose_file.resolve()) if compose_file else None)
     transition(state, "inspected", {"html": source_manifest["html"], "cssCount": len(css_files)})
     _write_state(artifact, state)
-    return {**source_manifest, "phase": state["phase"]}
+    return {**source_manifest, "phase": state["phase"], "cacheHit": False}
 
 
 def load_source(archive: Path, project_root: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
@@ -210,6 +234,32 @@ def load_source(archive: Path, project_root: Path) -> tuple[Path, dict[str, Any]
 def design_server_state_path(artifact: Path) -> Path:
     """返回本次 ZIP 专属的本地设计稿服务状态文件。"""
     return artifact / "design-server.json"
+
+
+def design_server_source_state_path(artifact: Path) -> Path:
+    """返回设计静态服务解压缓存的身份记录。"""
+    return artifact / "design-server-source.json"
+
+
+def _load_cached_design(artifact: Path, source: dict[str, Any]) -> tuple[dict[str, Any], Path] | None:
+    """仅复用与当前 ZIP 匹配且包含公共截图的完整设计产物。"""
+    design_path = artifact / DESIGN_DOCUMENT_NAME
+    screenshot_path = artifact / "runs" / "设计截图.png"
+    try:
+        design = json.loads(design_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    root = design.get("设计根节点")
+    if (
+        design.get("版本") != DESIGN_DOCUMENT_VERSION
+        or design.get("sourceSha256") != source["sourceSha256"]
+        or not isinstance(root, dict)
+        or not isinstance(root.get("选择器"), str)
+        or not root["选择器"]
+        or not screenshot_path.is_file()
+    ):
+        return None
+    return design, screenshot_path
 
 
 def is_pid_alive(pid: int) -> bool:
@@ -236,6 +286,28 @@ def _safe_extract_archive(archive: Path, destination: Path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             with zipped.open(info) as source, target.open("wb") as output:
                 shutil.copyfileobj(source, output)
+
+
+def _has_complete_design_server_source(archive: Path, destination: Path, source_sha: str) -> bool:
+    """仅在来源一致且所有 ZIP 文件均完整落盘时复用设计服务解压目录。"""
+    marker = design_server_source_state_path(destination.parent)
+    try:
+        cached = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    if cached.get("sourceSha256") != source_sha:
+        return False
+    root = destination.resolve()
+    for info in zip_entries(archive):
+        if info.is_dir():
+            continue
+        candidate = root / safe_zip_name(info.filename)
+        target = candidate.resolve()
+        if root not in target.parents or candidate.is_symlink() or not target.is_file():
+            return False
+        if target.stat().st_size != info.file_size:
+            return False
+    return True
 
 
 def _wait_for_loopback_server(port: int, process: subprocess.Popen[bytes]) -> None:
@@ -319,10 +391,28 @@ def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dic
             raise PipelineError(f"设计稿静态服务已在运行（PID {previous_pid}）；请先执行 stop-design-server")
         state_path.unlink()
 
+    cached_design = _load_cached_design(artifact, source)
+    if cached_design is not None:
+        design, screenshot_path = cached_design
+        return {
+            "artifactPath": str(artifact),
+            "designPath": str(artifact / DESIGN_DOCUMENT_NAME),
+            "screenshotPath": str(screenshot_path),
+            "设计根节点": design["设计根节点"],
+            "cacheHit": True,
+            "sourceReused": True,
+        }
+
     serving_root = artifact / "design-server-source"
-    if serving_root.exists():
-        shutil.rmtree(serving_root)
-    _safe_extract_archive(archive.expanduser().resolve(), serving_root)
+    source_reused = _has_complete_design_server_source(archive, serving_root, source["sourceSha256"])
+    if not source_reused:
+        if serving_root.exists():
+            shutil.rmtree(serving_root)
+        _safe_extract_archive(archive.expanduser().resolve(), serving_root)
+        atomic_json(
+            design_server_source_state_path(artifact),
+            {"version": 1, "sourceSha256": source["sourceSha256"], "createdAt": utc_now()},
+        )
     html_path = serving_root / source["html"]["path"]
     if not html_path.is_file():
         raise PipelineError(f"解压后找不到设计入口 HTML：{html_path}")
@@ -357,12 +447,22 @@ def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dic
         "startedAt": utc_now(),
     }
     atomic_json(state_path, state)
-    return {"artifactPath": str(artifact), "statePath": str(state_path), **state}
+    return {"artifactPath": str(artifact), "statePath": str(state_path), "cacheHit": False, "sourceReused": source_reused, **state}
 
 
 def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]:
     """读取本机浏览器最终渲染结果，并原子写入可追溯的设计解析文件。"""
     artifact, source, _ = load_source(archive, project_root)
+    cached_design = _load_cached_design(artifact, source)
+    if cached_design is not None:
+        design, screenshot_path = cached_design
+        return {
+            "artifactPath": str(artifact),
+            "designPath": str(artifact / DESIGN_DOCUMENT_NAME),
+            "screenshotPath": str(screenshot_path),
+            "设计根节点": design["设计根节点"],
+            "cacheHit": True,
+        }
     state_path = design_server_state_path(artifact)
     if not state_path.is_file():
         raise PipelineError("尚未启动设计稿静态服务，请先执行 start-design-server")
@@ -448,7 +548,7 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
 
     bounds = result["root"]["bounds"]
     design = {
-        "版本": 1,
+        "版本": DESIGN_DOCUMENT_VERSION,
         "来源名称": source["sourceName"],
         "来源路径": source["sourcePath"],
         "sourceSha256": source["sourceSha256"],
@@ -483,6 +583,7 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
         "designPath": str(design_path),
         "screenshotPath": str(screenshot_path),
         "设计根节点": design["设计根节点"],
+        "cacheHit": False,
     }
 
 

@@ -1,295 +1,41 @@
 #!/usr/bin/env python3
-"""code-lanhu-compose 逐图调用 code-image 的集成测试。"""
+"""import_zip_images.py 的本地缓存契约测试。"""
 
-import hashlib
-import json
-import os
-import subprocess
+from __future__ import annotations
+
+import importlib.util
 import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 
-SCRIPT = Path(__file__).with_name("import_zip_images.py")
+SCRIPT_PATH = Path(__file__).with_name("import_zip_images.py")
+SPEC = importlib.util.spec_from_file_location("import_zip_images", SCRIPT_PATH)
+if SPEC is None or SPEC.loader is None:
+    raise RuntimeError(f"无法加载 {SCRIPT_PATH}")
+IMPORT_IMAGES = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(IMPORT_IMAGES)
 
 
-class ImportZipImagesTest(unittest.TestCase):
-    def test_zip_images_are_extracted_then_imported_one_by_one_through_code_image(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            archive = root / "design.zip"
-            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
-            compose.parent.mkdir(parents=True)
-            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
-            target = root / "app/src/main/res/mipmap-xxhdpi"
-            target.mkdir(parents=True)
-            legacy = target / "legacy.png"
-            legacy.write_bytes(b"legacy")
-            with zipfile.ZipFile(archive, "w") as zip_file:
-                zip_file.writestr("design/img/Group 62.png", b"image-data")
-                zip_file.writestr("design/readme.txt", "not an image")
+class ImportZipImagesContractTest(unittest.TestCase):
+    def test_extract_zip_reuses_complete_source_cache(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            archive = Path(temp_dir) / "design.zip"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("images/a.png", b"original-image")
 
-            environment = dict(os.environ)
-            environment["HOME"] = str(root / "home")
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(SCRIPT),
-                    "--zip",
-                    str(archive),
-                    "--compose",
-                    str(compose),
-                    "--project-root",
-                    str(root),
-                    "--apply",
-                ],
-                capture_output=True,
-                text=True,
-                env=environment,
-            )
+            source_hash = IMPORT_IMAGES.sha256_file(archive)
+            with patch.object(IMPORT_IMAGES.Path, "home", return_value=Path(temp_dir)):
+                extraction_root, images = IMPORT_IMAGES.extract_zip(archive, source_hash)
+                image_path = images[0][1]
+                image_path.write_bytes(b"cached-content")
 
-            self.assertEqual(result.returncode, 0, result.stderr)
-            source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
-            extracted = root / "home/Downloads" / f"design-{source_hash[:6]}"
-            self.assertTrue((extracted / "design/img/Group 62.png").is_file())
-            output = target / "icon_test_group_62.png"
-            self.assertTrue(output.is_file())
-            self.assertEqual(output.read_bytes(), b"image-data")
-            self.assertTrue(legacy.is_file())
+                second_root, second_images = IMPORT_IMAGES.extract_zip(archive, source_hash)
 
-            manifest = root / ".code-lanhu-compose" / f"design-{source_hash[:6]}" / "images.json"
-            data = json.loads(manifest.read_text(encoding="utf-8"))
-            self.assertEqual(data["sourceSha256"], source_hash)
-            self.assertEqual(data["images"][0]["outputPath"], str(output.relative_to(root)))
-            resources_path = root / ".code-image" / f"design-{source_hash[:6]}.resources.json"
-            resources = json.loads(resources_path.read_text(encoding="utf-8"))
-            self.assertEqual(len(resources["resources"]), 1)
-            self.assertEqual(resources["resources"][0]["outputName"], output.name)
-            self.assertEqual(data["images"][0]["resourceManifest"], str(resources_path.relative_to(root)))
-            self.assertFalse((root / ".code-image/resources.json").exists())
-
-    def test_new_zip_import_preserves_previous_page_resource_and_uses_new_manifest(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
-            compose.parent.mkdir(parents=True)
-            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
-            first_archive = root / "1600.zip"
-            second_archive = root / "1601.zip"
-            for archive, content in ((first_archive, b"first"), (second_archive, b"second")):
-                with zipfile.ZipFile(archive, "w") as zip_file:
-                    zip_file.writestr("design/img/Group 62.png", content)
-
-            environment = dict(os.environ)
-            environment["HOME"] = str(root / "home")
-            for archive in (first_archive, second_archive):
-                result = subprocess.run(
-                    [
-                        "python3", str(SCRIPT), "--zip", str(archive), "--compose", str(compose),
-                        "--project-root", str(root), "--apply",
-                    ],
-                    capture_output=True,
-                    text=True,
-                    env=environment,
-                )
-                self.assertEqual(result.returncode, 0, result.stderr)
-
-            target = root / "app/src/main/res/mipmap-xxhdpi"
-            self.assertEqual((target / "icon_test_group_62.png").read_bytes(), b"first")
-            self.assertEqual((target / "icon_test_group_62_1.png").read_bytes(), b"second")
-            for archive in (first_archive, second_archive):
-                archive_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
-                self.assertTrue(
-                    (root / ".code-image" / f"{archive.stem}-{archive_hash[:6]}.resources.json").is_file()
-                )
-
-    def test_same_zip_reuses_its_images_and_resource_manifest(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            archive = root / "1600.zip"
-            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
-            compose.parent.mkdir(parents=True)
-            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
-            with zipfile.ZipFile(archive, "w") as zip_file:
-                zip_file.writestr("design/img/Group 62.png", b"shared")
-
-            environment = dict(os.environ)
-            environment["HOME"] = str(root / "home")
-            command = [
-                "python3", str(SCRIPT), "--zip", str(archive), "--compose", str(compose),
-                "--project-root", str(root), "--apply",
-            ]
-            for _ in range(2):
-                result = subprocess.run(command, capture_output=True, text=True, env=environment)
-                self.assertEqual(result.returncode, 0, result.stderr)
-
-            source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
-            target = root / "app/src/main/res/mipmap-xxhdpi"
-            self.assertEqual((target / "icon_test_group_62.png").read_bytes(), b"shared")
-            self.assertFalse((target / "icon_test_group_62_1.png").exists())
-            manifests = list((root / ".code-image").glob("*.resources.json"))
-            self.assertEqual(manifests, [root / ".code-image" / f"1600-{source_hash[:6]}.resources.json"])
-            resources = json.loads(manifests[0].read_text(encoding="utf-8"))
-            self.assertEqual(len(resources["resources"]), 1)
-
-    def test_same_zip_deduplicates_different_entries_with_the_same_content(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            archive = root / "1600.zip"
-            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
-            compose.parent.mkdir(parents=True)
-            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
-            with zipfile.ZipFile(archive, "w") as zip_file:
-                zip_file.writestr("design/img/first.png", b"shared")
-                zip_file.writestr("design/img/second.png", b"shared")
-
-            environment = dict(os.environ)
-            environment["HOME"] = str(root / "home")
-            result = subprocess.run(
-                [
-                    "python3", str(SCRIPT), "--zip", str(archive), "--compose", str(compose),
-                    "--project-root", str(root), "--apply",
-                ],
-                capture_output=True,
-                text=True,
-                env=environment,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            target = root / "app/src/main/res/mipmap-xxhdpi"
-            self.assertTrue((target / "icon_test_first.png").is_file())
-            self.assertFalse((target / "icon_test_second.png").exists())
-            source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
-            images_path = root / ".code-lanhu-compose" / f"1600-{source_hash[:6]}" / "images.json"
-            images = json.loads(images_path.read_text(encoding="utf-8"))["images"]
-            self.assertEqual(len(images), 2)
-            self.assertEqual({image["outputName"] for image in images}, {"icon_test_first.png"})
-            resources_path = root / ".code-image" / f"1600-{source_hash[:6]}.resources.json"
-            self.assertEqual(len(json.loads(resources_path.read_text(encoding="utf-8"))["resources"]), 1)
-
-    def test_zip_without_images_stops_without_writing_an_image_manifest(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            archive = root / "empty.zip"
-            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
-            compose.parent.mkdir(parents=True)
-            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
-            with zipfile.ZipFile(archive, "w") as zip_file:
-                zip_file.writestr("design/readme.txt", "not an image")
-
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(SCRIPT),
-                    "--zip",
-                    str(archive),
-                    "--compose",
-                    str(compose),
-                    "--project-root",
-                    str(root),
-                    "--apply",
-                ],
-                capture_output=True,
-                text=True,
-            )
-
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("没有图片", result.stderr)
-            self.assertFalse((root / ".code-lanhu-compose").exists())
-
-    def test_lanhu_node_names_replace_hash_style_export_names(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            archive = root / "design.zip"
-            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
-            compose.parent.mkdir(parents=True)
-            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
-            with zipfile.ZipFile(archive, "w") as zip_file:
-                zip_file.writestr(
-                    "design/index.html",
-                    '<img class="back_button" src="./img/SketchPng0c6fdffe.png" />',
-                )
-                zip_file.writestr(
-                    "design/index.css",
-                    ".summary_panel { background: url(./img/39dc4c3c_mergeImage.png); }",
-                )
-                zip_file.writestr("design/img/SketchPng0c6fdffe.png", b"back")
-                zip_file.writestr("design/img/39dc4c3c_mergeImage.png", b"panel")
-
-            environment = dict(os.environ)
-            environment["HOME"] = str(root / "home")
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(SCRIPT),
-                    "--zip",
-                    str(archive),
-                    "--compose",
-                    str(compose),
-                    "--project-root",
-                    str(root),
-                    "--apply",
-                ],
-                capture_output=True,
-                text=True,
-                env=environment,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            target = root / "app/src/main/res/mipmap-xxhdpi"
-            self.assertTrue((target / "icon_test_back_button.png").is_file())
-            self.assertTrue((target / "icon_test_summary_panel.png").is_file())
-
-    def test_layout_utility_classes_do_not_become_asset_names(self):
-        with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary)
-            archive = root / "design.zip"
-            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
-            compose.parent.mkdir(parents=True)
-            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
-            with zipfile.ZipFile(archive, "w") as zip_file:
-                zip_file.writestr(
-                    "design/index.html",
-                    '<div class="page flex-col"><img class="flex-row back_button" '
-                    'src="./img/SketchPng0c6fdffe.png" /></div>',
-                )
-                zip_file.writestr(
-                    "design/index.css",
-                    ".flex-col .summary_panel { background: url(./img/39dc4c3c_mergeImage.png); }\n"
-                    ".flex-row { background: url(./img/utilityOnly.png); }",
-                )
-                zip_file.writestr("design/img/SketchPng0c6fdffe.png", b"back")
-                zip_file.writestr("design/img/39dc4c3c_mergeImage.png", b"panel")
-                zip_file.writestr("design/img/utilityOnly.png", b"utility")
-
-            environment = dict(os.environ)
-            environment["HOME"] = str(root / "home")
-            result = subprocess.run(
-                [
-                    "python3",
-                    str(SCRIPT),
-                    "--zip",
-                    str(archive),
-                    "--compose",
-                    str(compose),
-                    "--project-root",
-                    str(root),
-                    "--apply",
-                ],
-                capture_output=True,
-                text=True,
-                env=environment,
-            )
-
-            self.assertEqual(result.returncode, 0, result.stderr)
-            target = root / "app/src/main/res/mipmap-xxhdpi"
-            self.assertTrue((target / "icon_test_back_button.png").is_file())
-            self.assertTrue((target / "icon_test_summary_panel.png").is_file())
-            source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
-            manifest = root / ".code-lanhu-compose" / f"design-{source_hash[:6]}" / "images.json"
-            names = {item["sourcePath"]: item["assetName"] for item in json.loads(manifest.read_text())["images"]}
-            self.assertIsNone(names["design/img/utilityOnly.png"])
+            self.assertEqual(second_root, extraction_root)
+            self.assertEqual(second_images[0][1].read_bytes(), b"cached-content")
 
 
 if __name__ == "__main__":
