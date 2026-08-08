@@ -101,7 +101,24 @@ def load_code_image_record(resources_path: Path, source_path: Path, file_hash: s
     for record in data.get("resources", []):
         if record.get("originalPath") in source_values and record.get("originalHash") == file_hash:
             return record
+    for record in data.get("resources", []):
+        if record.get("originalHash") == file_hash:
+            return record
     raise ValueError(f"code-image 未记录刚导入的图片：{source_path}")
+
+
+def load_code_image_records_by_hash(resources_path: Path) -> dict[str, dict]:
+    if not resources_path.is_file():
+        return {}
+    try:
+        data = json.loads(resources_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"无法读取 code-image 资源记录：{resources_path}") from error
+    return {
+        record["originalHash"]: record
+        for record in data.get("resources", [])
+        if isinstance(record.get("originalHash"), str)
+    }
 
 
 def resource_manifest_path(
@@ -230,19 +247,24 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
     extraction_root, images = extract_zip(zip_path, source_hash)
     asset_names = lanhu_asset_names(extraction_root, images)
     resources_path = resource_manifest_path(project_root, zip_path, source_hash)
+    records_by_hash = load_code_image_records_by_hash(resources_path) if apply else {}
     records = []
     for zip_entry, image_path in images:
         content_hash = sha256_file(image_path)
         asset_name = asset_names.get(zip_entry)
-        run_code_image(
-            image_path,
-            compose_path,
-            project_root,
-            resources_path,
-            apply,
-            asset_name,
-        )
-        record = load_code_image_record(resources_path, image_path, content_hash, project_root) if apply else None
+        record = records_by_hash.get(content_hash)
+        if record is None:
+            run_code_image(
+                image_path,
+                compose_path,
+                project_root,
+                resources_path,
+                apply,
+                asset_name,
+            )
+            record = load_code_image_record(resources_path, image_path, content_hash, project_root) if apply else None
+            if record is not None:
+                records_by_hash[content_hash] = record
         records.append(
             {
                 "sourcePath": zip_entry.as_posix(),

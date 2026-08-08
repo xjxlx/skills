@@ -130,6 +130,32 @@ def _find_record(records: list[dict], current_path: str, file_hash: str) -> dict
     return None
 
 
+def _record_output_path(record: dict, project_root: Path) -> Path | None:
+    output_path = record.get("outputPath")
+    if not isinstance(output_path, str) or not output_path:
+        return None
+    path = Path(output_path)
+    return path if path.is_absolute() else project_root / path
+
+
+def _find_record_by_hash(
+    records: list[dict],
+    file_hash: str,
+    target_dir: Path,
+    project_root: Path,
+) -> dict | None:
+    """同一来源清单内的同密度重复切图复用首个已记录资源。"""
+    for record in records:
+        output_path = _record_output_path(record, project_root)
+        if (
+            record.get("originalHash") == file_hash
+            and output_path is not None
+            and output_path.parent.resolve() == target_dir.resolve()
+        ):
+            return record
+    return None
+
+
 def _is_normalized(name: str) -> bool:
     return Path(name).stem.lower().startswith("icon_")
 
@@ -177,17 +203,13 @@ def build_plan(
     file_hash = sha256_file(source)
     manifest = load_resources(resources_path)
     record = _find_record(manifest["resources"], current_path, file_hash)
+    if record is None:
+        record = _find_record_by_hash(manifest["resources"], file_hash, target_dir, project_root)
     original_path = record.get("originalPath") if record else current_path
     original_name = record.get("originalName") if record else source.name
     compose_file = relative_path(compose_path, project_root) if compose_path else (record.get("composeFile") if record else None)
 
-    previous_target = (
-        project_root / record["outputPath"]
-        if record and not Path(record["outputPath"]).is_absolute()
-        else Path(record["outputPath"])
-        if record
-        else None
-    )
+    previous_target = _record_output_path(record, project_root) if record else None
     if record:
         output_name = record["outputName"]
     elif _is_normalized(source.name):
@@ -203,7 +225,13 @@ def build_plan(
         )
 
     replaceable = {previous_target.resolve()} if previous_target else set()
-    target = next_output_path(target_dir, output_name, source, reserved or set(), replaceable)
+    target = next_output_path(
+        target_dir,
+        output_name,
+        source,
+        set() if record else reserved or set(),
+        replaceable,
+    )
     identity = record.get("identity") if record else f"{original_path}:{file_hash}"
     return RenamePlan(
         source=source,
@@ -231,15 +259,13 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
     for plan in plans:
         plan.target.parent.mkdir(parents=True, exist_ok=True)
         if plan.source.resolve() != plan.target.resolve():
-            if plan.target.exists():
+            if plan.target.exists() and plan.previous_target != plan.target:
                 if sha256_file(plan.target) != plan.file_hash:
                     raise FileExistsError(f"目标文件已存在，拒绝覆盖：{plan.target}")
             else:
                 shutil.copyfile(plan.source, plan.target)
         if plan.previous_target and plan.previous_target.resolve() != plan.target.resolve():
             if plan.previous_target.is_file():
-                if sha256_file(plan.previous_target) != plan.file_hash:
-                    raise FileExistsError(f"旧资源内容已变化，拒绝删除：{plan.previous_target}")
                 plan.previous_target.unlink()
         records[plan.identity] = {
             "identity": plan.identity,
@@ -372,11 +398,17 @@ def main() -> int:
     else:
         extraction_root = extract_zip_to_downloads(source_path)
         reserved: set[Path] = set()
+        imported_hashes: set[tuple[Path, str]] = set()
         plans = []
         for source, directory_name in zip_image_sources(extraction_root):
+            target_dir = (res_root / directory_name).resolve()
+            source_hash = sha256_file(source)
+            if (target_dir, source_hash) in imported_hashes:
+                continue
             plan = build_plan(source, res_root / directory_name, project_root, compose, resources_path, reserved)
             plans.append(plan)
             reserved.add(plan.target.resolve())
+            imported_hashes.add((target_dir, source_hash))
 
     _print_plans(plans)
     if args.apply:

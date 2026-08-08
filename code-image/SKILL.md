@@ -37,20 +37,20 @@ description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并�
 - 图片基础名转为小写 snake_case：`Group 62.png` → `group_62.png`；无可用英文字符时使用稳定 Hash；数字开头时加 `image_`。
 - 无 `--compose` 时输出 `icon_<图片基础名>.<扩展名>`，例如 `icon_group_62.png`。
 - 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`；提供 `--asset-name` 时图片基础名取该语义名，`Layout` 和 `Page` 后缀不参与命名空间。
-- 已以 `icon_` 开头的合规名称不再加前缀；来源路径与 Hash 命中已有记录时始终复用已有输出名，`--asset-name` 不得迁移或复制该资源。
+- 已以 `icon_` 开头的合规名称不再加前缀；同一来源清单内，来源路径加 Hash 或同目标密度的内容 Hash 命中已有记录时，直接复用其输出名，不复制、不校验目标文件 Hash，也不生成 `_1` 副本；`--asset-name` 不得迁移或复制该资源。
 - 目标 mipmap 目录已有同名文件时，从 `_1` 开始依次递增：`icon_group_62.png` → `icon_group_62_1.png` → `icon_group_62_2.png`。禁止覆盖已有图片。
 
 ## 记录与改名
 
 每个来源身份在项目 `.code-image/` 使用一份可复用清单：`<来源名>-<来源SHA-256前6位>.resources.json`，例如 `1600-xxxxxx.resources.json`。同一 ZIP 或同一图片内容必须复用该清单、解压目录和已导入图片；只有来源 Hash 改变时才创建新批次。禁止使用共享 `resources.json`。记录格式见 [resource-cache.md](references/resource-cache.md)。
 
-每项记录原始路径和名称、原始 Hash、输出路径和名称、可选 Compose 文件及稳定身份。同一来源的后续操作只读取和更新同一清单，已导入图片可被其他页面复用；不同来源清单互不覆盖。协调脚本可通过 `--resources-file` 指定符合上述命名的清单。
+每项记录原始路径和名称、原始 Hash、输出路径和名称、可选 Compose 文件及稳定身份。同一来源清单中相同内容且同目标密度只保留首个记录作为规范映射，后续 ZIP 条目直接复用它；不同来源清单互不读取、迁移或删除。协调脚本可通过 `--resources-file` 指定符合上述命名的清单。
 
 ## 工作流程
 
 1. 校验唯一输入及可选 Compose 文件。
 2. 单图确定 `mipmap-xxhdpi` 目标；ZIP 安全解压到下载目录并收集各 `mipmap*` 图片。
-3. 为每张图片独立生成名称；只检查目标目录重名。
+3. 按目标密度和内容 Hash 查询来源清单；命中时直接复用，否则生成名称并检查目标目录重名。
 4. 输出 Dry Run；确认后以 `--apply` 仅在首次导入时复制图片，并原子更新来源专属清单。
 
 ## 使用脚本

@@ -142,6 +142,39 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertTrue(old_output.is_file())
         self.assertFalse(new_output.exists())
 
+    def test_shared_source_manifest_reuses_same_content_from_another_zip_entry(self):
+        first = self.input_dir / "first.png"
+        second = self.input_dir / "second.png"
+        first.write_bytes(b"same-content")
+        second.write_bytes(b"same-content")
+        resources_path = self.project / ".code-image/design-abcdef.resources.json"
+
+        first_result = self.run_skill(
+            "--image",
+            first,
+            "--compose",
+            str(self.compose),
+            "--resources-file",
+            str(resources_path),
+        )
+        second_result = self.run_skill(
+            "--image",
+            second,
+            "--compose",
+            str(self.compose),
+            "--resources-file",
+            str(resources_path),
+        )
+
+        target_dir = self.project / "app/src/main/res/mipmap-xxhdpi"
+        self.assertEqual(first_result.returncode, 0, first_result.stderr)
+        self.assertEqual(second_result.returncode, 0, second_result.stderr)
+        self.assertTrue((target_dir / "icon_report_home_first.png").is_file())
+        self.assertFalse((target_dir / "icon_report_home_second.png").exists())
+        resources = json.loads(resources_path.read_text(encoding="utf-8"))["resources"]
+        self.assertEqual(len(resources), 1)
+        self.assertEqual(resources[0]["outputName"], "icon_report_home_first.png")
+
     def test_explicit_asset_name_preserves_semantic_trailing_number(self):
         image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
         image.write_bytes(b"new")

@@ -133,6 +133,41 @@ class ImportZipImagesTest(unittest.TestCase):
             resources = json.loads(manifests[0].read_text(encoding="utf-8"))
             self.assertEqual(len(resources["resources"]), 1)
 
+    def test_same_zip_deduplicates_different_entries_with_the_same_content(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "1600.zip"
+            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
+            compose.parent.mkdir(parents=True)
+            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
+            with zipfile.ZipFile(archive, "w") as zip_file:
+                zip_file.writestr("design/img/first.png", b"shared")
+                zip_file.writestr("design/img/second.png", b"shared")
+
+            environment = dict(os.environ)
+            environment["HOME"] = str(root / "home")
+            result = subprocess.run(
+                [
+                    "python3", str(SCRIPT), "--zip", str(archive), "--compose", str(compose),
+                    "--project-root", str(root), "--apply",
+                ],
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            target = root / "app/src/main/res/mipmap-xxhdpi"
+            self.assertTrue((target / "icon_test_first.png").is_file())
+            self.assertFalse((target / "icon_test_second.png").exists())
+            source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+            images_path = root / ".code-lanhu-compose" / f"1600-{source_hash[:6]}" / "images.json"
+            images = json.loads(images_path.read_text(encoding="utf-8"))["images"]
+            self.assertEqual(len(images), 2)
+            self.assertEqual({image["outputName"] for image in images}, {"icon_test_first.png"})
+            resources_path = root / ".code-image" / f"1600-{source_hash[:6]}.resources.json"
+            self.assertEqual(len(json.loads(resources_path.read_text(encoding="utf-8"))["resources"]), 1)
+
     def test_zip_without_images_stops_without_writing_an_image_manifest(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

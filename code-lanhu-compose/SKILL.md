@@ -12,7 +12,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 遵循 `$skill-common` 基础规范。每次调用本 Skill 时，先执行 `"${CODEX_HOME:-$HOME/.codex}/skills/github-manager/scripts/check_and_publish.sh"`；检测或发布成功后再继续，失败时立即停止。
 - 只负责蓝湖 ZIP 的设计解析、Compose 生成、图片接入和视觉验证闭环。
 - 不调用、不继承旧 `$code-compose`，也不读取它的规则或缓存。
-- 图片接入时调用 `$code-image`；对蓝湖 ZIP 解压出的每张图片分别传递一次 `--image`、目标 Compose 文件和项目根目录，不调用其 ZIP 批量入口，也不复制其内部规则。
+- 图片接入时调用 `$code-image`；对蓝湖 ZIP 中每个未在来源清单命中的内容 Hash 分别传递一次 `--image`、目标 Compose 文件和项目根目录，不调用其 ZIP 批量入口，也不复制其内部规则。
 - 模拟器验证能力可用时调用 `test-android-apps:android-emulator-qa`；不可用时才执行本 Skill 规定的显式 ADB 流程。
 - 以 `scripts/lanhu_pipeline.py` 作为固定编排入口；大模型只选择脚本子命令或提交契约化 JSON 决策，不得临时生成同职责脚本或绕过状态机。
 - 无法从设计、编译或截图证据确定语义时，写入 `needs-user-input.json` 并暂停，交由用户确认，不用猜测推进。
@@ -79,8 +79,8 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 ### 4. 接入图片资源
 
 - 从解析结果取得图片的真实相对路径和内容 Hash，禁止使用模糊文件名猜测资源。
-- 运行 `python3 scripts/lanhu_pipeline.py assets --zip <zip> --compose <target-compose> --project-root <project> --apply`。编排器再调用图片导入脚本；它安全解压 ZIP 后，从 HTML/CSS 中解析图片对应的主节点类名或 ID，并对每张图片调用 `$code-image --image --asset-name <节点名>`；同一 ZIP 的全部图片复用以 ZIP 名和 ZIP Hash 前六位命名的清单及已导入资源。
-- 将每张实际导入结果（ZIP 内源路径、Hash、真实 `outputPath`、`outputName`）原子写入 `.code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json`。Compose 只能引用其中真实存在的 `outputName`；禁止根据 ZIP 文件名或旧 staging 文件猜测资源名。
+- 运行 `python3 scripts/lanhu_pipeline.py assets --zip <zip> --compose <target-compose> --project-root <project> --apply`。编排器安全解压 ZIP、解析主节点类名或 ID，并按内容 Hash 查询同一 ZIP 的 `.code-image` 清单；未命中时才调用 `$code-image --image --asset-name <节点名>`，命中时直接复用记录，不重复复制或比较目标文件。
+- 将每个 ZIP 源路径的结果（Hash、真实 `outputPath`、`outputName`）原子写入 `.code-lanhu-compose/<zip-stem>-<sha256前6位>/images.json`；多个源路径可映射到同一资源。Compose 只能引用其中真实存在的 `outputName`；禁止根据 ZIP 文件名或旧 staging 文件猜测资源名。
 - 蓝湖 HTML/CSS ZIP 通常不是 `mipmap*` 资源包，禁止把整个 ZIP 传给 `$code-image --zip`；必须先解压并逐图调用 `$code-image --image`。
 - 只使用实际存在且映射成功的资源；禁止用文字、猜测圆角或临时 `Canvas` 替代已有设计切图。
 - 图片匹配失败时列出设计节点、源路径、Hash 和候选文件，停止处理该资源并请求确认。
