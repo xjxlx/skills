@@ -24,6 +24,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
+from detect_repeated_blocks import detect_repeated_blocks
+
 
 PHASES = (
     "created",
@@ -162,6 +164,10 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
         html_text = zipped.read(html_info).decode("utf-8", errors="replace")
     names = [safe_zip_name(info.filename) for info in entries]
     css_files = _referenced_css(html_text, names, safe_zip_name(html_info.filename))
+    repeated_blocks = detect_repeated_blocks(archive, css_files, safe_zip_name(html_info.filename))
+    repeated_blocks["sourceSha256"] = source_sha
+    repeated_blocks_path = artifact / "repeated-block-candidates.json"
+    atomic_json(repeated_blocks_path, repeated_blocks)
     source_manifest = {
         "version": 1,
         "sourceName": archive.name,
@@ -170,6 +176,11 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
         "artifactPath": str(artifact),
         "html": {"path": safe_zip_name(html_info.filename)},
         "css": [{"path": path} for path in css_files],
+        "repeatedBlockCandidates": {
+            "path": repeated_blocks_path.name,
+            "candidateCount": repeated_blocks["candidateCount"],
+            "tolerance": repeated_blocks["tolerance"],
+        },
         "assets": [{"path": name} for name in names if name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"))],
         "createdAt": utc_now(),
     }

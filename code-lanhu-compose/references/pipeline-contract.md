@@ -1,6 +1,6 @@
 # 固定编排链路契约
 
-`scripts/lanhu_pipeline.py` 是本 Skill 唯一的流程入口。它把一次蓝湖还原拆成可重放的阶段，并在 `.code-lanhu-compose/<name>-<sha6>/pipeline.json` 保存状态。压缩包的完整 `sourceSha256` 是唯一输入身份；输入变化时必须重新 `inspect`，不能沿用旧状态。
+`scripts/lanhu_pipeline.py` 是本 Skill 唯一的流程入口。它把一次蓝湖还原拆成可重放的阶段，并在 `.code-lanhu-compose/<name>-<sha6>/pipeline.json` 保存状态。压缩包的完整 `sourceSha256` 是唯一输入身份；输入变化时必须重新 `inspect`，不能沿用旧状态。`inspect` 同时运行 `detect_repeated_blocks.py`，把尺寸差不超过 `2` 的重复背景卡片写入 `repeated-block-candidates.json`，供后续确定性读取。
 
 ## 阶段与命令
 

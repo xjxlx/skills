@@ -48,6 +48,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 - 以 `index.html` 的 DOM 父子关系建立结构树。
 - 拆分每个 `class` 的 token：节点和资源命名优先使用非 `flex-row`/`flex-col` 的主类；这两个工具类不单独生成设计节点或 Compose 组件。若实际加载的 CSS 为工具类声明样式，仍须参与层叠，布局方向以 `getComputedStyle()` 最终值映射为 `Row` 或 `Column`。
+- `inspect` 会写入 `repeated-block-candidates.json`：同一单位的宽、高、背景宽和背景高的总范围均不超过 `2`、且至少有两个共享父节点的兄弟项时，先按数据列表生成。候选的横竖方向只能由共享父节点的最终 DOM 布局决定；没有最终坐标证据时不得猜测方向或滚动性。
 - 在浏览器中加载页面，等待字体和图片完成，读取 `getComputedStyle()`、`getBoundingClientRect()`、可见性、层叠顺序、变换和最终资源 URL。
 - 同时处理继承、层叠覆盖、行内样式、flex 计算、绝对定位、伪元素、字体加载、遮挡和 `z-index`。
 - 保留“声明来源”和“最终计算结果”：前者用于判断间距归属，后者用于确认最终边界和视觉验证。
@@ -72,7 +73,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 最底层存在背景图片时，必须直接使用 `ImageItem(parameter = ImageParameter(data = resId, modifier = modifier, contentScale = ContentScale.FillBounds))` 并让 `modifier` 为全屏布局；不得把根背景放进固定设计尺寸容器后再用局部缩放代替屏幕适配。
 - 禁止定义或调用 `Modifier.offsetPx`、`Modifier.sizePx` 等自定义像素换算 Modifier；间距和定位使用布局层级、`padding`/`Arrangement`，尺寸使用 `width`、`height`、`size` 或 `fillMax*` 表达。
 - 标题、标签、数值、单位和右侧图标组成的复合内容必须使用 `Row`/`Column` 的对齐关系或项目已有标签组件表达；禁止用互不关联的固定 `offset` 拼接，完成后检查文字是否裁剪、标签文字是否真实存在、数值和单位是否同一基线。
-- 重复视觉单元必须先建数据列表；只要 item 数量超过可视范围、页面本身支持滑动或用户要求查看滑动效果，就必须使用 `LazyColumn`、`LazyRow` 或 `LazyVerticalGrid` 等滑动组件，禁止逐个硬编码同类 Composable 或用固定 `Row`/`Column` 堆叠可能超出视口的 item。复合卡片必须逐项保留设计中可见的图片、左右装饰、标签和操作入口，不得只保留中心文字或主数值。
+- 重复视觉单元与 `repeated-block-candidates.json` 命中的候选必须先建数据列表；共享父节点的最终方向决定 `Row`/`Column`，仅在 item 超出可视范围、页面支持滑动或用户要求滑动时使用对应 `Lazy*` 组件。禁止逐个硬编码同类 Composable 或用固定 `Row`/`Column` 堆叠可能超出视口的 item。复合卡片必须逐项保留设计中可见的图片、左右装饰、标签和操作入口，不得只保留中心文字或主数值。
 布局映射和间距归属必须遵循 [Compose 映射规则](references/compose-mapping.md)。
 
 ### 4. 接入图片资源

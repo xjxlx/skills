@@ -53,6 +53,31 @@ class LanhuPipelineContractTest(unittest.TestCase):
             self.assertEqual(manifest["sourceSha256"], result["sourceSha256"])
             self.assertEqual(manifest["html"]["path"], "index.html")
 
+    def test_inspect_writes_repeated_block_candidates(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr(
+                    "index.html",
+                    '<link href="style.css" rel="stylesheet"><div class="list"><div class="block_4"></div><div class="block_5"></div></div>',
+                )
+                zipped.writestr(
+                    "style.css",
+                    ".block_5 { width: 21.13vw; height: 10.57vw; background: url(img/a.png) 0 0 no-repeat; "
+                    "background-size: 21.18vw 10.62vw; }\n"
+                    ".block_4 { width: 21vw; height: 10.57vw; background: url(img/b.png) 0 0 no-repeat; "
+                    "background-size: 21.06vw 10.62vw; }",
+                )
+
+            result = PIPELINE.inspect_archive(archive, root / "project")
+
+            candidates_path = Path(result["artifactPath"]) / "repeated-block-candidates.json"
+            candidates = json.loads(candidates_path.read_text(encoding="utf-8"))
+            self.assertEqual(candidates["candidateCount"], 1)
+            self.assertEqual(candidates["candidates"][0]["nodeNames"], ["block_4", "block_5"])
+            self.assertEqual(candidates["candidates"][0]["listAxis"], "requires-computed-layout")
+
     def test_inspect_rejects_multiple_entry_html_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             archive = Path(temp_dir) / "ambiguous.zip"
