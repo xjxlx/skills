@@ -66,6 +66,7 @@ python3 scripts/import_zip_images.py \
 - 源 ZIP 名称、完整 SHA-256、HTML/CSS 相对路径。
 - 设计画布宽高、设计根节点和浏览器渲染环境。
 - DOM 父子层级、元素标签、class、id、文本和伪元素内容。
+- 每个 class 的原始 token、主节点 token、布局工具 token，以及各自命中的 CSS 选择器；`flex-row`、`flex-col` 只归为布局工具，仍保留其参与的最终计算样式。
 - 每个节点的最终边界、可见性、层叠顺序和变换矩阵。
 - 布局模式、方向、对齐、`gap`、padding、margin、宽高约束和 overflow。
 - 最终颜色、字体族、字号、字重、行高、字距、文本对齐和最大行数。
@@ -75,6 +76,7 @@ python3 scripts/import_zip_images.py \
 ## 解析要求
 
 - 用 DOM 关系确定结构，不只扫描 `.paragraph_4` 一类选择器。
+- 节点身份、图片资源名优先取非布局工具的主类或 ID；`flex-row`、`flex-col` 不能单独成为节点名。它们若在实际加载 CSS 中命中规则，必须通过 `getComputedStyle()` 保留对布局的贡献。
 - 用 `getComputedStyle()` 解析继承、层叠、行内样式和 CSS 变量。
 - 用 `getBoundingClientRect()` 记录浏览器完成 flex、transform 和定位计算后的边界。
 - 分别读取 `::before`、`::after`；有可见内容时作为设计节点记录。

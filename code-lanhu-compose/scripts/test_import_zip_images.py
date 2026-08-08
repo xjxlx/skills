@@ -206,6 +206,56 @@ class ImportZipImagesTest(unittest.TestCase):
             self.assertTrue((target / "icon_test_back_button.png").is_file())
             self.assertTrue((target / "icon_test_summary_panel.png").is_file())
 
+    def test_layout_utility_classes_do_not_become_asset_names(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            archive = root / "design.zip"
+            compose = root / "app/src/main/java/com/example/report/TestPage.kt"
+            compose.parent.mkdir(parents=True)
+            compose.write_text("@Composable fun TestPage() = Unit\n", encoding="utf-8")
+            with zipfile.ZipFile(archive, "w") as zip_file:
+                zip_file.writestr(
+                    "design/index.html",
+                    '<div class="page flex-col"><img class="flex-row back_button" '
+                    'src="./img/SketchPng0c6fdffe.png" /></div>',
+                )
+                zip_file.writestr(
+                    "design/index.css",
+                    ".flex-col .summary_panel { background: url(./img/39dc4c3c_mergeImage.png); }\n"
+                    ".flex-row { background: url(./img/utilityOnly.png); }",
+                )
+                zip_file.writestr("design/img/SketchPng0c6fdffe.png", b"back")
+                zip_file.writestr("design/img/39dc4c3c_mergeImage.png", b"panel")
+                zip_file.writestr("design/img/utilityOnly.png", b"utility")
+
+            environment = dict(os.environ)
+            environment["HOME"] = str(root / "home")
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(SCRIPT),
+                    "--zip",
+                    str(archive),
+                    "--compose",
+                    str(compose),
+                    "--project-root",
+                    str(root),
+                    "--apply",
+                ],
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+            self.assertEqual(result.returncode, 0, result.stderr)
+            target = root / "app/src/main/res/mipmap-xxhdpi"
+            self.assertTrue((target / "icon_test_back_button.png").is_file())
+            self.assertTrue((target / "icon_test_summary_panel.png").is_file())
+            source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+            manifest = root / ".code-lanhu-compose" / f"design-{source_hash[:6]}" / "images.json"
+            names = {item["sourcePath"]: item["assetName"] for item in json.loads(manifest.read_text())["images"]}
+            self.assertIsNone(names["design/img/utilityOnly.png"])
+
 
 if __name__ == "__main__":
     unittest.main()

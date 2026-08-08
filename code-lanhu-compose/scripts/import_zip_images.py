@@ -15,6 +15,8 @@ from zipfile import ZipFile
 
 IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 CODE_IMAGE_SCRIPT = Path(__file__).resolve().parents[2] / "code-image/scripts/normalize_images.py"
+LAYOUT_UTILITY_CLASSES = frozenset({"flex-row", "flex-col"})
+SELECTOR_TOKEN_PATTERN = re.compile(r"([.#])([A-Za-z][A-Za-z0-9_-]*)")
 
 
 def sha256_file(path: Path) -> str:
@@ -136,9 +138,22 @@ def attribute_value(attributes: str, name: str) -> str | None:
     return match.group(2) if match else None
 
 
+def class_tokens(value: str | None) -> list[str]:
+    return value.split() if value else []
+
+
+def semantic_class_name(value: str | None) -> str | None:
+    """返回节点或资源的主类；蓝湖 flex 工具类不承担命名语义。"""
+    return next((token for token in class_tokens(value) if token not in LAYOUT_UTILITY_CLASSES), None)
+
+
 def selector_asset_name(selector: str) -> str | None:
-    match = re.search(r"[.#]([A-Za-z][A-Za-z0-9_-]*)", selector)
-    return match.group(1) if match else None
+    """从 CSS 目标选择器提取非布局工具的节点名或 ID。"""
+    for marker, name in reversed(SELECTOR_TOKEN_PATTERN.findall(selector)):
+        if marker == "." and name in LAYOUT_UTILITY_CLASSES:
+            continue
+        return name
+    return None
 
 
 def lanhu_asset_names(extraction_root: Path, image_entries: list[tuple[PurePosixPath, Path]]) -> dict[PurePosixPath, str]:
@@ -151,7 +166,7 @@ def lanhu_asset_names(extraction_root: Path, image_entries: list[tuple[PurePosix
         for attributes in re.findall(r"<img\b([^>]*)>", content, flags=re.IGNORECASE | re.DOTALL):
             source = attribute_value(attributes, "src")
             classes = attribute_value(attributes, "class")
-            name = (classes or attribute_value(attributes, "id") or "").split()[0]
+            name = semantic_class_name(classes) or attribute_value(attributes, "id")
             resolved = resolve_asset_reference(relative_document, source) if source else None
             if resolved in image_paths and name and resolved not in names:
                 names[resolved] = name
