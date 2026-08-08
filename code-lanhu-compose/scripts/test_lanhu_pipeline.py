@@ -117,6 +117,40 @@ class LanhuPipelineContractTest(unittest.TestCase):
             self.assertFalse(state_path.exists())
             self.assertFalse(PIPELINE.is_pid_alive(started["pid"]))
 
+    def test_采集设计会写入中文设计解析文件(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr(
+                    "lanhu/index.html",
+                    "<html><head><link href=\"style.css\" rel=\"stylesheet\"></head>"
+                    "<body><main class=\"page\"><span class=\"title\">设计标题</span></main></body></html>",
+                )
+                zipped.writestr(
+                    "lanhu/style.css",
+                    ".page { width: 320px; height: 180px; padding: 12px; background: #ffffff; }"
+                    ".title { color: rgb(1, 2, 3); font-size: 20px; }",
+                )
+
+            inspected = PIPELINE.inspect_archive(archive, project_root)
+            PIPELINE.start_design_server(archive, project_root)
+            try:
+                result = PIPELINE.capture_rendered_design(archive, project_root)
+            finally:
+                PIPELINE.stop_design_server(archive, project_root)
+
+            design_path = Path(result["designPath"])
+            design = json.loads(design_path.read_text(encoding="utf-8"))
+            self.assertEqual(design_path.name, "设计解析.json")
+            self.assertEqual(Path(result["screenshotPath"]).name, "设计截图.png")
+            self.assertTrue(Path(result["screenshotPath"]).is_file())
+            self.assertEqual(design["sourceSha256"], inspected["sourceSha256"])
+            self.assertEqual(design["设计根节点"]["选择器"], ".page")
+            self.assertEqual(design["设计画布"]["宽度像素"], 344)
+            self.assertEqual(design["设计画布"]["高度像素"], 204)
+
     def test_design_screenshot_registration_always_reclaims_server(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -131,7 +165,11 @@ class LanhuPipelineContractTest(unittest.TestCase):
 
             inspected = PIPELINE.inspect_archive(archive, project_root)
             started = PIPELINE.start_design_server(archive, project_root)
-            image = Path(inspected["artifactPath"]) / "runs" / "test-run" / "lanhu-design.png"
+            PIPELINE.atomic_json(
+                Path(inspected["artifactPath"]) / "设计解析.json",
+                {"sourceSha256": inspected["sourceSha256"]},
+            )
+            image = Path(inspected["artifactPath"]) / "runs" / "test-run" / "设计截图.png"
             image.parent.mkdir(parents=True)
             image.write_bytes(b"png")
 

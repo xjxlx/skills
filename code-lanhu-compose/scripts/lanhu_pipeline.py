@@ -44,6 +44,8 @@ ALLOWED_ACTIONS = {"ask_user", "apply_patch", "continue", "stop"}
 SAFE_TASK = re.compile(r"^:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
 SAFE_SERIAL = re.compile(r"^[A-Za-z0-9_.:-]+$")
 DESIGN_SERVER_PROCESSES: dict[int, subprocess.Popen[Any]] = {}
+DESIGN_DOCUMENT_NAME = "设计解析.json"
+CHROME_EXECUTABLE = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 
 
 class PipelineError(RuntimeError):
@@ -358,14 +360,147 @@ def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dic
     return {"artifactPath": str(artifact), "statePath": str(state_path), **state}
 
 
+def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]:
+    """读取本机浏览器最终渲染结果，并原子写入可追溯的设计解析文件。"""
+    artifact, source, _ = load_source(archive, project_root)
+    state_path = design_server_state_path(artifact)
+    if not state_path.is_file():
+        raise PipelineError("尚未启动设计稿静态服务，请先执行 start-design-server")
+    try:
+        server = json.loads(state_path.read_text(encoding="utf-8"))
+        if server.get("sourceSha256") != source["sourceSha256"]:
+            raise PipelineError("设计稿静态服务与当前 ZIP 不匹配")
+        if not is_pid_alive(int(server["pid"])):
+            raise PipelineError("设计稿静态服务已停止，请重新执行 start-design-server")
+        url = str(server["url"])
+    except (KeyError, TypeError, ValueError, OSError) as error:
+        raise PipelineError(f"静态服务状态文件无效：{state_path}") from error
+
+    if not CHROME_EXECUTABLE.is_file():
+        raise PipelineError(f"未找到本机 Google Chrome，无法采集最终布局：{CHROME_EXECUTABLE}")
+    try:
+        from playwright.sync_api import Error as PlaywrightError
+        from playwright.sync_api import sync_playwright
+    except ImportError as error:
+        raise PipelineError("缺少 Playwright，无法采集浏览器最终布局") from error
+
+    script = """
+        () => {
+          const root = document.querySelector('.page');
+          if (!root) return null;
+          const rect = (node) => {
+            const value = node.getBoundingClientRect();
+            return { x: value.x, y: value.y, width: value.width, height: value.height };
+          };
+          const visible = (style, bounds) =>
+            style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 &&
+            bounds.width > 0 && bounds.height > 0;
+          const styleData = (style) => ({
+            display: style.display, flexDirection: style.flexDirection, justifyContent: style.justifyContent,
+            alignItems: style.alignItems, gap: style.gap, padding: style.padding, margin: style.margin,
+            overflow: style.overflow, color: style.color, backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage, border: style.border, borderRadius: style.borderRadius,
+            boxShadow: style.boxShadow, opacity: style.opacity, zIndex: style.zIndex, transform: style.transform,
+            fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight,
+            lineHeight: style.lineHeight, letterSpacing: style.letterSpacing, textAlign: style.textAlign,
+            objectFit: style.objectFit
+          });
+          const nodes = [];
+          const walk = (node, parentIndex) => {
+            const bounds = rect(node);
+            const style = getComputedStyle(node);
+            const index = nodes.length;
+            nodes.push({
+              parentIndex, tag: node.tagName.toLowerCase(), id: node.id || null,
+              classNames: Array.from(node.classList), text: Array.from(node.childNodes)
+                .filter((child) => child.nodeType === Node.TEXT_NODE)
+                .map((child) => child.textContent.trim()).filter(Boolean).join(' '),
+              bounds, visible: visible(style, bounds), style: styleData(style)
+            });
+            Array.from(node.children).forEach((child) => walk(child, index));
+          };
+          walk(root, null);
+          return {
+            root: { selector: '.page', bounds: rect(root) },
+            browser: { userAgent: navigator.userAgent, viewport: { width: window.innerWidth, height: window.innerHeight } },
+            nodes,
+            images: Array.from(root.querySelectorAll('img')).map((image) => ({
+              source: image.currentSrc || image.src, naturalWidth: image.naturalWidth,
+              naturalHeight: image.naturalHeight, bounds: rect(image), objectFit: getComputedStyle(image).objectFit
+            }))
+          };
+        }
+    """
+    try:
+        with sync_playwright() as runtime:
+            browser = runtime.chromium.launch(headless=True, executable_path=str(CHROME_EXECUTABLE))
+            try:
+                page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1)
+                page.goto(url, wait_until="networkidle")
+                page.evaluate("() => document.fonts.ready")
+                result = page.evaluate(script)
+            finally:
+                browser.close()
+    except PlaywrightError as error:
+        raise PipelineError(f"浏览器采集设计失败：{error}") from error
+    if result is None:
+        raise UserInputRequired("设计页未找到 .page 根节点，无法确定有效截图区域")
+
+    bounds = result["root"]["bounds"]
+    design = {
+        "版本": 1,
+        "来源名称": source["sourceName"],
+        "来源路径": source["sourcePath"],
+        "sourceSha256": source["sourceSha256"],
+        "入口文件": source["html"]["path"],
+        "样式文件": [item["path"] for item in source["css"]],
+        "设计画布": {"宽度像素": round(bounds["width"]), "高度像素": round(bounds["height"])},
+        "设计根节点": {"选择器": result["root"]["selector"], "边界": bounds},
+        "浏览器环境": result["browser"],
+        "节点": result["nodes"],
+        "图片资源": result["images"],
+        "采集时间": utc_now(),
+    }
+    design_path = artifact / DESIGN_DOCUMENT_NAME
+    atomic_json(design_path, design)
+    run_dir = artifact / "runs" / datetime.now().strftime("%Y%m%d-%H%M%S")
+    if run_dir.exists():
+        raise PipelineError(f"本秒已有设计截图运行目录，请稍后重试：{run_dir}")
+    run_dir.mkdir(parents=True)
+    screenshot_path = run_dir / "设计截图.png"
+    try:
+        with sync_playwright() as runtime:
+            browser = runtime.chromium.launch(headless=True, executable_path=str(CHROME_EXECUTABLE))
+            try:
+                page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1)
+                page.goto(url, wait_until="networkidle")
+                page.locator(design["设计根节点"]["选择器"]).screenshot(path=str(screenshot_path))
+            finally:
+                browser.close()
+    except PlaywrightError as error:
+        raise PipelineError(f"浏览器截取设计图失败：{error}") from error
+    return {
+        "artifactPath": str(artifact),
+        "designPath": str(design_path),
+        "screenshotPath": str(screenshot_path),
+        "设计根节点": design["设计根节点"],
+    }
+
+
 def complete_design_screenshot(archive: Path, project_root: Path, image: Path) -> dict[str, Any]:
     """登记浏览器已保存的设计截图，并在任何结果下回收本地静态服务。"""
-    artifact, _, state = load_source(archive, project_root)
+    artifact, source, state = load_source(archive, project_root)
     try:
+        design_path = artifact / DESIGN_DOCUMENT_NAME
+        if not design_path.is_file():
+            raise PipelineError(f"缺少设计解析结果，无法登记设计截图：{design_path}")
+        design = json.loads(design_path.read_text(encoding="utf-8"))
+        if design.get("sourceSha256") != source["sourceSha256"]:
+            raise PipelineError(f"设计解析结果与当前 ZIP 不匹配：{design_path}")
         image = image.expanduser().resolve()
         runs_root = (artifact / "runs").resolve()
-        if runs_root not in image.parents or image.name != "lanhu-design.png" or not image.is_file():
-            raise PipelineError("设计截图必须是 artifact/runs/<run>/lanhu-design.png")
+        if runs_root not in image.parents or image.name != "设计截图.png" or not image.is_file():
+            raise PipelineError("设计截图必须位于 artifact/runs/<运行目录>/设计截图.png")
         state["designScreenshot"] = {"image": str(image), "capturedAt": utc_now()}
         state.setdefault("history", []).append({"phase": "design_screenshot", "at": utc_now(), "detail": state["designScreenshot"]})
         _write_state(artifact, state)
@@ -529,7 +664,7 @@ def screenshot_k80(archive: Path, project_root: Path, serial: str, expected_avd:
     if artifact not in destination.parents:
         raise PipelineError("截图目录必须位于本次 artifact 目录内")
     destination.mkdir(parents=True, exist_ok=True)
-    image = destination / "app-screenshot.png"
+    image = destination / "应用截图-01.png"
     with image.open("wb") as output:
         result = subprocess.run(["adb", "-s", serial, "exec-out", "screencap", "-p"], stdout=output, stderr=subprocess.PIPE, check=False)
     if result.returncode != 0:
@@ -580,7 +715,7 @@ def complete_pipeline(archive: Path, project_root: Path) -> dict[str, Any]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="固定执行 code-lanhu-compose 的可重放流程")
+    parser = argparse.ArgumentParser(description="固定执行蓝湖 Compose 还原流程")
     subparsers = parser.add_subparsers(dest="command", required=True)
     inspect = subparsers.add_parser("inspect")
     inspect.add_argument("--zip", required=True, type=Path)
@@ -623,6 +758,9 @@ def build_parser() -> argparse.ArgumentParser:
     start_design_server_command.add_argument("--zip", required=True, type=Path)
     start_design_server_command.add_argument("--project-root", required=True, type=Path)
     start_design_server_command.add_argument("--port", type=int, default=0)
+    capture_design = subparsers.add_parser("采集设计", help="采集浏览器最终布局并写入设计解析文件")
+    capture_design.add_argument("--zip", required=True, type=Path)
+    capture_design.add_argument("--project-root", required=True, type=Path)
     screenshot_design = subparsers.add_parser("screenshot-design")
     screenshot_design.add_argument("--zip", required=True, type=Path)
     screenshot_design.add_argument("--project-root", required=True, type=Path)
@@ -695,6 +833,8 @@ def main(argv: list[str] | None = None) -> int:
             result = screenshot_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.run_dir)
         elif args.command == "start-design-server":
             result = start_design_server(args.zip, args.project_root, args.port)
+        elif args.command == "采集设计":
+            result = capture_rendered_design(args.zip, args.project_root)
         elif args.command == "screenshot-design":
             result = complete_design_screenshot(args.zip, args.project_root, args.image)
         elif args.command == "stop-design-server":

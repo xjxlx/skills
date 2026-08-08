@@ -10,11 +10,12 @@ inspect -> validate -> preflight -> assets -> mark-generated -> compile
                                       \-> repair（最多三轮后回到 compile）
 ```
 
-设计稿浏览器截图是 `inspect` 后可执行的独立证据生命周期，不改变 Android 编译阶段：
+设计稿浏览器采集与截图是 `inspect` 后可执行的独立证据生命周期，不改变 Android 编译阶段：
 
 ```text
-start-design-server -> Codex 浏览器截取设计根节点 -> screenshot-design（登记并停止服务）
-                                                      \-> stop-design-server（浏览器失败时清理）
+start-design-server -> 采集设计（写入设计解析.json 与 设计截图.png）
+                    -> screenshot-design（登记并停止服务）
+                    \-> stop-design-server（采集失败时清理）
 ```
 
 每个阶段都必须使用脚本子命令，阶段不能跳过。`assets` 只调用现有的 `import_zip_images.py`；Gradle 只接受明确的 `:module:task`，并在项目根目录优先运行 `./gradlew`（仅 Wrapper 缺失且系统存在 `gradle` 时回退）；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。
@@ -24,8 +25,10 @@ start-design-server -> Codex 浏览器截取设计根节点 -> screenshot-design
 ```bash
 python3 scripts/lanhu_pipeline.py inspect --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py start-design-server --zip <zip> --project-root <project>
-# 用返回的 url 在 Codex 浏览器保存 <run>/lanhu-design.png 后：
-python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <project> --image <run>/lanhu-design.png
+# 采集浏览器最终布局，并写入本次 ZIP 的 设计解析.json：
+python3 scripts/lanhu_pipeline.py 采集设计 --zip <zip> --project-root <project>
+# 从采集结果的 screenshotPath 取得 <运行目录>/设计截图.png 后：
+python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <project> --image <运行目录>/设计截图.png
 # 若浏览器操作失败，仍必须执行：
 python3 scripts/lanhu_pipeline.py stop-design-server --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py validate --zip <zip> --project-root <project> --compose <Compose.kt>

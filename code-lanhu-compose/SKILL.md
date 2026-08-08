@@ -14,7 +14,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 不调用、不继承旧 `$code-compose`，也不读取它的规则或缓存。
 - 图片接入时调用 `$code-image`；对蓝湖 ZIP 中每个未在来源清单命中的内容 Hash 分别传递一次 `--image`、目标 Compose 文件和项目根目录，不调用其 ZIP 批量入口，也不复制其内部规则。
 - 模拟器验证能力可用时调用 `test-android-apps:android-emulator-qa`；不可用时才执行本 Skill 规定的显式 ADB 流程。
-- 以 `scripts/lanhu_pipeline.py` 作为固定编排入口；大模型只选择脚本子命令或提交契约化 JSON 决策，不得临时生成同职责脚本或绕过状态机。
+- 以 `scripts/lanhu_pipeline.py` 作为固定编排入口；先启动本机设计服务，再执行 `采集设计` 生成浏览器最终布局；大模型只选择脚本子命令或提交契约化 JSON 决策，不得临时生成同职责脚本或绕过状态机。
 - 无法从设计、编译或截图证据确定语义时，写入 `needs-user-input.json` 并暂停，交由用户确认，不用猜测推进。
 
 ## 必需输入
@@ -36,11 +36,11 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 确认 ZIP、当前工作目录中的 Android 项目、目标模块和构建入口可访问；在项目根目录优先执行 `./gradlew`，仅当 Wrapper 缺失且系统存在 `gradle` 时才回退到 `gradle`。
 - 在解析 ZIP、导入图片或生成 Compose 前，从项目任务列表确定唯一最小相关编译任务并执行一次 Gradle 编译。编译失败时立即停止本次 Skill：只报告该次命令和首个可行动的失败原因，不再运行其他 Gradle 任务，也不继续检查、解析或修改任何设计与资源文件。
 - 计算 ZIP 完整 SHA-256；禁止根据文件名判断是否为同一设计。
-- 以规范化的 ZIP 文件名和完整 SHA-256 前六位确定本次专属工作目录：`.code-lanhu-compose/<zip-stem>-<sha256前6位>/`。目录内保存 `design.json`、`images.json` 与 `runs/`；完整 SHA-256 必须写入 JSON 供身份校验。
+- 以规范化的 ZIP 文件名和完整 SHA-256 前六位确定本次专属工作目录：`.code-lanhu-compose/<zip-stem>-<sha256前6位>/`。目录内保存 `设计解析.json`、`images.json` 与 `runs/`；完整 SHA-256 必须写入 JSON 供身份校验。
 - 安全解压到当前用户下载目录的 `<zip-stem>-<sha256前6位>/`，解压前拒绝绝对路径、`..` 路径穿越和指向目录外的符号链接。
 - 找到唯一有效的 `index.html`，并找到它实际引用的 `index.css`。存在多个候选页面根目录时，列出候选并让用户选择。
 - 缺少入口、CSS 无法加载或资源路径越界时停止，不生成猜测代码。
-- 创建或复用截图运行目录前，必须确认本次专属工作目录中的 `design.json` 存在、可解析且其 `sourceSha256` 与当前 ZIP 一致；缺失时先完成设计解析写入，不得只创建 `runs/` 并把截图当作完整缓存。
+- 创建或复用截图运行目录前，必须先执行 `start-design-server` 与 `采集设计`，并确认本次专属工作目录中的 `设计解析.json` 存在、可解析且其 `sourceSha256` 与当前 ZIP 一致；缺失时不得只创建 `runs/` 并把截图当作完整缓存。
 
 缓存目录和设计产物遵循 [缓存与设计解析](references/cache-and-parsing.md)。缓存只复用设计解析结果，不复用最终 Compose 代码。
 
@@ -49,10 +49,10 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 以 `index.html` 的 DOM 父子关系建立结构树。
 - 拆分每个 `class` 的 token：节点和资源命名优先使用非 `flex-row`/`flex-col` 的主类；这两个工具类不单独生成设计节点或 Compose 组件。若实际加载的 CSS 为工具类声明样式，仍须参与层叠，布局方向以 `getComputedStyle()` 最终值映射为 `Row` 或 `Column`。
 - `inspect` 会写入 `repeated-block-candidates.json`：同一单位的宽、高、背景宽和背景高的总范围均不超过 `2`、且至少有两个共享父节点的兄弟项时，先按数据列表生成。候选的横竖方向只能由共享父节点的最终 DOM 布局决定；没有最终坐标证据时不得猜测方向或滚动性。
-- 在浏览器中加载页面，等待字体和图片完成，读取 `getComputedStyle()`、`getBoundingClientRect()`、可见性、层叠顺序、变换和最终资源 URL。
+- 通过 `start-design-server` 启动本机服务后执行 `采集设计`；该命令使用本机 Chrome 等待字体和图片完成，读取 `getComputedStyle()`、`getBoundingClientRect()`、可见性、层叠顺序、变换和最终资源 URL。
 - 同时处理继承、层叠覆盖、行内样式、flex 计算、绝对定位、伪元素、字体加载、遮挡和 `z-index`。
 - 保留“声明来源”和“最终计算结果”：前者用于判断间距归属，后者用于确认最终边界和视觉验证。
-- 将标准化设计 JSON 原子写入本次专属工作目录的 `design.json`。相同完整 SHA-256 的 ZIP 可以更新覆盖该目录内的当前产物；不同完整 SHA-256 禁止写入同一目录。
+- 将标准化设计 JSON 原子写入本次专属工作目录的 `设计解析.json`。相同完整 SHA-256 的 ZIP 可以更新覆盖该目录内的当前产物；不同完整 SHA-256 禁止写入同一目录。
 
 详细字段和缓存命中条件见 [缓存与设计解析](references/cache-and-parsing.md)。
 
@@ -97,7 +97,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 ### 6. 截图、对比和最多三轮修正
 
-- 设计稿先用 `start-design-server` 启动只监听 `127.0.0.1` 的静态服务，再让 Codex 浏览器访问命令返回的 `url` 截取设计根节点；保存完成后必须调用 `screenshot-design --image <run>/lanhu-design.png`，该命令无论截图校验成功或失败都会停止本次静态服务。去掉蓝湖预览外壳的缩小变换，但保留设计元素自身的变换。
+- 设计稿先用 `start-design-server` 启动只监听 `127.0.0.1` 的静态服务，再执行 `采集设计`。该命令写入最终布局并按解析出的设计根节点保存 `<运行目录>/设计截图.png`；随后必须调用 `screenshot-design --image <运行目录>/设计截图.png`。该命令无论截图校验成功或失败都会停止本次静态服务。去掉蓝湖预览外壳的缩小变换，但保留设计元素自身的变换。
 - 将设计截图与 App 截图裁剪到相同有效区域，并统一画布尺寸、系统栏、颜色空间和缩放比例。
 - 逐项比较整体布局、元素边界、文本基线、字号、行高、字距、间距、颜色、圆角、阴影、图片裁剪和遮挡关系。
 - 初次生成后最多执行三轮“修正 → 编译 → 安装/运行 → 截图 → 对比”。达到目标、连续修正无改善或遇到外部阻塞时提前停止。

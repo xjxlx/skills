@@ -6,18 +6,18 @@
 
 ```text
 <project>/.code-lanhu-compose/<zip-stem>-<sha256前6位>/runs/yyyyMMdd-HHmmss/
-├── lanhu-design.png
-├── app-screenshot-01.png
-├── app-screenshot-02.png
-├── diff-01.json
+├── 设计截图.png
+├── 应用截图-01.png
+├── 应用截图-02.png
+├── 差异-01.json
 └── logs/
 ```
 
-把最近一次设计稿截图复制到 `~/Downloads/lanhu_design.png`，最近一次 App 截图复制到 `~/Downloads/app_screenshot.png`。下载目录文件允许覆盖，`runs/` 内历史证据不得覆盖。
+把最近一次设计稿截图复制到 `~/Downloads/设计截图.png`，最近一次 App 截图复制到 `~/Downloads/应用截图.png`。下载目录文件允许覆盖，`runs/` 内历史证据不得覆盖。
 
-同一运行目录内的 App 截图从 `app-screenshot-01.png` 开始按截图顺序递增为 `02`、`03`……；设计稿截图固定命名为 `lanhu-design.png`。多轮修正不得覆盖已有截图。
+同一运行目录内的 App 截图从 `应用截图-01.png` 开始按截图顺序递增为 `02`、`03`……；设计稿截图固定命名为 `设计截图.png`。多轮修正不得覆盖已有截图。
 
-创建本目录前必须确认当前 ZIP 专属目录中的 `design.json` 已完成，且其完整 `sourceSha256` 与当前 ZIP 一致；只有运行目录而没有设计 JSON 的结果属于不完整证据，必须先回到设计解析阶段补齐。
+创建本目录前必须确认当前 ZIP 专属目录中的 `设计解析.json` 已完成，且其完整 `sourceSha256` 与当前 ZIP 一致；只有运行目录而没有设计解析文件的结果属于不完整证据，必须先回到设计解析阶段补齐。
 
 ## 设计稿截图
 
@@ -27,27 +27,19 @@
 python3 scripts/lanhu_pipeline.py start-design-server --zip <zip> --project-root <project>
 ```
 
-读取返回 JSON 的 `url`，让 Codex 浏览器访问它。等待页面资源完成后截取解析阶段确定的设计根节点：
-
-```javascript
-await page.evaluate(() => document.fonts.ready);
-await page.waitForLoadState("networkidle");
-const element = await page.$(".page");
-if (!element) throw new Error("未找到设计根节点 .page");
-await element.screenshot({ path: "<run-dir>/lanhu-design.png" });
-```
+随后执行 `采集设计`。该命令使用本机 Chrome 等待页面资源完成，采集最终 DOM、计算样式与有效边界，写入 `设计解析.json`，并按其中的设计根节点自动保存 `<运行目录>/设计截图.png`。
 
 根节点选择器必须来自解析结果，`.page` 只是蓝湖常见示例。去掉预览外壳的缩小 `transform`，保留设计元素自身的 transform；固定 viewport、背景和 `deviceScaleFactor`。
 
 截图保存后立即登记并回收服务；即使图片路径、选择器或浏览器操作失败，也必须执行 `stop-design-server`：
 
 ```bash
-python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <project> --image <run-dir>/lanhu-design.png
+python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <project> --image <运行目录>/设计截图.png
 # 浏览器截图失败时改为执行：
 python3 scripts/lanhu_pipeline.py stop-design-server --zip <zip> --project-root <project>
 ```
 
-服务固定绑定 `127.0.0.1`，端口默认由系统自动分配。`screenshot-design` 会校验图片位于本次 artifact 的 `runs/` 目录且命名为 `lanhu-design.png`，随后停止脚本自身启动且已核验的 `http.server` PID；它不会终止用户手动启动的其他服务。
+服务固定绑定 `127.0.0.1`，端口默认由系统自动分配。`screenshot-design` 会校验图片位于本次 artifact 的 `runs/` 目录且命名为 `设计截图.png`，随后停止脚本自身启动且已核验的 `http.server` PID；它不会终止用户手动启动的其他服务。
 
 ## App 截图
 
@@ -55,7 +47,7 @@ python3 scripts/lanhu_pipeline.py stop-design-server --zip <zip> --project-root 
 
 ```bash
 adb -s <serial> shell screencap -p /sdcard/lanhu_compose_screen.png
-adb -s <serial> pull /sdcard/lanhu_compose_screen.png <run-dir>/app-screenshot-01.png
+adb -s <serial> pull /sdcard/lanhu_compose_screen.png <运行目录>/应用截图-01.png
 ```
 
 截图前必须完成启动稳定性检查：等待启动页/启动图标消失，确认目标 Activity 已处于 resumed 状态，并通过 UI 树、页面标识或稳定的目标节点确认目标页面已显示；连续两次检查结果一致后，才允许截图。空白加载态、启动图、首页或过渡动画截图必须标记为无效证据，不得用于视觉对比。
