@@ -22,7 +22,7 @@
 
 ## 图片导入清单
 
-蓝湖 HTML/CSS ZIP 不是 `$code-image --zip` 所需的 `mipmap*` 资源包。先运行本 Skill 的逐图协调脚本：
+蓝湖 HTML/CSS ZIP 不是 `$code-image --zip` 所需的 `mipmap*` 资源包。图片解压、路径解析、Hash、资源命名和清单写入都由 Python 完成；先运行本 Skill 的逐图协调脚本：
 
 ```bash
 python3 scripts/import_zip_images.py \

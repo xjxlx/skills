@@ -41,7 +41,10 @@ PHASES = (
     "completed",
 )
 ALLOWED_ACTIONS = {"ask_user", "apply_patch", "continue", "stop"}
-SAFE_TASK = re.compile(r"^:[A-Za-z0-9_.-]+:[A-Za-z0-9_.-]+$")
+SAFE_TASK = re.compile(r"^:(?:[A-Za-z0-9_.-]+:)*[A-Za-z0-9_.-]+$")
+GRADLE_COMPILE_TASK = re.compile(
+    r"^\s*((?::?[A-Za-z0-9_.-]+:)*compile[A-Za-z0-9_.-]*Kotlin)\s+-"
+)
 SAFE_SERIAL = re.compile(r"^[A-Za-z0-9_.:-]+$")
 DESIGN_SERVER_PROCESSES: dict[int, subprocess.Popen[Any]] = {}
 DESIGN_DOCUMENT_NAME = "设计解析.json"
@@ -722,6 +725,72 @@ def gradle_command(project_root: Path) -> list[str]:
     raise PipelineError(f"项目根目录缺少 ./gradlew，且系统未安装 gradle：{root}")
 
 
+def compose_gradle_module(project_root: Path, compose_file: Path) -> str:
+    """根据目标 Compose 文件路径确定 Gradle 模块，避免由调用方猜 task。"""
+    root = project_root.expanduser().resolve()
+    target = compose_file.expanduser().resolve()
+    try:
+        relative = target.relative_to(root)
+    except ValueError as error:
+        raise PipelineError(f"Compose 文件必须位于项目根目录内：{target}") from error
+    parts = relative.parts
+    try:
+        source_index = parts.index("src")
+    except ValueError as error:
+        raise PipelineError(f"无法从 Compose 路径识别 Gradle 模块（缺少 src）：{target}") from error
+    module_parts = parts[:source_index]
+    return ":" + ":".join(module_parts) if module_parts else ""
+
+
+def _normalize_gradle_task(task: str) -> str:
+    value = task.strip()
+    return value if value.startswith(":") else f":{value}"
+
+
+def discover_compile_task(project_root: Path, compose_file: Path) -> str:
+    """由 Gradle 任务列表确定目标模块的稳定 Debug Kotlin 编译任务。"""
+    root = project_root.expanduser().resolve()
+    module = compose_gradle_module(root, compose_file)
+    result = subprocess.run(
+        [*gradle_command(root), "tasks", "--all", "--console=plain"],
+        cwd=root,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise PipelineError(f"无法读取 Gradle 任务列表：{result.stderr.strip() or result.stdout.strip()}")
+
+    candidates = []
+    for line in result.stdout.splitlines():
+        match = GRADLE_COMPILE_TASK.match(line)
+        if not match:
+            continue
+        task = _normalize_gradle_task(match.group(1))
+        if module and not task.startswith(f"{module}:"):
+            continue
+        task_name = task.rsplit(":", 1)[-1]
+        if "AndroidTest" in task_name or "UnitTest" in task_name or task_name.endswith("TestKotlin"):
+            continue
+        candidates.append(task)
+
+    candidates = sorted(set(candidates))
+    if not candidates:
+        raise PipelineError(f"未找到模块 {module or ':root'} 的 Kotlin 编译任务，不能让模型猜测 Gradle task")
+
+    exact_debug = [task for task in candidates if task.endswith(":compileDebugKotlin")]
+    if len(exact_debug) == 1:
+        return exact_debug[0]
+    debug_candidates = [task for task in candidates if task.endswith("DebugKotlin")]
+    if len(debug_candidates) == 1:
+        return debug_candidates[0]
+    if len(debug_candidates) > 1:
+        raise PipelineError(f"模块 {module or ':root'} 存在多个 Debug Kotlin 编译任务，请用户明确选择：{debug_candidates}")
+    if len(candidates) == 1:
+        return candidates[0]
+    raise PipelineError(f"模块 {module or ':root'} 的 Kotlin 编译任务存在歧义，请用户明确选择：{candidates}")
+
+
 def record_decision(archive: Path, project_root: Path, decision_path: Path) -> dict[str, Any]:
     artifact, source, state = load_source(archive, project_root)
     decision = validate_decision(json.loads(decision_path.read_text(encoding="utf-8")))
@@ -738,12 +807,15 @@ def record_decision(archive: Path, project_root: Path, decision_path: Path) -> d
     return {"artifactPath": str(artifact), "action": decision["action"], "phase": state["phase"]}
 
 
-def compile_project(archive: Path, project_root: Path, task: str) -> dict[str, Any]:
-    if not SAFE_TASK.fullmatch(task):
-        raise PipelineError(f"Gradle task 不在白名单中：{task}")
+def compile_project(archive: Path, project_root: Path, task: str | None = None) -> dict[str, Any]:
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] not in {"generated", "compiled"}:
         raise PipelineError(f"当前阶段不能 compile：{state['phase']}")
+    task = task or state.get("preflightTask")
+    if not isinstance(task, str) or not task:
+        raise PipelineError("compile 必须复用 Python preflight 已确定的任务")
+    if not SAFE_TASK.fullmatch(task):
+        raise PipelineError(f"Gradle task 不在白名单中：{task}")
     gradle = gradle_command(project_root)
     state["attempts"]["compile"] = state["attempts"].get("compile", 0) + 1
     if state.get("preflightTask") != task:
@@ -762,12 +834,19 @@ def compile_project(archive: Path, project_root: Path, task: str) -> dict[str, A
     return {"artifactPath": str(artifact), "phase": state["phase"], "log": str(log)}
 
 
-def preflight_project(archive: Path, project_root: Path, task: str) -> dict[str, Any]:
-    if not SAFE_TASK.fullmatch(task):
-        raise PipelineError(f"Gradle task 不在白名单中：{task}")
+def preflight_project(archive: Path, project_root: Path, task: str | None = None) -> dict[str, Any]:
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] not in {"validated", "preflight"}:
         raise PipelineError(f"当前阶段不能 preflight：{state['phase']}")
+    compose_file = state.get("composeFile")
+    if not isinstance(compose_file, str) or not compose_file:
+        raise PipelineError("preflight 缺少 Compose 文件，无法由 Python 解析 Gradle 模块")
+    task_source = "explicit-override"
+    if task is None:
+        task = discover_compile_task(project_root, Path(compose_file))
+        task_source = "python-discovered"
+    if not SAFE_TASK.fullmatch(task):
+        raise PipelineError(f"Gradle task 不在白名单中：{task}")
     gradle = gradle_command(project_root)
     log = artifact / "logs" / "preflight.log"
     result = _run_fixed([*gradle, task, "--console=plain"], project_root, log)
@@ -776,6 +855,7 @@ def preflight_project(archive: Path, project_root: Path, task: str) -> dict[str,
     if state["phase"] != "preflight":
         transition(state, "preflight", {"task": task, "log": str(log)})
     state["preflightTask"] = task
+    state["preflightTaskSource"] = task_source
     _write_state(artifact, state)
     return {"artifactPath": str(artifact), "phase": state["phase"], "log": str(log)}
 
@@ -905,11 +985,11 @@ def build_parser() -> argparse.ArgumentParser:
     preflight = subparsers.add_parser("preflight")
     preflight.add_argument("--zip", required=True, type=Path)
     preflight.add_argument("--project-root", required=True, type=Path)
-    preflight.add_argument("--task", required=True)
+    preflight.add_argument("--task", help="仅用户需要覆盖自动发现时提供；默认由 Python 根据 Compose 路径和 Gradle 任务列表确定")
     compile_command = subparsers.add_parser("compile")
     compile_command.add_argument("--zip", required=True, type=Path)
     compile_command.add_argument("--project-root", required=True, type=Path)
-    compile_command.add_argument("--task", required=True)
+    compile_command.add_argument("--task", help="默认复用 preflight 的 Python 任务；不应由模型传入")
     install = subparsers.add_parser("install-k80")
     install.add_argument("--zip", required=True, type=Path)
     install.add_argument("--project-root", required=True, type=Path)

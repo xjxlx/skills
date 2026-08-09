@@ -35,6 +35,45 @@ class LanhuPipelineContractTest(unittest.TestCase):
             with patch.object(PIPELINE.shutil, "which", return_value="/usr/local/bin/gradle"):
                 self.assertEqual(PIPELINE.gradle_command(Path(temp_dir)), ["gradle"])
 
+    def test_discover_compile_task_uses_target_module_debug_kotlin(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+            compose = root / "app" / "src" / "main" / "java" / "Page.kt"
+            compose.parent.mkdir(parents=True)
+            compose.write_text("", encoding="utf-8")
+            gradle_output = "\n".join(
+                [
+                    "app:compileReleaseKotlin - Compiles the release kotlin.",
+                    "app:compileDebugKotlin - Compiles the debug kotlin.",
+                    "app:compileDebugAndroidTestKotlin - Compiles the debug android test kotlin.",
+                    "common:compileDebugKotlin - Compiles the debug kotlin.",
+                ]
+            )
+            completed = SimpleNamespace(returncode=0, stdout=gradle_output, stderr="")
+            with patch.object(PIPELINE.subprocess, "run", return_value=completed):
+                self.assertEqual(
+                    PIPELINE.discover_compile_task(root, compose),
+                    ":app:compileDebugKotlin",
+                )
+
+    def test_discover_compile_task_stops_on_ambiguous_debug_variants(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+            compose = root / "app" / "src" / "main" / "java" / "Page.kt"
+            compose.parent.mkdir(parents=True)
+            compose.write_text("", encoding="utf-8")
+            completed = SimpleNamespace(
+                returncode=0,
+                stdout="app:compileFooDebugKotlin - Foo\napp:compileBarDebugKotlin - Bar\n",
+                stderr="",
+            )
+            with patch.object(PIPELINE.subprocess, "run", return_value=completed):
+                with self.assertRaises(PIPELINE.PipelineError) as error:
+                    PIPELINE.discover_compile_task(root, compose)
+            self.assertIn("多个 Debug Kotlin", str(error.exception))
+
     def test_inspect_writes_source_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

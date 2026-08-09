@@ -20,7 +20,7 @@ start-design-server -> 采集设计（缓存未命中时写入设计解析.json�
 完整设计缓存命中时，`start-design-server` 与 `采集设计` 都返回 `cacheHit: true`，不会启动静态服务、解压 ZIP 或启动浏览器；仍可调用 `screenshot-design` 登记公共设计图。
 ```
 
-每个阶段都必须使用脚本子命令，阶段不能跳过。`assets` 只调用现有的 `import_zip_images.py`；Gradle 只接受明确的 `:module:task`，并在项目根目录优先运行 `./gradlew`（仅 Wrapper 缺失且系统存在 `gradle` 时回退）；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。
+每个阶段都必须使用脚本子命令，阶段不能跳过。浏览器采集、资源 Hash、图片清单和 `assets` 均由 Python 固定执行，`assets` 只调用现有的 `import_zip_images.py`；`preflight` 根据目标 Compose 路径和 `gradlew tasks --all` 自动确定模块的 Debug Kotlin 任务，`compile` 只能复用状态中的任务。只有出现多个 Debug variant 或无法识别时才暂停请求用户；禁止模型传入临时 Gradle task。Gradle 在项目根目录优先运行 `./gradlew`（仅 Wrapper 缺失且系统存在 `gradle` 时回退）；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。
 
 `validate`、`mark-generated` 和 `compile` 会自动检查目标 Compose 源码中的 `padding(...)` 参数；发现负值时在生成或编译阶段立即停止，并要求改用 `Modifier.offset` 或父级布局表达跨边界位置，保留负位移语义并避免运行时 `PaddingElement` 崩溃。
 
@@ -36,10 +36,10 @@ python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <
 # 若浏览器操作失败，仍必须执行：
 python3 scripts/lanhu_pipeline.py stop-design-server --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py validate --zip <zip> --project-root <project> --compose <Compose.kt>
-python3 scripts/lanhu_pipeline.py preflight --zip <zip> --project-root <project> --task :app:compileDebugKotlin
+python3 scripts/lanhu_pipeline.py preflight --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py assets --zip <zip> --project-root <project> --compose <Compose.kt> --apply
 python3 scripts/lanhu_pipeline.py mark-generated --zip <zip> --project-root <project> --compose <Compose.kt>
-python3 scripts/lanhu_pipeline.py compile --zip <zip> --project-root <project> --task :app:compileDebugKotlin
+python3 scripts/lanhu_pipeline.py compile --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py install-k80 --zip <zip> --project-root <project> --serial emulator-5554 --expected-avd K80 --apk <apk>
 python3 scripts/lanhu_pipeline.py screenshot-k80 --zip <zip> --project-root <project> --serial emulator-5554 --expected-avd K80
 python3 scripts/lanhu_pipeline.py mark-diff --zip <zip> --project-root <project> --report <diff.json> --outcome pass
