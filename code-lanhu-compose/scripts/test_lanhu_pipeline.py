@@ -267,6 +267,22 @@ class LanhuPipelineContractTest(unittest.TestCase):
         PIPELINE.transition(state, "validated")
         self.assertEqual(state["phase"], "validated")
 
+    def test_compose_source_rejects_negative_padding(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            compose_path = Path(temp_dir) / "TestPage.kt"
+            compose_path.write_text(
+                "Box(modifier = Modifier.padding(top = scale.dp(57f), start = scale.dp(-8f)))",
+                encoding="utf-8",
+            )
+
+            with self.assertRaises(PIPELINE.PipelineError) as error:
+                PIPELINE.validate_compose_source(compose_path)
+
+            self.assertIn("padding", str(error.exception))
+            self.assertIn("非负", str(error.exception))
+            self.assertIn("start", str(error.exception))
+            self.assertIn("offset", str(error.exception))
+
     def test_decision_rejects_arbitrary_shell(self) -> None:
         with self.assertRaises(PIPELINE.PipelineError):
             PIPELINE.validate_decision({"action": "run_shell", "command": "rm -rf /"})

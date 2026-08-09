@@ -22,6 +22,8 @@ start-design-server -> 采集设计（缓存未命中时写入设计解析.json�
 
 每个阶段都必须使用脚本子命令，阶段不能跳过。`assets` 只调用现有的 `import_zip_images.py`；Gradle 只接受明确的 `:module:task`，并在项目根目录优先运行 `./gradlew`（仅 Wrapper 缺失且系统存在 `gradle` 时回退）；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。
 
+`validate`、`mark-generated` 和 `compile` 会自动检查目标 Compose 源码中的 `padding(...)` 参数；发现负值时在生成或编译阶段立即停止，并要求改用 `Modifier.offset` 或父级布局表达跨边界位置，保留负位移语义并避免运行时 `PaddingElement` 崩溃。
+
 常用入口：
 
 ```bash

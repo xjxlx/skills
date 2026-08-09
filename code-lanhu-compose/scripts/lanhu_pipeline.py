@@ -231,6 +231,57 @@ def load_source(archive: Path, project_root: Path) -> tuple[Path, dict[str, Any]
     return artifact, source, state
 
 
+def _compose_call_arguments(source: str, open_index: int) -> tuple[str, int]:
+    """读取 Compose 函数调用参数，支持 padding 内部的 dp(...) 嵌套调用。"""
+    depth = 0
+    quote: str | None = None
+    escaped = False
+    for index in range(open_index, len(source)):
+        character = source[index]
+        if quote is not None:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == quote:
+                quote = None
+            continue
+        if character in {"\"", "'"}:
+            quote = character
+        elif character == "(":
+            depth += 1
+        elif character == ")":
+            depth -= 1
+            if depth == 0:
+                return source[open_index + 1 : index], index
+    raise PipelineError("Compose 中存在未闭合的 padding(...) 调用")
+
+
+def validate_compose_source(compose_path: Path) -> None:
+    """在 Gradle/运行前拒绝 Compose padding 中的负值，避免运行时 PaddingElement 崩溃。"""
+    try:
+        source = compose_path.read_text(encoding="utf-8")
+    except OSError as error:
+        raise PipelineError(f"无法读取 Compose 文件：{compose_path}") from error
+
+    for match in re.finditer(r"\bpadding\s*\(", source):
+        arguments, _ = _compose_call_arguments(source, match.end() - 1)
+        negative = re.search(r"(?<![\w.])-\s*(?:[A-Za-z_][\w.]*|\d+(?:\.\d+)?(?:[fFdD])?)", arguments)
+        if negative is None:
+            continue
+        absolute_index = match.end() - 1 + 1 + negative.start()
+        line = source.count("\n", 0, absolute_index) + 1
+        preceding_argument = arguments[: negative.start()]
+        parameter_match = re.search(r"(?:^|,)\s*([A-Za-z_]\w*)\s*=\s*[^,]*$", preceding_argument, re.DOTALL)
+        parameter = parameter_match.group(1) if parameter_match else "未命名参数"
+        axis = "y" if parameter in {"top", "bottom"} else "x" if parameter in {"start", "end"} else "x/y"
+        raise PipelineError(
+            f"Compose 文件 {compose_path}:{line} 的 padding({parameter}) 包含负值；"
+            f"Compose padding 参数必须非负，请将该设计位移改为 Modifier.offset({axis} = ...) "
+            "或使用父级布局表达，保留原有视觉位移"
+        )
+
+
 def design_server_state_path(artifact: Path) -> Path:
     """返回本次 ZIP 专属的本地设计稿服务状态文件。"""
     return artifact / "design-server.json"
@@ -623,6 +674,7 @@ def validate_project(archive: Path, project_root: Path, compose_file: Path | Non
             raise PipelineError(f"Compose 目标必须位于项目根目录内：{target}")
         if not target.is_file():
             raise PipelineError(f"Compose 目标不存在：{target}")
+        validate_compose_source(target)
         state["composeFile"] = str(target)
     transition(state, "validated", {"composeFile": state.get("composeFile")})
     _write_state(artifact, state)
@@ -696,6 +748,10 @@ def compile_project(archive: Path, project_root: Path, task: str) -> dict[str, A
     state["attempts"]["compile"] = state["attempts"].get("compile", 0) + 1
     if state.get("preflightTask") != task:
         raise PipelineError(f"compile 必须复用 preflight 任务：{state.get('preflightTask')!r} != {task!r}")
+    compose_file = state.get("composeFile")
+    if not isinstance(compose_file, str) or not compose_file:
+        raise PipelineError("compile 缺少 Compose 文件，无法执行布局安全检查")
+    validate_compose_source(Path(compose_file))
     log = artifact / "logs" / f"compile-{state['attempts']['compile']:02d}.log"
     result = _run_fixed([*gradle, task, "--console=plain"], project_root, log)
     if result.returncode != 0:
@@ -929,6 +985,7 @@ def main(argv: list[str] | None = None) -> int:
             target = args.compose.resolve()
             if not target.is_file() or args.project_root.resolve() not in target.parents:
                 raise PipelineError(f"Compose 目标不存在或不在项目内：{target}")
+            validate_compose_source(target)
             state["composeFile"] = str(target)
             if state["phase"] != "generated":
                 transition(state, "generated", {"composeFile": str(target)})
