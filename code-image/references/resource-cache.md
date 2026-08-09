@@ -5,7 +5,7 @@
 每个来源身份维护一份可复用记录：
 
 ```text
-<project>/.code-image/<来源名>-<来源SHA-256前6位>.resources.json
+<project>/.code-image/<来源名>-<来源MD5前6位>.resources.json
 ```
 
 例如：`<project>/.code-image/1600-xxxxxx.resources.json`。ZIP 的来源名和 Hash 取 ZIP 本身，单图取图片本身；同一来源身份始终复用这一份记录。除 ZIP 按约定解压到 `~/Downloads/` 外，不得创建 `.code-image/` 之外的缓存或映射。JSON 写入时只在 `.code-image/` 内创建临时文件，再原子替换该来源清单。
@@ -17,10 +17,10 @@
   "version": 1,
   "resources": [
     {
-      "identity": "/Users/name/Downloads/Group 62.png:<sha256>",
+      "identity": "/Users/name/Downloads/Group 62.png:<md5>",
       "originalPath": "/Users/name/Downloads/Group 62.png",
       "originalName": "Group 62.png",
-      "originalHash": "sha256...",
+      "originalHash": "md5...",
       "outputPath": "app/src/main/res/mipmap-xxhdpi/icon_report_home_group_62.png",
       "outputName": "icon_report_home_group_62.png",
       "composeFile": "app/src/main/java/com/example/report/ReportHomePage.kt"

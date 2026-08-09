@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-09 20:47:05，由 github-manager 维护
+> 自动生成于 2026-08-09 21:09:02，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -61,7 +61,7 @@ graph LR
 - **目录名**：`code-image`
 - **用途**：Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并转换为合规 Android 资源名和稳定映射。
 - **依赖**：无
-- **文件数**：6
+- **文件数**：7
 - **UI 元数据**：有 agents/openai.yaml
 - **路径**：`~/.codex/skills/code-image/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-image

@@ -28,8 +28,8 @@ def md5_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def content_sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
+def content_md5_file(path: Path) -> str:
+    digest = hashlib.md5()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
@@ -285,7 +285,7 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
     records_by_hash = load_code_image_records_by_hash(resources_path) if apply else {}
     records = []
     for zip_entry, image_path in images:
-        content_hash = content_sha256_file(image_path)
+        content_hash = content_md5_file(image_path)
         asset_name = asset_names.get(zip_entry)
         record = records_by_hash.get(content_hash)
         if record is None:
@@ -306,7 +306,7 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
                 "extractedPath": str(image_path.resolve()),
                 "originalName": image_path.name,
                 "assetName": asset_name,
-                "sha256": content_hash,
+                "md5": content_hash,
                 "outputPath": record.get("outputPath") if record else None,
                 "outputName": record.get("outputName") if record else None,
                 "resourceManifest": project_relative(resources_path, project_root),

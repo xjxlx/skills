@@ -29,7 +29,7 @@ description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并�
 ## 导入位置
 
 - 单图：复制到 `<project>/app/src/main/res/mipmap-xxhdpi/`。
-- ZIP：先安全解压到 `~/Downloads/<zip-stem>-<zip-sha256前6位>/`，再将各图片复制到 `<project>/app/src/main/res/<ZIP 内对应的 mipmap 目录名>/`。
+- ZIP：先安全解压到 `~/Downloads/<zip-stem>-<zip-md5前6位>/`，再将各图片复制到 `<project>/app/src/main/res/<ZIP 内对应的 mipmap 目录名>/`。
 - 输出图片始终使用目标目录；不以输入图片原目录或示例中的 `mipmap-nodpi` 作为单图输出位置。
 
 ## 命名规则
@@ -42,7 +42,7 @@ description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并�
 
 ## 记录与改名
 
-每个来源身份在项目 `.code-image/` 使用一份可复用清单：`<来源名>-<来源SHA-256前6位>.resources.json`，例如 `1600-xxxxxx.resources.json`。同一 ZIP 或同一图片内容必须复用该清单、解压目录和已导入图片；只有来源 Hash 改变时才创建新批次。禁止使用共享 `resources.json`。记录格式见 [resource-cache.md](references/resource-cache.md)。
+每个来源身份在项目 `.code-image/` 使用一份可复用清单：`<来源名>-<来源MD5前6位>.resources.json`，例如 `1600-xxxxxx.resources.json`。同一 ZIP 或同一图片内容必须复用该清单、解压目录和已导入图片；只有来源 MD5 改变时才创建新批次。禁止使用共享 `resources.json`。记录格式见 [resource-cache.md](references/resource-cache.md)。
 
 每项记录原始路径和名称、原始 Hash、输出路径和名称、可选 Compose 文件及稳定身份。同一来源清单中相同内容且同目标密度只保留首个记录作为规范映射，后续 ZIP 条目直接复用它；不同来源清单互不读取、迁移或删除。协调脚本可通过 `--resources-file` 指定符合上述命名的清单。
 

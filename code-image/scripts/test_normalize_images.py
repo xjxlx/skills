@@ -70,7 +70,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertNotIn("resourceFamily", record)
         self.assertNotIn("updatedAt", record)
         self.assertFalse((self.project / ".code-image/resources.json").exists())
-        source_hash = hashlib.sha256(image.read_bytes()).hexdigest()
+        source_hash = hashlib.md5(image.read_bytes()).hexdigest()
         self.assertTrue(
             (self.project / ".code-image" / f"Group_62-{source_hash[:6]}.resources.json").is_file()
         )
@@ -217,7 +217,7 @@ class NormalizeImagesTest(unittest.TestCase):
         result = self.run_skill("--zip", archive)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+        source_hash = hashlib.md5(archive.read_bytes()).hexdigest()
         extracted = self.home / "Downloads" / f"design-{source_hash[:6]}"
         self.assertTrue((extracted / "design/app/src/main/res/mipmap-xhdpi/Group 62.png").is_file())
         self.assertTrue(
@@ -245,7 +245,7 @@ class NormalizeImagesTest(unittest.TestCase):
 
         result = self.run_skill("--zip", archive)
 
-        source_hash = hashlib.sha256(archive.read_bytes()).hexdigest()
+        source_hash = hashlib.md5(archive.read_bytes()).hexdigest()
         extracted = self.home / "Downloads" / f"not-mipmap-{source_hash[:6]}"
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--image", result.stderr)

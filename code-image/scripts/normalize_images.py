@@ -31,8 +31,8 @@ class RenamePlan:
     previous_target: Path | None
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
+def md5_file(path: Path) -> str:
+    digest = hashlib.md5()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
             digest.update(chunk)
@@ -56,7 +56,7 @@ def normalize_namespace(compose_path: Path) -> str:
     stem = re.sub(r"(?i)(?:layout|page)$", "", compose_path.stem)
     token = snake_token(stem)
     if not token:
-        token = "screen_" + hashlib.sha256(compose_path.stem.encode()).hexdigest()[:6]
+        token = "screen_" + hashlib.md5(compose_path.stem.encode()).hexdigest()[:6]
     return "screen_" + token if token[0].isdigit() else token
 
 
@@ -68,7 +68,7 @@ def normalize_asset_stem(original_stem: str, remove_copy_suffix: bool = True) ->
     )
     token = snake_token(without_copy_suffix)
     if not token:
-        token = "image_" + hashlib.sha256(original_stem.encode()).hexdigest()[:6]
+        token = "image_" + hashlib.md5(original_stem.encode()).hexdigest()[:6]
     return "image_" + token if token[0].isdigit() else token
 
 
@@ -103,7 +103,7 @@ def load_resources(path: Path) -> dict:
 
 def resources_path_for_source(project_root: Path, source_path: Path) -> Path:
     """以稳定来源身份定位可复用的资源清单。"""
-    source_hash = sha256_file(source_path)
+    source_hash = md5_file(source_path)
     prefix = f"{safe_token(source_path.stem)}-{source_hash[:6]}"
     return project_root / ".code-image" / f"{prefix}.resources.json"
 
@@ -200,7 +200,7 @@ def build_plan(
     target_dir = Path(target_dir).resolve()
     project_root = Path(project_root).resolve()
     current_path = relative_path(source, project_root)
-    file_hash = sha256_file(source)
+    file_hash = md5_file(source)
     manifest = load_resources(resources_path)
     record = _find_record(manifest["resources"], current_path, file_hash)
     if record is None:
@@ -260,7 +260,7 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
         plan.target.parent.mkdir(parents=True, exist_ok=True)
         if plan.source.resolve() != plan.target.resolve():
             if plan.target.exists() and plan.previous_target != plan.target:
-                if sha256_file(plan.target) != plan.file_hash:
+                if md5_file(plan.target) != plan.file_hash:
                     raise FileExistsError(f"目标文件已存在，拒绝覆盖：{plan.target}")
             else:
                 shutil.copyfile(plan.source, plan.target)
@@ -303,7 +303,7 @@ def archive_mipmap_directory(entry_name: str) -> str | None:
 
 
 def extract_zip_to_downloads(zip_path: Path) -> Path:
-    source_hash = sha256_file(zip_path)
+    source_hash = md5_file(zip_path)
     destination = Path.home() / "Downloads" / f"{safe_token(zip_path.stem)}-{source_hash[:6]}"
     with ZipFile(zip_path) as archive:
         entries = _safe_zip_entries(archive)
@@ -402,7 +402,7 @@ def main() -> int:
         plans = []
         for source, directory_name in zip_image_sources(extraction_root):
             target_dir = (res_root / directory_name).resolve()
-            source_hash = sha256_file(source)
+            source_hash = md5_file(source)
             if (target_dir, source_hash) in imported_hashes:
                 continue
             plan = build_plan(source, res_root / directory_name, project_root, compose, resources_path, reserved)
