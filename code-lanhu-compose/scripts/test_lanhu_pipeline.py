@@ -74,6 +74,42 @@ class LanhuPipelineContractTest(unittest.TestCase):
                     PIPELINE.discover_compile_task(root, compose)
             self.assertIn("多个 Debug Kotlin", str(error.exception))
 
+    def test_run_fixed_waits_for_compose_generation_before_compile(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            compose = project_root / "app" / "src" / "main" / "java" / "Page.kt"
+            compose.parent.mkdir(parents=True)
+            compose.write_text("@Composable fun Page() {}\n", encoding="utf-8")
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("index.html", '<link href="style.css" rel="stylesheet">')
+                zipped.writestr("style.css", ".page { width: 10px; }")
+
+            inspected = PIPELINE.inspect_archive(archive, project_root, compose)
+            artifact, _, state = PIPELINE.load_source(archive, project_root)
+            for phase in ("validated", "preflight", "assets_imported"):
+                PIPELINE.transition(state, phase)
+            state["composeFile"] = str(compose.resolve())
+            state["composeBaselineSha256"] = PIPELINE.sha256_file(compose)
+            PIPELINE._write_state(artifact, state)
+
+            with patch.object(PIPELINE, "ensure_design_evidence") as ensure_design, patch.object(
+                PIPELINE, "compile_project"
+            ) as compile_project:
+                waiting = PIPELINE.run_fixed_pipeline(archive, project_root, compose)
+                self.assertEqual(waiting["status"], "awaiting_compose_generation")
+                compile_project.assert_not_called()
+                ensure_design.assert_called_once()
+
+                compose.write_text("@Composable fun Page() { Text(\"generated\") }\n", encoding="utf-8")
+                compiled = PIPELINE.run_fixed_pipeline(archive, project_root, compose)
+                self.assertEqual(compiled["status"], "compile_started")
+                compile_project.assert_called_once_with(archive.resolve(), project_root.resolve())
+            _, _, updated = PIPELINE.load_source(archive, project_root)
+            self.assertEqual(updated["phase"], "generated")
+            self.assertNotEqual(updated["composeBaselineSha256"], PIPELINE.sha256_file(compose))
+
     def test_inspect_writes_source_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

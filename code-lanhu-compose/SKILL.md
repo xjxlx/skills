@@ -14,7 +14,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 不调用、不继承旧 `$code-compose`，也不读取它的规则或缓存。
 - 图片接入、内容 Hash、资源清单和浏览器最终布局采集均由 Python 固定脚本全权执行；图片接入时再调用 `$code-image` 这个确定性子工具。大模型不得参与 Hash、路径解析、资源命名或 DOM 采集，也不得修改原始 JSON 证据。
 - 模拟器验证能力可用时调用 `test-android-apps:android-emulator-qa`；不可用时才执行本 Skill 规定的显式 ADB 流程。
-- 以 `scripts/lanhu_pipeline.py` 作为固定编排入口；先启动本机设计服务，再执行 `采集设计` 生成浏览器最终布局。浏览器、资源和 Gradle 命令均由 Python 决定并执行；大模型不得替换参数、猜测任务或绕过状态机，只能提交页面语义相关的契约化 JSON 决策。
+- 以 `scripts/lanhu_pipeline.py run-fixed` 作为默认固定入口；它自动完成设计服务/浏览器采集、资源 Hash/导入、Gradle 任务发现和编译。浏览器、资源和 Gradle 命令均由 Python 决定并执行；大模型不得逐项调用或替换这些步骤，只能修改 Compose 并再次调用 `run-fixed`，或提交页面语义相关的契约化 JSON 决策。
 - 无法从设计、编译或截图证据确定语义时，写入 `needs-user-input.json` 并暂停，交由用户确认，不用猜测推进。
 
 ## 必需输入
@@ -32,7 +32,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 ### 1. 预检项目和设计包
 
-- 首次处理 ZIP 先执行 `python3 scripts/lanhu_pipeline.py inspect ...`；同一完整 `sourceSha256` 命中完整缓存时直接返回当前阶段，不得重新解析 ZIP 或重置 `pipeline.json`。固定阶段和参数见 [固定编排链路契约](references/pipeline-contract.md)。
+- 首次处理 ZIP 先执行 `python3 scripts/lanhu_pipeline.py run-fixed --zip <zip> --project-root <project> --compose <Compose.kt>`；同一完整 `sourceSha256` 命中完整缓存时直接复用当前阶段，不得重新解析 ZIP 或重置 `pipeline.json`。固定阶段和参数见 [固定编排链路契约](references/pipeline-contract.md)。
 - 确认 ZIP、当前工作目录中的 Android 项目、目标模块和构建入口可访问；在项目根目录优先执行 `./gradlew`，仅当 Wrapper 缺失且系统存在 `gradle` 时才回退到 `gradle`。
 - 在解析 ZIP、导入图片或生成 Compose 前，从项目任务列表确定唯一最小相关编译任务并执行一次 Gradle 编译。编译失败时立即停止本次 Skill：只报告该次命令和首个可行动的失败原因，不再运行其他 Gradle 任务，也不继续检查、解析或修改任何设计与资源文件。
 - 计算 ZIP 完整 SHA-256；禁止根据文件名判断是否为同一设计。
@@ -89,7 +89,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 ### 5. 编译、安装并打开目标页面
 
-- 预检、资源导入、生成检查、编译、K80 安装和截图必须通过 `scripts/lanhu_pipeline.py` 的固定子命令执行；模型决策只能通过契约化 JSON 记录。
+- 预检、资源导入、生成检查、编译、K80 安装和截图必须通过 `scripts/lanhu_pipeline.py` 的固定子命令执行；默认由 `run-fixed` 自动串联设计采集、资源导入和编译，模型决策只能通过契约化 JSON 记录。
 - `preflight` 根据目标 Compose 路径和 Gradle 任务列表由 Python 自动确定模块的 Debug Kotlin 编译任务并写入状态；`compile` 只能复用该任务，不接受模型临时指定的 task。若存在多个 Debug variant 或无法识别，脚本立即暂停并请求用户明确选择。
 - 每轮修正只重新运行同一个由 Python 确定的最小相关编译任务，禁止把模糊的 `compileDebugKotlin` 当成所有项目的固定命令。
 - 生成后的编译失败先定位首个可行动原因：若错误只涉及本次修改的 Compose 文件或新导入资源，且可由诊断直接确定最小修复（如作用域接收者、导入、类型、资源 ID），自动修复并重跑同一编译任务，最多三轮。预检失败、用户既有文件错误、ZIP/资源映射错误、构建环境错误或需业务决策的错误仍须立即停止并报告。

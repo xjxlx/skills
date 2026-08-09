@@ -663,6 +663,92 @@ def complete_design_screenshot(archive: Path, project_root: Path, image: Path) -
         stop_design_server(archive, project_root)
 
 
+def ensure_design_evidence(archive: Path, project_root: Path) -> dict[str, Any]:
+    """自动完成设计服务、浏览器采集、设计截图登记和服务回收。"""
+    artifact, _, state = load_source(archive, project_root)
+    recorded = state.get("designScreenshot")
+    if isinstance(recorded, dict) and Path(str(recorded.get("image", ""))).is_file():
+        return {"artifactPath": str(artifact), "status": "cached", "image": recorded["image"]}
+    started = start_design_server(archive, project_root)
+    try:
+        captured = capture_rendered_design(archive, project_root)
+        return complete_design_screenshot(archive, project_root, Path(captured["screenshotPath"]))
+    finally:
+        if not started.get("cacheHit"):
+            stop_design_server(archive, project_root)
+
+
+def import_assets(archive: Path, project_root: Path, compose_file: Path, apply: bool = True) -> dict[str, Any]:
+    """由 Python 固定执行逐图导入、Hash 清单写入和生成基线记录。"""
+    artifact, _, state = load_source(archive, project_root)
+    if state["phase"] not in {"preflight", "assets_imported"}:
+        raise PipelineError(f"当前阶段不能 assets：{state['phase']}")
+    compose_file = compose_file.expanduser().resolve()
+    command = [
+        sys.executable,
+        str(Path(__file__).with_name("import_zip_images.py")),
+        "--zip",
+        str(archive),
+        "--compose",
+        str(compose_file),
+        "--project-root",
+        str(project_root),
+    ]
+    if apply:
+        command.append("--apply")
+    completed = subprocess.run(command, cwd=project_root, text=True, capture_output=True, check=False)
+    (artifact / "logs").mkdir(exist_ok=True)
+    (artifact / "logs" / "assets.log").write_text(completed.stdout + "\n" + completed.stderr, encoding="utf-8")
+    if completed.returncode != 0:
+        raise PipelineError(f"资源导入失败，日志已写入：{artifact / 'logs' / 'assets.log'}")
+    if not apply:
+        return {"artifactPath": str(artifact), "phase": state["phase"], "preview": True}
+    state["composeFile"] = str(compose_file)
+    if state["phase"] != "assets_imported":
+        transition(state, "assets_imported", {"composeFile": str(compose_file), "apply": True})
+    state["composeBaselineSha256"] = sha256_file(compose_file)
+    _write_state(artifact, state)
+    return {"artifactPath": str(artifact), "phase": state["phase"], "composeBaselineSha256": state["composeBaselineSha256"]}
+
+
+def run_fixed_pipeline(archive: Path, project_root: Path, compose_file: Path) -> dict[str, Any]:
+    """自动推进浏览器采集、资源导入和编译，只在等待页面代码时暂停。"""
+    archive = archive.expanduser().resolve()
+    project_root = project_root.expanduser().resolve()
+    compose_file = compose_file.expanduser().resolve()
+    inspect_archive(archive, project_root, compose_file)
+    design = ensure_design_evidence(archive, project_root)
+    artifact, _, state = load_source(archive, project_root)
+    if state["phase"] == "inspected":
+        validate_project(archive, project_root, compose_file)
+    artifact, _, state = load_source(archive, project_root)
+    if state["phase"] == "validated":
+        preflight_project(archive, project_root)
+    artifact, _, state = load_source(archive, project_root)
+    if state["phase"] == "preflight":
+        import_assets(archive, project_root, compose_file, apply=True)
+    artifact, _, state = load_source(archive, project_root)
+    if state["phase"] == "assets_imported":
+        baseline = state.get("composeBaselineSha256")
+        current = sha256_file(compose_file)
+        if not isinstance(baseline, str):
+            state["composeBaselineSha256"] = current
+            _write_state(artifact, state)
+            baseline = current
+        if current == baseline:
+            return {"artifactPath": str(artifact), "phase": state["phase"], "status": "awaiting_compose_generation", "design": design}
+        validate_compose_source(compose_file)
+        state["composeFile"] = str(compose_file)
+        transition(state, "generated", {"composeFile": str(compose_file), "composeSha256": current})
+        _write_state(artifact, state)
+        compile_project(archive, project_root)
+        return {"artifactPath": str(artifact), "phase": "compiled", "status": "compile_started", "design": design}
+    if state["phase"] == "generated":
+        compile_project(archive, project_root)
+        return {"artifactPath": str(artifact), "phase": "compiled", "status": "compile_started", "design": design}
+    return {"artifactPath": str(artifact), "phase": state["phase"], "status": "unchanged", "design": design}
+
+
 def validate_project(archive: Path, project_root: Path, compose_file: Path | None = None) -> dict[str, Any]:
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] not in {"inspected", "validated"}:
@@ -975,6 +1061,10 @@ def build_parser() -> argparse.ArgumentParser:
     assets.add_argument("--project-root", required=True, type=Path)
     assets.add_argument("--compose", required=True, type=Path)
     assets.add_argument("--apply", action="store_true")
+    fixed = subparsers.add_parser("run-fixed", help="自动执行设计采集、资源导入和编译，仅在等待 Compose 生成时暂停")
+    fixed.add_argument("--zip", required=True, type=Path)
+    fixed.add_argument("--project-root", required=True, type=Path)
+    fixed.add_argument("--compose", required=True, type=Path)
     generated = subparsers.add_parser("mark-generated")
     generated.add_argument("--zip", required=True, type=Path)
     generated.add_argument("--project-root", required=True, type=Path)
@@ -1036,23 +1126,9 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "validate":
             result = validate_project(args.zip, args.project_root, args.compose)
         elif args.command == "assets":
-            artifact, _, state = load_source(args.zip, args.project_root)
-            if state["phase"] not in {"preflight", "assets_imported"}:
-                raise PipelineError(f"当前阶段不能 assets：{state['phase']}")
-            command = [sys.executable, str(Path(__file__).with_name("import_zip_images.py")), "--zip", str(args.zip), "--compose", str(args.compose), "--project-root", str(args.project_root)]
-            if args.apply:
-                command.append("--apply")
-            completed = subprocess.run(command, cwd=args.project_root, text=True, capture_output=True, check=False)
-            (artifact / "logs").mkdir(exist_ok=True)
-            (artifact / "logs" / "assets.log").write_text(completed.stdout + "\n" + completed.stderr, encoding="utf-8")
-            if completed.returncode != 0:
-                raise PipelineError(f"资源导入失败，日志已写入：{artifact / 'logs' / 'assets.log'}")
-            if not args.apply:
-                result = {"artifactPath": str(artifact), "phase": state["phase"], "preview": True}
-            elif state["phase"] != "assets_imported":
-                transition(state, "assets_imported", {"composeFile": str(args.compose.resolve()), "apply": args.apply})
-                _write_state(artifact, state)
-                result = {"artifactPath": str(artifact), "phase": state["phase"]}
+            result = import_assets(args.zip, args.project_root, args.compose, apply=args.apply)
+        elif args.command == "run-fixed":
+            result = run_fixed_pipeline(args.zip, args.project_root, args.compose)
         elif args.command == "mark-generated":
             artifact, _, state = load_source(args.zip, args.project_root)
             if state["phase"] not in {"assets_imported", "generated"}:
