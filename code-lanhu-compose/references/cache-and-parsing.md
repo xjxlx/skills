@@ -36,6 +36,8 @@ python3 scripts/import_zip_images.py \
 
 随后将本 ZIP 的来源和实际导入结果写入 `<zip-stem>-<md5前6位>/images.json`。每项至少记录 ZIP 内 `sourcePath`、解压后路径、原始文件名、解析出的 `assetName`、内容 Hash、真实 `outputPath`、`outputName` 和 `resourceManifest`。该文件仅用于本 ZIP 的设计资源与 Compose 引用对应，不再作为 `$code-image` 的输入。
 
+设计来源、缓存和解析证据统一使用 `sourceMd5`。`images.json` 中仍可能出现 `sha256` 图片内容字段，这是 `$code-image` 既有 `originalHash` 资源契约的兼容值，不参与设计 ZIP 身份或设计截图验证。
+
 ## 设计产物格式
 
 ```json
