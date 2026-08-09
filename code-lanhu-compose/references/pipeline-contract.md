@@ -1,6 +1,6 @@
 # 固定编排链路契约
 
-`scripts/lanhu_pipeline.py` 是本 Skill 唯一的流程入口。它把一次蓝湖还原拆成可重放的阶段，并在 `.code-lanhu-compose/<name>-<sha6>/pipeline.json` 保存状态。压缩包的完整 `sourceSha256` 是唯一输入身份；输入变化时必须重新 `inspect`，不能沿用旧状态。相同 Hash 的 `inspect` 直接返回已有阶段，不重复运行 ZIP 检查和 `detect_repeated_blocks.py`，也不重置状态；首次检查才把尺寸差不超过 `2` 的重复背景卡片写入 `repeated-block-candidates.json`。
+`scripts/lanhu_pipeline.py` 是本 Skill 唯一的流程入口。它把一次蓝湖还原拆成可重放的阶段，并在 `.code-lanhu-compose/<name>-<md5前6位>/pipeline.json` 保存状态。压缩包的完整 `sourceMd5` 是唯一输入身份；输入变化时必须重新 `inspect`，不能沿用旧状态。相同 MD5 的 `inspect` 直接返回已有阶段，不重复运行 ZIP 检查和 `detect_repeated_blocks.py`，也不重置状态；首次检查才把尺寸差不超过 `2` 的重复背景卡片写入 `repeated-block-candidates.json`。
 
 默认入口是 `run-fixed`。它由 Python 自动串联设计服务/浏览器采集、资源导入、Gradle 任务发现和编译；模型不再逐个选择这些子命令。流程只会在 `assets_imported` 阶段等待 Compose 文件发生模型修改，下一次 `run-fixed` 检测到文件 Hash 变化后自动进入 `generated -> compile`。
 

@@ -20,7 +20,15 @@ SELECTOR_TOKEN_PATTERN = re.compile(r"([.#])([A-Za-z][A-Za-z0-9_-]*)")
 EXTRACTION_MARKER_NAME = ".code-lanhu-compose-extraction.json"
 
 
-def sha256_file(path: Path) -> str:
+def md5_file(path: Path) -> str:
+    digest = hashlib.md5()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def content_sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
         for chunk in iter(lambda: stream.read(1024 * 1024), b""):
@@ -65,7 +73,7 @@ def extraction_cache_is_complete(destination: Path, entries, source_hash: str) -
         cached = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError):
         return False
-    if cached.get("sourceSha256") != source_hash:
+    if cached.get("sourceMd5") != source_hash:
         return False
     root = destination.resolve()
     for entry in entries:
@@ -100,7 +108,7 @@ def extract_zip(zip_path: Path, source_hash: str) -> tuple[Path, list[tuple[Pure
                         output.write(chunk)
             write_json(
                 destination / EXTRACTION_MARKER_NAME,
-                {"version": 1, "sourceSha256": source_hash},
+                {"version": 1, "sourceMd5": source_hash},
             )
     return destination, [(PurePosixPath(entry.filename), destination / PurePosixPath(entry.filename)) for entry in image_entries]
 
@@ -112,7 +120,7 @@ def verify_manifest_identity(path: Path, source_hash: str) -> None:
         existing = json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as error:
         raise ValueError(f"已有图片清单不是有效 JSON，无法安全覆盖：{path}") from error
-    if existing.get("sourceSha256") != source_hash:
+    if existing.get("sourceMd5") != source_hash:
         raise ValueError(f"图片清单已属于另一个 ZIP，拒绝覆盖：{path}")
 
 
@@ -268,7 +276,7 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
     zip_path = zip_path.resolve()
     compose_path = compose_path.resolve()
     project_root = project_root.resolve()
-    source_hash = sha256_file(zip_path)
+    source_hash = md5_file(zip_path)
     manifest_path = manifest_path_for(zip_path, source_hash, project_root)
     verify_manifest_identity(manifest_path, source_hash)
     extraction_root, images = extract_zip(zip_path, source_hash)
@@ -277,7 +285,7 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
     records_by_hash = load_code_image_records_by_hash(resources_path) if apply else {}
     records = []
     for zip_entry, image_path in images:
-        content_hash = sha256_file(image_path)
+        content_hash = content_sha256_file(image_path)
         asset_name = asset_names.get(zip_entry)
         record = records_by_hash.get(content_hash)
         if record is None:
@@ -309,7 +317,7 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
         "version": 2,
         "sourceName": zip_path.name,
         "sourcePath": str(zip_path),
-        "sourceSha256": source_hash,
+        "sourceMd5": source_hash,
         "extractionPath": str(extraction_root),
         "composeFile": project_relative(compose_path, project_root),
         "images": records,

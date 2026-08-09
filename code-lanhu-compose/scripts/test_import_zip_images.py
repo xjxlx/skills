@@ -26,7 +26,7 @@ class ImportZipImagesContractTest(unittest.TestCase):
             with zipfile.ZipFile(archive, "w") as zipped:
                 zipped.writestr("images/a.png", b"original-image")
 
-            source_hash = IMPORT_IMAGES.sha256_file(archive)
+            source_hash = IMPORT_IMAGES.md5_file(archive)
             with patch.object(IMPORT_IMAGES.Path, "home", return_value=Path(temp_dir)):
                 extraction_root, images = IMPORT_IMAGES.extract_zip(archive, source_hash)
                 image_path = images[0][1]

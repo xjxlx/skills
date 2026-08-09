@@ -91,7 +91,7 @@ class LanhuPipelineContractTest(unittest.TestCase):
             for phase in ("validated", "preflight", "assets_imported"):
                 PIPELINE.transition(state, phase)
             state["composeFile"] = str(compose.resolve())
-            state["composeBaselineSha256"] = PIPELINE.sha256_file(compose)
+            state["composeBaselineMd5"] = PIPELINE.md5_file(compose)
             PIPELINE._write_state(artifact, state)
 
             with patch.object(PIPELINE, "ensure_design_evidence") as ensure_design, patch.object(
@@ -108,7 +108,7 @@ class LanhuPipelineContractTest(unittest.TestCase):
                 compile_project.assert_called_once_with(archive.resolve(), project_root.resolve())
             _, _, updated = PIPELINE.load_source(archive, project_root)
             self.assertEqual(updated["phase"], "generated")
-            self.assertNotEqual(updated["composeBaselineSha256"], PIPELINE.sha256_file(compose))
+            self.assertNotEqual(updated["composeBaselineMd5"], PIPELINE.md5_file(compose))
 
     def test_inspect_writes_source_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -122,11 +122,11 @@ class LanhuPipelineContractTest(unittest.TestCase):
             result = PIPELINE.inspect_archive(archive, root / "project")
 
             self.assertEqual(result["sourceName"], "design.zip")
-            self.assertEqual(len(result["sourceSha256"]), 64)
+            self.assertEqual(len(result["sourceMd5"]), 32)
             manifest_path = Path(result["artifactPath"]) / "source.json"
             self.assertTrue(manifest_path.is_file())
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertEqual(manifest["sourceSha256"], result["sourceSha256"])
+            self.assertEqual(manifest["sourceMd5"], result["sourceMd5"])
             self.assertEqual(manifest["html"]["path"], "index.html")
 
     def test_inspect_reuses_matching_manifest_without_resetting_pipeline_state(self) -> None:
@@ -273,7 +273,7 @@ class LanhuPipelineContractTest(unittest.TestCase):
             self.assertTrue(screenshot_path.is_file())
             self.assertTrue(result["cacheHit"])
             self.assertTrue(cached_start["cacheHit"])
-            self.assertEqual(design["sourceSha256"], inspected["sourceSha256"])
+            self.assertEqual(design["sourceMd5"], inspected["sourceMd5"])
             self.assertEqual(design["设计根节点"]["选择器"], ".page")
             self.assertEqual(design["设计画布"]["宽度像素"], 344)
             self.assertEqual(design["设计画布"]["高度像素"], 204)
@@ -294,7 +294,7 @@ class LanhuPipelineContractTest(unittest.TestCase):
             started = PIPELINE.start_design_server(archive, project_root)
             PIPELINE.atomic_json(
                 Path(inspected["artifactPath"]) / "设计解析.json",
-                {"sourceSha256": inspected["sourceSha256"]},
+                {"sourceMd5": inspected["sourceMd5"]},
             )
             image = Path(inspected["artifactPath"]) / "runs" / "设计截图.png"
             image.parent.mkdir(parents=True)

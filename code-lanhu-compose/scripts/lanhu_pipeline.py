@@ -64,8 +64,8 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
+def md5_file(path: Path) -> str:
+    digest = hashlib.md5()
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
@@ -131,7 +131,7 @@ def atomic_json(path: Path, payload: dict[str, Any]) -> None:
 def new_state(source_sha: str, compose_file: str | None) -> dict[str, Any]:
     return {
         "version": 1,
-        "sourceSha256": source_sha,
+        "sourceMd5": source_sha,
         "composeFile": compose_file,
         "phase": "created",
         "attempts": {"compile": 0, "repair": 0},
@@ -166,7 +166,7 @@ def _load_cached_inspection(artifact: Path, source_sha: str) -> tuple[dict[str, 
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if source.get("sourceSha256") != source_sha or state.get("sourceSha256") != source_sha:
+    if source.get("sourceMd5") != source_sha or state.get("sourceMd5") != source_sha:
         return None
     if state.get("phase") not in PHASES:
         return None
@@ -176,7 +176,7 @@ def _load_cached_inspection(artifact: Path, source_sha: str) -> tuple[dict[str, 
 def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None = None) -> dict[str, Any]:
     archive = archive.expanduser().resolve()
     project_root = project_root.expanduser().resolve()
-    source_sha = sha256_file(archive)
+    source_sha = md5_file(archive)
     artifact = artifact_dir(archive, project_root, source_sha)
     cached = _load_cached_inspection(artifact, source_sha)
     if cached is not None:
@@ -194,14 +194,14 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
     names = [safe_zip_name(info.filename) for info in entries]
     css_files = _referenced_css(html_text, names, safe_zip_name(html_info.filename))
     repeated_blocks = detect_repeated_blocks(archive, css_files, safe_zip_name(html_info.filename))
-    repeated_blocks["sourceSha256"] = source_sha
+    repeated_blocks["sourceMd5"] = source_sha
     repeated_blocks_path = artifact / "repeated-block-candidates.json"
     atomic_json(repeated_blocks_path, repeated_blocks)
     source_manifest = {
         "version": 1,
         "sourceName": archive.name,
         "sourcePath": str(archive),
-        "sourceSha256": source_sha,
+        "sourceMd5": source_sha,
         "artifactPath": str(artifact),
         "html": {"path": safe_zip_name(html_info.filename)},
         "css": [{"path": path} for path in css_files],
@@ -221,7 +221,7 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
 
 
 def load_source(archive: Path, project_root: Path) -> tuple[Path, dict[str, Any], dict[str, Any]]:
-    source_sha = sha256_file(archive.expanduser().resolve())
+    source_sha = md5_file(archive.expanduser().resolve())
     artifact = artifact_dir(archive.expanduser().resolve(), project_root.expanduser().resolve(), source_sha)
     source_path = artifact / "source.json"
     state_path = artifact / "pipeline.json"
@@ -229,7 +229,7 @@ def load_source(archive: Path, project_root: Path) -> tuple[Path, dict[str, Any]
         raise PipelineError("尚未 inspect，缺少 source.json 或 pipeline.json")
     source = json.loads(source_path.read_text(encoding="utf-8"))
     state = json.loads(state_path.read_text(encoding="utf-8"))
-    if source.get("sourceSha256") != source_sha or state.get("sourceSha256") != source_sha:
+    if source.get("sourceMd5") != source_sha or state.get("sourceMd5") != source_sha:
         raise PipelineError("输入 ZIP 已变化，不能复用旧状态；请重新 inspect")
     return artifact, source, state
 
@@ -306,7 +306,7 @@ def _load_cached_design(artifact: Path, source: dict[str, Any]) -> tuple[dict[st
     root = design.get("设计根节点")
     if (
         design.get("版本") != DESIGN_DOCUMENT_VERSION
-        or design.get("sourceSha256") != source["sourceSha256"]
+        or design.get("sourceMd5") != source["sourceMd5"]
         or not isinstance(root, dict)
         or not isinstance(root.get("选择器"), str)
         or not root["选择器"]
@@ -349,7 +349,7 @@ def _has_complete_design_server_source(archive: Path, destination: Path, source_
         cached = json.loads(marker.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return False
-    if cached.get("sourceSha256") != source_sha:
+    if cached.get("sourceMd5") != source_sha:
         return False
     root = destination.resolve()
     for info in zip_entries(archive):
@@ -458,14 +458,14 @@ def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dic
         }
 
     serving_root = artifact / "design-server-source"
-    source_reused = _has_complete_design_server_source(archive, serving_root, source["sourceSha256"])
+    source_reused = _has_complete_design_server_source(archive, serving_root, source["sourceMd5"])
     if not source_reused:
         if serving_root.exists():
             shutil.rmtree(serving_root)
         _safe_extract_archive(archive.expanduser().resolve(), serving_root)
         atomic_json(
             design_server_source_state_path(artifact),
-            {"version": 1, "sourceSha256": source["sourceSha256"], "createdAt": utc_now()},
+            {"version": 1, "sourceMd5": source["sourceMd5"], "createdAt": utc_now()},
         )
     html_path = serving_root / source["html"]["path"]
     if not html_path.is_file():
@@ -497,7 +497,7 @@ def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dic
         "port": selected_port,
         "url": f"http://127.0.0.1:{selected_port}/{source['html']['path']}",
         "servingRoot": str(serving_root.resolve()),
-        "sourceSha256": source["sourceSha256"],
+        "sourceMd5": source["sourceMd5"],
         "startedAt": utc_now(),
     }
     atomic_json(state_path, state)
@@ -522,7 +522,7 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
         raise PipelineError("尚未启动设计稿静态服务，请先执行 start-design-server")
     try:
         server = json.loads(state_path.read_text(encoding="utf-8"))
-        if server.get("sourceSha256") != source["sourceSha256"]:
+        if server.get("sourceMd5") != source["sourceMd5"]:
             raise PipelineError("设计稿静态服务与当前 ZIP 不匹配")
         if not is_pid_alive(int(server["pid"])):
             raise PipelineError("设计稿静态服务已停止，请重新执行 start-design-server")
@@ -605,7 +605,7 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
         "版本": DESIGN_DOCUMENT_VERSION,
         "来源名称": source["sourceName"],
         "来源路径": source["sourcePath"],
-        "sourceSha256": source["sourceSha256"],
+        "sourceMd5": source["sourceMd5"],
         "入口文件": source["html"]["path"],
         "样式文件": [item["path"] for item in source["css"]],
         "设计画布": {"宽度像素": round(bounds["width"]), "高度像素": round(bounds["height"])},
@@ -649,7 +649,7 @@ def complete_design_screenshot(archive: Path, project_root: Path, image: Path) -
         if not design_path.is_file():
             raise PipelineError(f"缺少设计解析结果，无法登记设计截图：{design_path}")
         design = json.loads(design_path.read_text(encoding="utf-8"))
-        if design.get("sourceSha256") != source["sourceSha256"]:
+        if design.get("sourceMd5") != source["sourceMd5"]:
             raise PipelineError(f"设计解析结果与当前 ZIP 不匹配：{design_path}")
         image = image.expanduser().resolve()
         expected_image = (artifact / "runs" / "设计截图.png").resolve()
@@ -706,9 +706,9 @@ def import_assets(archive: Path, project_root: Path, compose_file: Path, apply: 
     state["composeFile"] = str(compose_file)
     if state["phase"] != "assets_imported":
         transition(state, "assets_imported", {"composeFile": str(compose_file), "apply": True})
-    state["composeBaselineSha256"] = sha256_file(compose_file)
+    state["composeBaselineMd5"] = md5_file(compose_file)
     _write_state(artifact, state)
-    return {"artifactPath": str(artifact), "phase": state["phase"], "composeBaselineSha256": state["composeBaselineSha256"]}
+    return {"artifactPath": str(artifact), "phase": state["phase"], "composeBaselineMd5": state["composeBaselineMd5"]}
 
 
 def run_fixed_pipeline(archive: Path, project_root: Path, compose_file: Path) -> dict[str, Any]:
@@ -729,17 +729,17 @@ def run_fixed_pipeline(archive: Path, project_root: Path, compose_file: Path) ->
         import_assets(archive, project_root, compose_file, apply=True)
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] == "assets_imported":
-        baseline = state.get("composeBaselineSha256")
-        current = sha256_file(compose_file)
+        baseline = state.get("composeBaselineMd5")
+        current = md5_file(compose_file)
         if not isinstance(baseline, str):
-            state["composeBaselineSha256"] = current
+            state["composeBaselineMd5"] = current
             _write_state(artifact, state)
             baseline = current
         if current == baseline:
             return {"artifactPath": str(artifact), "phase": state["phase"], "status": "awaiting_compose_generation", "design": design}
         validate_compose_source(compose_file)
         state["composeFile"] = str(compose_file)
-        transition(state, "generated", {"composeFile": str(compose_file), "composeSha256": current})
+        transition(state, "generated", {"composeFile": str(compose_file), "composeMd5": current})
         _write_state(artifact, state)
         compile_project(archive, project_root)
         return {"artifactPath": str(artifact), "phase": "compiled", "status": "compile_started", "design": design}
@@ -767,7 +767,7 @@ def validate_project(archive: Path, project_root: Path, compose_file: Path | Non
         state["composeFile"] = str(target)
     transition(state, "validated", {"composeFile": state.get("composeFile")})
     _write_state(artifact, state)
-    return {"artifactPath": str(artifact), "phase": state["phase"], "sourceSha256": source["sourceSha256"]}
+    return {"artifactPath": str(artifact), "phase": state["phase"], "sourceMd5": source["sourceMd5"]}
 
 
 def validate_decision(decision: dict[str, Any]) -> dict[str, Any]:
@@ -1021,8 +1021,8 @@ def mark_diff(archive: Path, project_root: Path, report: Path, outcome: str) -> 
         raise PipelineError(f"差异报告不是有效 JSON：{report}") from error
     if not isinstance(report_data, dict):
         raise PipelineError(f"差异报告必须是 JSON 对象：{report}")
-    if report_data.get("sourceSha256") not in (None, source["sourceSha256"]):
-        raise PipelineError("差异报告 sourceSha256 与当前 ZIP 不一致")
+    if report_data.get("sourceMd5") not in (None, source["sourceMd5"]):
+        raise PipelineError("差异报告 sourceMd5 与当前 ZIP 不一致")
     state["lastDiffOutcome"] = outcome
     if outcome == "repair":
         state["attempts"]["repair"] = state["attempts"].get("repair", 0) + 1
@@ -1166,7 +1166,7 @@ def main(argv: list[str] | None = None) -> int:
             result = record_decision(args.zip, args.project_root, args.decision)
         elif args.command == "status":
             artifact, source, state = load_source(args.zip, args.project_root)
-            result = {"artifactPath": str(artifact), "sourceSha256": source["sourceSha256"], **state}
+            result = {"artifactPath": str(artifact), "sourceMd5": source["sourceMd5"], **state}
         else:
             raise PipelineError(f"未知命令：{args.command}")
         print(json.dumps(result, ensure_ascii=False, indent=2))
