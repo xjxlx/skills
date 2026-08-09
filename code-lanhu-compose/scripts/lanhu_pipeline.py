@@ -807,11 +807,11 @@ def record_decision(archive: Path, project_root: Path, decision_path: Path) -> d
     return {"artifactPath": str(artifact), "action": decision["action"], "phase": state["phase"]}
 
 
-def compile_project(archive: Path, project_root: Path, task: str | None = None) -> dict[str, Any]:
+def compile_project(archive: Path, project_root: Path) -> dict[str, Any]:
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] not in {"generated", "compiled"}:
         raise PipelineError(f"当前阶段不能 compile：{state['phase']}")
-    task = task or state.get("preflightTask")
+    task = state.get("preflightTask")
     if not isinstance(task, str) or not task:
         raise PipelineError("compile 必须复用 Python preflight 已确定的任务")
     if not SAFE_TASK.fullmatch(task):
@@ -834,17 +834,14 @@ def compile_project(archive: Path, project_root: Path, task: str | None = None) 
     return {"artifactPath": str(artifact), "phase": state["phase"], "log": str(log)}
 
 
-def preflight_project(archive: Path, project_root: Path, task: str | None = None) -> dict[str, Any]:
+def preflight_project(archive: Path, project_root: Path) -> dict[str, Any]:
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] not in {"validated", "preflight"}:
         raise PipelineError(f"当前阶段不能 preflight：{state['phase']}")
     compose_file = state.get("composeFile")
     if not isinstance(compose_file, str) or not compose_file:
         raise PipelineError("preflight 缺少 Compose 文件，无法由 Python 解析 Gradle 模块")
-    task_source = "explicit-override"
-    if task is None:
-        task = discover_compile_task(project_root, Path(compose_file))
-        task_source = "python-discovered"
+    task = discover_compile_task(project_root, Path(compose_file))
     if not SAFE_TASK.fullmatch(task):
         raise PipelineError(f"Gradle task 不在白名单中：{task}")
     gradle = gradle_command(project_root)
@@ -855,7 +852,7 @@ def preflight_project(archive: Path, project_root: Path, task: str | None = None
     if state["phase"] != "preflight":
         transition(state, "preflight", {"task": task, "log": str(log)})
     state["preflightTask"] = task
-    state["preflightTaskSource"] = task_source
+    state["preflightTaskSource"] = "python-discovered"
     _write_state(artifact, state)
     return {"artifactPath": str(artifact), "phase": state["phase"], "log": str(log)}
 
@@ -985,11 +982,9 @@ def build_parser() -> argparse.ArgumentParser:
     preflight = subparsers.add_parser("preflight")
     preflight.add_argument("--zip", required=True, type=Path)
     preflight.add_argument("--project-root", required=True, type=Path)
-    preflight.add_argument("--task", help="仅用户需要覆盖自动发现时提供；默认由 Python 根据 Compose 路径和 Gradle 任务列表确定")
     compile_command = subparsers.add_parser("compile")
     compile_command.add_argument("--zip", required=True, type=Path)
     compile_command.add_argument("--project-root", required=True, type=Path)
-    compile_command.add_argument("--task", help="默认复用 preflight 的 Python 任务；不应由模型传入")
     install = subparsers.add_parser("install-k80")
     install.add_argument("--zip", required=True, type=Path)
     install.add_argument("--project-root", required=True, type=Path)
@@ -1072,9 +1067,9 @@ def main(argv: list[str] | None = None) -> int:
             _write_state(artifact, state)
             result = {"artifactPath": str(artifact), "phase": state["phase"], "composeFile": str(target)}
         elif args.command == "preflight":
-            result = preflight_project(args.zip, args.project_root, args.task)
+            result = preflight_project(args.zip, args.project_root)
         elif args.command == "compile":
-            result = compile_project(args.zip, args.project_root, args.task)
+            result = compile_project(args.zip, args.project_root)
         elif args.command == "install-k80":
             result = install_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.apk)
         elif args.command == "screenshot-k80":
