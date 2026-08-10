@@ -1,13 +1,13 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-10 10:33:23，由 github-manager 维护
+> 自动生成于 2026-08-10 11:52:32，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
 
 | Skill | 用途 | 依赖 | 状态 | 最后更新 |
 |---|---|---|---|---|
-| [code-analyzer](https://github.com/xjxlx/skills/tree/main/code-analyzer) | 为指定 Java、Kotlin 文件梳理方法逻辑，添加详细中文方法注释，检测潜在 bug 和性能复杂度问题，并调用 code-normalize 完成成员... | code-normalize, skill-common | 已发布 | 2026-08-10 |
+| [code-analyzer](https://github.com/xjxlx/skills/tree/main/code-analyzer) | 仅在用户明确点名 code-analyzer，或明确要求“使用本技能”进行 Java/Kotlin 代码分析、注释或审查时使用；普通代码阅读、逻辑分析、注... | code-normalize, skill-common | 已发布 | 2026-08-10 |
 | [code-image](https://github.com/xjxlx/skills/tree/main/code-image) | Use when 需要导入 Android 图片资源，或明确要求比较设计图与应用截图的视觉差异。 | 无 | 已发布 | 2026-08-10 |
 | [code-lanhu-compose](https://github.com/xjxlx/skills/tree/main/code-lanhu-compose) | Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，需要在 Android 项目中生成或还原 Jetpack Compose 页面，... | code-image | 已发布 | 2026-08-10 |
 | [code-normalize](https://github.com/xjxlx/skills/tree/main/code-normalize) | 检测并安全规范 Java、Kotlin 类中的成员变量命名，更新全部引用，补充缺失的类注释，并为关键成员添加作用说明；发现已启用 ViewBinding ... | skill-common | 已发布 | 2026-08-10 |
@@ -33,7 +33,7 @@ graph LR
 ### code-analyzer
 
 - **目录名**：`code-analyzer`
-- **用途**：为指定 Java、Kotlin 文件梳理方法逻辑，添加详细中文方法注释，检测潜在 bug 和性能复杂度问题，并调用 code-normalize 完成成员...
+- **用途**：仅在用户明确点名 code-analyzer，或明确要求“使用本技能”进行 Java/Kotlin 代码分析、注释或审查时使用；普通代码阅读、逻辑分析、注...
 - **依赖**：code-normalize, skill-common
 - **文件数**：3
 - **UI 元数据**：缺少
