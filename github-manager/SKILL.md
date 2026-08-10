@@ -163,6 +163,7 @@ graph LR
 | `scripts/test_github_network.sh` | 验证直连失败后的代理回退 |
 | `scripts/restore_skills.sh` | 从统一仓库恢复单个或全部 skill |
 | `scripts/check_and_publish.sh` | 检测全部 skill 并按需统一发布 |
+| `scripts/build_commit_message.sh` | 根据暂存区真实文件变化生成中文提交标题和正文 |
 
 ## 从 GitHub 恢复
 

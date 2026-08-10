@@ -7,6 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/github_network.sh"
+source "$SCRIPT_DIR/build_commit_message.sh"
 SKILL_DIR="${1:?用法: publish_skill.sh <skill_dir> [--repo-name name] [--org org]}"
 shift
 
@@ -71,7 +72,11 @@ fi
 echo "添加文件..."
 git add -A
 if ! git diff --cached --quiet; then
-  git commit -m "feat: initial release of $SKILL_NAME"
+  build_commit_message "$SKILL_DIR" "$(dirname "$SKILL_DIR")"
+  echo "提交标题：$COMMIT_TITLE"
+  echo "提交正文："
+  echo "$COMMIT_BODY"
+  git commit -m "$COMMIT_TITLE" -m "$COMMIT_BODY"
 fi
 git rev-parse --verify HEAD >/dev/null
 

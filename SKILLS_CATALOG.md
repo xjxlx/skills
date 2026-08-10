@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-10 10:21:47，由 github-manager 维护
+> 自动生成于 2026-08-10 10:33:23，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -83,7 +83,7 @@ graph LR
 - **目录名**：`github-manager`
 - **用途**：实现个人 Codex Skills 的变更检测、凭据扫描、GitHub 发布、目录维护和本地恢复。当用户要求检查发布状态、发布或更新 skill、扫描敏感...
 - **依赖**：无
-- **文件数**：24
+- **文件数**：27
 - **UI 元数据**：有 agents/openai.yaml
 - **路径**：`~/.codex/skills/github-manager/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/github-manager

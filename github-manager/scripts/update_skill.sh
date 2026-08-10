@@ -7,6 +7,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/github_network.sh"
+source "$SCRIPT_DIR/build_commit_message.sh"
 SKILL_DIR="${1:?用法: update_skill.sh <skill_dir>}"
 HASHES_FILE="$SCRIPT_DIR/../.hashes.json"
 
@@ -63,21 +64,16 @@ if ! git remote get-url origin >/dev/null 2>&1; then
   fi
 fi
 
-# 生成提交信息
-COMMIT_MSG="更新: $SKILL_NAME"
-if [[ $ADDED -gt 0 ]]; then COMMIT_MSG="$COMMIT_MSG (+${ADDED} new)"; fi
-if [[ $MODIFIED -gt 0 ]]; then COMMIT_MSG="$COMMIT_MSG (~${MODIFIED} modified)"; fi
-if [[ $DELETED -gt 0 ]]; then COMMIT_MSG="$COMMIT_MSG (-${DELETED} deleted)"; fi
 CHANGE_FILES=$(printf '%s\n' "$CHANGE_OUTPUT" | grep -E "^[AMD] " | sed 's/^[AMD]  //')
 
 # 提交并推送
 echo "📁 提交变更..."
 git add -A
-if [[ -n "$CHANGE_FILES" ]]; then
-  git commit -m "$COMMIT_MSG" -m "$CHANGE_FILES"
-else
-  git commit -m "$COMMIT_MSG"
-fi
+build_commit_message "$SKILL_DIR" "$(dirname "$SKILL_DIR")"
+echo "提交标题：$COMMIT_TITLE"
+echo "提交正文："
+echo "$COMMIT_BODY"
+git commit -m "$COMMIT_TITLE" -m "$COMMIT_BODY"
 
 echo "🚀 推送到 GitHub..."
 CURRENT_BRANCH=$(git branch --show-current)
