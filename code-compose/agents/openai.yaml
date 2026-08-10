@@ -1,5 +1,0 @@
-interface:
-  display_name: "Code Compose"
-  short_description: "从蓝湖信息生成贴合项目规范的 Compose 代码并持续积累约定"
-
-  default_prompt: "Use $code-compose 根据蓝湖复制的设计信息生成符合当前项目规范的 Compose 代码"
