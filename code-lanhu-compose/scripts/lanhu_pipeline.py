@@ -877,6 +877,21 @@ def discover_compile_task(project_root: Path, compose_file: Path) -> str:
     raise PipelineError(f"模块 {module or ':root'} 的 Kotlin 编译任务存在歧义，请用户明确选择：{candidates}")
 
 
+def derive_package_task(compile_task: str) -> str:
+    """把 preflight 确定的 Kotlin 编译任务映射为同变体 assemble 任务。"""
+    if not SAFE_TASK.fullmatch(compile_task):
+        raise PipelineError(f"Gradle task 不在白名单中：{compile_task}")
+    task_name = compile_task.rsplit(":", 1)[-1]
+    match = re.fullmatch(r"compile(.+)Kotlin", task_name)
+    if match is None:
+        raise PipelineError(f"无法从编译任务推导打包任务：{compile_task}")
+    module = compile_task.rsplit(":", 1)[0]
+    package_task = f"{module}:assemble{match.group(1)}"
+    if not SAFE_TASK.fullmatch(package_task):
+        raise PipelineError(f"推导出的打包任务不在白名单中：{package_task}")
+    return package_task
+
+
 def record_decision(archive: Path, project_root: Path, decision_path: Path) -> dict[str, Any]:
     artifact, source, state = load_source(archive, project_root)
     decision = validate_decision(json.loads(decision_path.read_text(encoding="utf-8")))
@@ -920,6 +935,40 @@ def compile_project(archive: Path, project_root: Path) -> dict[str, Any]:
     return {"artifactPath": str(artifact), "phase": state["phase"], "log": str(log)}
 
 
+def package_debug(archive: Path, project_root: Path, apk: Path) -> dict[str, Any]:
+    """执行与 preflight 编译变体一致的 assemble，并登记 APK 新鲜度。"""
+    artifact, _, state = load_source(archive, project_root)
+    if state["phase"] not in {"compiled", "installed"}:
+        raise PipelineError(f"当前阶段不能 package-debug：{state['phase']}")
+    compile_task = state.get("preflightTask")
+    if not isinstance(compile_task, str) or not compile_task:
+        raise PipelineError("package-debug 必须复用 Python preflight 已确定的任务")
+    task = derive_package_task(compile_task)
+    apk = apk.expanduser().resolve()
+    compose_file = state.get("composeFile")
+    if not isinstance(compose_file, str) or not compose_file:
+        raise PipelineError("package-debug 缺少 Compose 文件")
+    compose = Path(compose_file).expanduser().resolve()
+    if not compose.is_file():
+        raise PipelineError(f"Compose 文件不存在：{compose}")
+    state["attempts"]["package"] = state["attempts"].get("package", 0) + 1
+    log = artifact / "logs" / f"package-{state['attempts']['package']:02d}.log"
+    result = _run_fixed([*gradle_command(project_root), task, "--console=plain"], project_root, log)
+    if result.returncode != 0:
+        raise PipelineError(f"打包失败，日志已写入：{log}")
+    if not apk.is_file():
+        raise PipelineError(f"assemble 完成但 APK 不存在：{apk}")
+    if apk.stat().st_mtime < compose.stat().st_mtime:
+        raise PipelineError(f"assemble 完成但 APK 仍早于 Compose 文件，疑似产物过期：{apk}")
+    state["packagedApk"] = str(apk)
+    state["packagedComposeMd5"] = md5_file(compose)
+    state.setdefault("history", []).append(
+        {"phase": "packaged", "at": utc_now(), "detail": {"task": task, "apk": str(apk), "log": str(log)}}
+    )
+    _write_state(artifact, state)
+    return {"artifactPath": str(artifact), "phase": state["phase"], "task": task, "apk": str(apk), "log": str(log)}
+
+
 def preflight_project(archive: Path, project_root: Path) -> dict[str, Any]:
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] not in {"validated", "preflight"}:
@@ -953,6 +1002,14 @@ def install_k80(archive: Path, project_root: Path, serial: str, expected_avd: st
         raise PipelineError(f"当前阶段不能 install：{state['phase']}")
     if not apk.is_file():
         raise PipelineError(f"APK 不存在：{apk}")
+    compose_file = state.get("composeFile")
+    if not isinstance(compose_file, str) or not compose_file:
+        raise PipelineError("install-k80 缺少 Compose 文件，无法校验 APK 新鲜度")
+    compose = Path(compose_file).expanduser().resolve()
+    if not compose.is_file() or apk.stat().st_mtime < compose.stat().st_mtime:
+        raise PipelineError(f"APK 已过期，请先执行 package-debug：{apk}")
+    if state.get("packagedApk") != str(apk.expanduser().resolve()) or state.get("packagedComposeMd5") != md5_file(compose):
+        raise PipelineError("APK 未由当前 Compose 源码的 package-debug 产出，请先执行 package-debug")
     probe = subprocess.run(["adb", "-s", serial, "shell", "getprop", "ro.boot.qemu.avd_name"], text=True, capture_output=True, check=False)
     if probe.returncode != 0:
         raise PipelineError(f"无法读取模拟器名称：{probe.stderr.strip()}")
@@ -1165,6 +1222,10 @@ def build_parser() -> argparse.ArgumentParser:
     compile_command = subparsers.add_parser("compile")
     compile_command.add_argument("--zip", required=True, type=Path)
     compile_command.add_argument("--project-root", required=True, type=Path)
+    package_command = subparsers.add_parser("package-debug", help="打包与 preflight 编译任务同变体的 APK")
+    package_command.add_argument("--zip", required=True, type=Path)
+    package_command.add_argument("--project-root", required=True, type=Path)
+    package_command.add_argument("--apk", required=True, type=Path)
     install = subparsers.add_parser("install-k80")
     install.add_argument("--zip", required=True, type=Path)
     install.add_argument("--project-root", required=True, type=Path)
@@ -1240,6 +1301,8 @@ def main(argv: list[str] | None = None) -> int:
             result = preflight_project(args.zip, args.project_root)
         elif args.command == "compile":
             result = compile_project(args.zip, args.project_root)
+        elif args.command == "package-debug":
+            result = package_debug(args.zip, args.project_root, args.apk)
         elif args.command == "install-k80":
             result = install_k80(args.zip, args.project_root, args.serial, args.expected_avd, args.apk)
         elif args.command == "screenshot-k80":

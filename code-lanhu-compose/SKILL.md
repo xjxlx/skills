@@ -35,6 +35,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 首次处理 ZIP 先执行 `python3 scripts/lanhu_pipeline.py run-fixed --zip <zip> --project-root <project> --compose <Compose.kt>`；同一完整 `sourceMd5` 命中完整缓存时直接复用当前阶段，不得重新解析 ZIP 或重置 `pipeline.json`。固定阶段和参数见 [固定编排链路契约](references/pipeline-contract.md)。
 - 确认 ZIP、当前工作目录中的 Android 项目、目标模块和构建入口可访问；在项目根目录优先执行 `./gradlew`，仅当 Wrapper 缺失且系统存在 `gradle` 时才回退到 `gradle`。
 - 在解析 ZIP、导入图片或生成 Compose 前，从项目任务列表确定唯一最小相关编译任务并执行一次 Gradle 编译。编译失败时立即停止本次 Skill：只报告该次命令和首个可行动的失败原因，不再运行其他 Gradle 任务，也不继续检查、解析或修改任何设计与资源文件。
+- 首轮取证完成后一次性读取 `设计解析.json`、`images.json`、`repeated-block-candidates.json` 和目标页面的项目模式；后续实现阶段复用这些结果，不为同一 ZIP 重复启动浏览器、重复解析或逐项探索相同证据。
 - 计算 ZIP 完整 MD5；禁止根据文件名判断是否为同一设计。
 - 以规范化的 ZIP 文件名和完整 MD5 前六位确定本次专属工作目录：`.code-lanhu-compose/<zip-stem>-<md5前6位>/`。目录内保存 `设计解析.json`、`images.json` 与 `runs/`；完整 MD5 必须写入 JSON 供身份校验。
 - 安全解压到当前用户下载目录的 `<zip-stem>-<md5前6位>/`，解压前拒绝绝对路径、`..` 路径穿越和指向目录外的符号链接。
@@ -92,6 +93,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 - 预检、资源导入、生成检查、编译、K80 安装和截图必须通过 `scripts/lanhu_pipeline.py` 的固定子命令执行；默认由 `run-fixed` 自动串联设计采集、资源导入和编译，模型决策只能通过契约化 JSON 记录。
 - `preflight` 根据目标 Compose 路径和 Gradle 任务列表由 Python 自动确定模块的 Debug Kotlin 编译任务并写入状态；`compile` 只能复用该任务，不接受模型临时指定的 task。若存在多个 Debug variant 或无法识别，脚本立即暂停并请求用户明确选择。
+- `compile` 只编译 Kotlin，不保证生成可安装 APK；每次编译成功后必须执行 `package-debug --apk <apk>`。该命令从同一个 `preflightTask` 自动推导对应的 `assemble<Variant>`，并记录 Compose Hash 与 APK 路径；`install-k80` 会拒绝旧 APK、路径不一致或未登记的产物，避免安装 stale APK 后重复截图。
 - 每轮修正只重新运行同一个由 Python 确定的最小相关编译任务，禁止把模糊的 `compileDebugKotlin` 当成所有项目的固定命令。
 - 生成后的编译失败先定位首个可行动原因：若错误只涉及本次修改的 Compose 文件或新导入资源，且可由诊断直接确定最小修复（如作用域接收者、导入、类型、资源 ID），自动修复并重跑同一编译任务，最多三轮。预检失败、用户既有文件错误、ZIP/资源映射错误、构建环境错误或需业务决策的错误仍须立即停止并报告。
 - 编译成功后安装到明确的模拟器或设备，固定分辨率、density、字体缩放、语言、主题和测试数据。
@@ -107,7 +109,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - K80 截图完成并生成归一化截图后，必须执行 `python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project> --app <归一化截图>`；省略 `--app` 仅适用于原始截图与设计稿宽高比一致的情况。该阶段只调用 `$code-image` 的独立 `compare_images.py`，在 `runs/` 生成 `diff.json`、`diff-mask.png`、`diff-heatmap.png` 和 `diff-overlay.png`，并把本次 ZIP 的 `sourceMd5` 写入报告。也可以省略 `mark-diff` 的 `--report`，由它自动触发同一对比阶段。
 - 模型必须读取 `diff.json` 的指标、区域和证据图后，才决定 `repair`、`pass` 或 `stop`；Python 只生成对比证据，不自动修改 Compose，修复仍通过模型的契约化补丁完成。
 - 逐项比较整体布局、元素边界、文本基线、字号、行高、字距、间距、颜色、圆角、阴影、图片裁剪和遮挡关系。
-- 初次生成后最多执行三轮“修正 → 编译 → 安装/运行 → 截图 → 对比”。达到目标、连续修正无改善或遇到外部阻塞时提前停止。
+- 初次生成后最多执行三轮“修正 → 编译 → 打包 → 安装/运行 → 截图 → 对比”。如果连续一次修正的关键指标和证据图没有改善，立即 `stop`，不要消耗剩余轮次；达到目标或遇到外部阻塞时同样提前停止。
 - 每轮只修复有截图或布局数据支持的差异；禁止为了追求像素一致破坏项目公共组件或扩大修改范围。
 
 截图命令、证据目录和停止条件见 [视觉验证闭环](references/visual-validation.md)。

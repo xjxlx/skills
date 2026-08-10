@@ -6,6 +6,7 @@ from __future__ import annotations
 import importlib.util
 import base64
 import json
+import os
 import tempfile
 import unittest
 import zipfile
@@ -102,6 +103,50 @@ class LanhuPipelineContractTest(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             with patch.object(PIPELINE.shutil, "which", return_value="/usr/local/bin/gradle"):
                 self.assertEqual(PIPELINE.gradle_command(Path(temp_dir)), ["gradle"])
+
+    def test_derive_package_task_from_compile_task(self) -> None:
+        self.assertEqual(
+            PIPELINE.derive_package_task(":app:compileDebugKotlin"),
+            ":app:assembleDebug",
+        )
+        self.assertEqual(
+            PIPELINE.derive_package_task(":feature:compileFooDebugKotlin"),
+            ":feature:assembleFooDebug",
+        )
+        with self.assertRaises(PIPELINE.PipelineError):
+            PIPELINE.derive_package_task(":app:assembleDebug")
+
+    def test_install_k80_rejects_apk_older_than_compose(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            compose = project_root / "app" / "src" / "main" / "java" / "Page.kt"
+            compose.parent.mkdir(parents=True)
+            compose.write_text("@Composable fun Page() {}\n", encoding="utf-8")
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("index.html", '<link href="style.css" rel="stylesheet"><div></div>')
+                zipped.writestr("style.css", ".page { width: 10px; }")
+
+            PIPELINE.inspect_archive(archive, project_root, compose)
+            artifact, _, state = PIPELINE.load_source(archive, project_root)
+            for phase in ("validated", "preflight", "assets_imported", "generated", "compiled"):
+                PIPELINE.transition(state, phase)
+            state["composeFile"] = str(compose.resolve())
+            state["preflightTask"] = ":app:compileDebugKotlin"
+            PIPELINE._write_state(artifact, state)
+
+            apk = project_root / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+            apk.parent.mkdir(parents=True)
+            apk.write_bytes(b"stale")
+            os.utime(apk, (1, 1))
+
+            with patch.object(PIPELINE.subprocess, "run") as run:
+                with self.assertRaises(PIPELINE.PipelineError) as error:
+                    PIPELINE.install_k80(archive, project_root, "emulator-5554", "K80", apk)
+
+            run.assert_not_called()
+            self.assertIn("过期", str(error.exception))
 
     def test_discover_compile_task_uses_target_module_debug_kotlin(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
