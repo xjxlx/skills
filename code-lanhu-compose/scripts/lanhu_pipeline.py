@@ -144,7 +144,10 @@ def transition(state: dict[str, Any], phase: str, detail: dict[str, Any] | None 
         raise PipelineError(f"未知流程阶段：{phase}")
     current_index = PHASES.index(state.get("phase", "created"))
     next_index = PHASES.index(phase)
-    if next_index != current_index + 1 and next_index != current_index:
+    # Compose 源码发生变化后，允许从已编译状态回退到 generated，重新执行同一编译任务。
+    # 这是可重复运行固定管线所必需的状态迁移，不代表设计解析或资源阶段需要重做。
+    can_recompile = state.get("phase") == "compiled" and phase == "generated"
+    if next_index != current_index + 1 and next_index != current_index and not can_recompile:
         raise PipelineError(f"阶段顺序不允许：{state.get('phase')} -> {phase}")
     state["phase"] = phase
     state.setdefault("history", []).append({"phase": phase, "at": utc_now(), "detail": detail or {}})
@@ -743,6 +746,22 @@ def run_fixed_pipeline(archive: Path, project_root: Path, compose_file: Path) ->
         _write_state(artifact, state)
         compile_project(archive, project_root)
         return {"artifactPath": str(artifact), "phase": "compiled", "status": "compile_started", "design": design}
+    if state["phase"] == "compiled":
+        current = md5_file(compose_file)
+        last_generated = None
+        for item in reversed(state.get("history", [])):
+            if item.get("phase") == "generated":
+                detail = item.get("detail", {})
+                last_generated = detail.get("composeMd5")
+                break
+        if current != last_generated:
+            validate_compose_source(compose_file)
+            state["composeFile"] = str(compose_file)
+            transition(state, "generated", {"composeFile": str(compose_file), "composeMd5": current})
+            _write_state(artifact, state)
+            compile_project(archive, project_root)
+            return {"artifactPath": str(artifact), "phase": "compiled", "status": "recompiled_after_compose_change", "design": design}
+        return {"artifactPath": str(artifact), "phase": state["phase"], "status": "unchanged", "design": design}
     if state["phase"] == "generated":
         compile_project(archive, project_root)
         return {"artifactPath": str(artifact), "phase": "compiled", "status": "compile_started", "design": design}
