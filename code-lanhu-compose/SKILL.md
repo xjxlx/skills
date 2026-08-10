@@ -63,7 +63,8 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 将纵向布局映射为 `Column`，横向布局映射为 `Row`，重叠或相对定位映射为 `Box`，重复且可滚动内容映射为 `LazyColumn` 或 `LazyRow`。
 - 禁止因为浏览器提供了坐标就把整个页面实现为 `Box + offset`。
 - 将重复颜色提取为 `Color` 常量，将重复间距提取为 `Dp` 常量；字号使用 `sp`，布局尺寸使用 `dp`。
-- 根据设计画布和目标设备建立统一换算关系，禁止无条件假设 `1px = 1dp`。
+- 设计稿中的 `1600×720` 等尺寸按设计像素（px/PS）处理，不是 dp；先读取实际 Compose 可用窗口的物理像素尺寸，再建立换算关系，禁止无条件假设 `1px = 1dp`。
+- 如果需求是“铺满全屏”，虚拟设计画布从父容器左上角放置，分别计算 `scaleX = viewportWidthPx / designWidthPx / density` 和 `scaleY = viewportHeightPx / designHeightPx / density`；不要动态计算 `translationX`、`translationY`。使用 `graphicsLayer` 时只保留固定的 `TransformOrigin(0f, 0f)` 作为缩放基准，不把它作为适配参数。
 - 用 `Modifier` 表达尺寸、间距、背景、裁剪、边框和阴影，并检查 Modifier 顺序是否改变视觉结果。
 - Compose 生成后必须通过固定管线的布局安全检查；`padding(...)` 参数必须保持非负。CSS 的负 margin 或跨边界相对坐标不得翻译成负 padding，需用 `Modifier.offset` 或有足够空间的父级布局表达，并保留原有视觉位移语义。
 - 将页面拆成小而内聚的私有 Composable；只生成设计能够证明的静态状态和用户明确提供的交互。
@@ -102,8 +103,8 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 - `采集设计` 的完整缓存以 ZIP 完整 MD5、设计解析版本和 `runs/设计截图.png` 共同校验；命中时不得启动服务或浏览器。未命中时才执行 `start-design-server → 采集设计 → screenshot-design`，并在首次采集后固定复用 `runs/设计截图.png`。`screenshot-design` 无论登记成功或失败都会回收本次静态服务。去掉蓝湖预览外壳的缩小变换，但保留设计元素自身的变换。
 - `runs/` 禁止创建时间戳子目录。App 截图固定按顺序保存为 `应用截图.png`、`应用截图_1.png`、`应用截图_2.png`……，不得覆盖已有证据。
-- 将设计截图与 App 截图裁剪到相同有效区域，并统一画布尺寸、系统栏、颜色空间和缩放比例。
-- K80 截图完成后必须执行 `python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project>`；该阶段只调用 `$code-image` 的独立 `compare_images.py`，在 `runs/` 生成 `diff.json`、`diff-mask.png`、`diff-heatmap.png` 和 `diff-overlay.png`，并把本次 ZIP 的 `sourceMd5` 写入报告。也可以省略 `mark-diff` 的 `--report`，由它自动触发同一对比阶段。
+- 截图对比前保留原始 App 截图，先按 [视觉验证闭环](references/visual-validation.md) 归一化有效内容区域、系统栏、颜色空间和画布尺寸；宽高比不一致时禁止直接调用 `compare_images.py` 或用 `--aspect-tolerance` 强行放行。
+- K80 截图完成并生成归一化截图后，必须执行 `python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project> --app <归一化截图>`；省略 `--app` 仅适用于原始截图与设计稿宽高比一致的情况。该阶段只调用 `$code-image` 的独立 `compare_images.py`，在 `runs/` 生成 `diff.json`、`diff-mask.png`、`diff-heatmap.png` 和 `diff-overlay.png`，并把本次 ZIP 的 `sourceMd5` 写入报告。也可以省略 `mark-diff` 的 `--report`，由它自动触发同一对比阶段。
 - 模型必须读取 `diff.json` 的指标、区域和证据图后，才决定 `repair`、`pass` 或 `stop`；Python 只生成对比证据，不自动修改 Compose，修复仍通过模型的契约化补丁完成。
 - 逐项比较整体布局、元素边界、文本基线、字号、行高、字距、间距、颜色、圆角、阴影、图片裁剪和遮挡关系。
 - 初次生成后最多执行三轮“修正 → 编译 → 安装/运行 → 截图 → 对比”。达到目标、连续修正无改善或遇到外部阻塞时提前停止。

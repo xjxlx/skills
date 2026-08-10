@@ -1039,7 +1039,7 @@ def _latest_app_screenshot(artifact: Path, state: dict[str, Any]) -> Path:
     raise PipelineError("找不到最近一次 App 截图，请先执行 screenshot-k80")
 
 
-def compare_screenshots(archive: Path, project_root: Path) -> dict[str, Any]:
+def compare_screenshots(archive: Path, project_root: Path, app_override: Path | None = None) -> dict[str, Any]:
     """调用 code-image 的独立视觉对比脚本，生成可追溯的差异证据。"""
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] != "screenshot":
@@ -1048,7 +1048,10 @@ def compare_screenshots(archive: Path, project_root: Path) -> dict[str, Any]:
     design = runs / "设计截图.png"
     if not design.is_file():
         raise PipelineError(f"设计截图不存在：{design}")
-    app = _latest_app_screenshot(artifact, state)
+    app = _latest_app_screenshot(artifact, state) if app_override is None else app_override.expanduser().resolve()
+    runs = (artifact / "runs").resolve()
+    if runs not in app.parents or not app.is_file():
+        raise PipelineError(f"对比截图不存在或不在当前 artifact/runs 内：{app}")
     output_dir = runs
     log_path = artifact / "logs" / "compare-images.log"
     command = [
@@ -1190,6 +1193,7 @@ def build_parser() -> argparse.ArgumentParser:
     compare = subparsers.add_parser("compare-screenshots", help="调用 code-image 独立视觉对比脚本")
     compare.add_argument("--zip", required=True, type=Path)
     compare.add_argument("--project-root", required=True, type=Path)
+    compare.add_argument("--app", type=Path, help="已归一化的 App 截图；省略时使用最近一次 screenshot-k80 原图")
     diff = subparsers.add_parser("mark-diff")
     diff.add_argument("--zip", required=True, type=Path)
     diff.add_argument("--project-root", required=True, type=Path)
@@ -1249,7 +1253,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "stop-design-server":
             result = stop_design_server(args.zip, args.project_root)
         elif args.command == "compare-screenshots":
-            result = compare_screenshots(args.zip, args.project_root)
+            result = compare_screenshots(args.zip, args.project_root, args.app)
         elif args.command == "mark-diff":
             result = mark_diff(args.zip, args.project_root, args.report, args.outcome)
         elif args.command == "complete":

@@ -66,17 +66,41 @@ adb -s <serial> pull /sdcard/lanhu_compose_screen.png <artifact>/runs/应用截�
 - 背景色、透明通道和颜色空间。
 - 设计状态、文本内容、语言、字体缩放和测试数据。
 
-禁止直接比较两个未经归一化的整屏截图。
+### 设计像素、窗口适配和归一化策略
+
+- 从 `设计解析.json` 读取设计画布的宽高像素；蓝湖标注的 `1600×720` 是设计像素（px/PS），不是 Android dp。
+- 从实际截图或 Compose `BoxWithConstraints` 读取可用窗口的物理像素宽高，并记录是否包含状态栏、导航栏和安全区。不要用模拟器外层窗口截图尺寸代替 App 内容尺寸。
+- 需求为“铺满全屏”时，页面根节点使用左上角虚拟画布，横纵分别计算缩放比例：`scaleX = viewportWidthPx / designWidthPx`、`scaleY = viewportHeightPx / designHeightPx`；Compose 中再分别除以 `density`。不要用动态 `translationX/Y` 补偿父布局居中。
+- 需求为“保持设计比例”时使用统一比例，并明确选择留白或裁剪；不要为了消除留白而偷偷拉伸设计内容。
+- 宽高比不一致时，保留原始 App 截图作为证据，再生成归一化截图：全屏填充模式把有效 App 内容按横纵比例重采样到设计画布尺寸；等比适配模式先按实际画布位置裁剪，再重采样到设计画布尺寸。记录输入路径、裁剪区域、缩放比例和适配模式。
+- 只有归一化截图的宽高比与设计图一致后，才能调用 `compare_images.py`；禁止用 `--aspect-tolerance` 绕过宽高比错误。通过固定管线的 `compare-screenshots --app <归一化截图>` 传入该文件。
+
+归一化使用 Skill 自带脚本，`fill` 模式默认使用整张有效 App 截图，`fit` 模式必须显式提供设计画布裁剪区域：
+
+```bash
+python3 scripts/normalize_compare_screenshot.py \
+  --design <artifact>/runs/设计截图.png \
+  --app <artifact>/runs/应用截图_1.png \
+  --output <artifact>/runs/应用截图_归一化.png \
+  --mode fill
+```
+
+等比适配示例：`--mode fit --crop x,y,width,height`。脚本输出的 JSON 变换信息应保存到本轮日志或对比决策中。
+
+禁止直接比较两个未经归一化的整屏截图，也禁止覆盖原始 App 截图。
 
 ## 机器对比与差异顺序
 
-完成 `screenshot-k80` 后，必须让固定管线调用 `$code-image` 的独立图片对比脚本：
+完成 `screenshot-k80` 并生成归一化截图后，必须让固定管线调用 `$code-image` 的独立图片对比脚本：
 
 ```bash
-python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project>
+python3 scripts/lanhu_pipeline.py compare-screenshots \
+  --zip <zip> \
+  --project-root <project> \
+  --app <artifact>/runs/应用截图_归一化.png
 ```
 
-该命令以 `runs/设计截图.png` 和最近一次 `应用截图*.png` 为输入，生成 `diff.json` 及遮罩、热力图、叠加图。报告中的 `sourceMd5`、输入路径、整体指标和连通差异区域是后续修复的唯一机器证据；`mark-diff --outcome ...` 省略 `--report` 时也会自动执行这一步。脚本只识别和记录差异，不直接改动 Compose。
+该命令以 `runs/设计截图.png` 和显式传入的归一化 App 截图为输入，生成 `diff.json` 及遮罩、热力图、叠加图。报告中的 `sourceMd5`、输入路径、整体指标和连通差异区域是后续修复的唯一机器证据；`mark-diff --outcome ...` 省略 `--report` 时也会自动执行同一对比阶段。脚本只识别和记录差异，不直接改动 Compose。
 
 按以下顺序定位和修正：
 

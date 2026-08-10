@@ -49,12 +49,13 @@ class LanhuPipelineContractTest(unittest.TestCase):
             state["lastScreenshot"] = str(app)
             PIPELINE._write_state(artifact, state)
 
-            result = PIPELINE.compare_screenshots(archive, project_root)
+            result = PIPELINE.compare_screenshots(archive, project_root, app)
 
             report = Path(result["report"])
             self.assertTrue(report.is_file())
             report_data = json.loads(report.read_text(encoding="utf-8"))
             self.assertEqual(report_data["sourceMd5"], source["sourceMd5"])
+            self.assertEqual(report_data["appScreenshot"], str(app))
             self.assertEqual(result["phase"], "screenshot")
             _, _, saved_state = PIPELINE.load_source(archive, project_root)
             self.assertEqual(saved_state["comparison"]["report"], str(report))
