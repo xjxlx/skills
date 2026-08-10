@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-09 21:09:02，由 github-manager 维护
+> 自动生成于 2026-08-10 09:50:32，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -9,7 +9,7 @@
 |---|---|---|---|---|
 | [code-analyzer](https://github.com/xjxlx/skills/tree/main/code-analyzer) | 为指定 Java、Kotlin 文件梳理方法逻辑，添加详细中文方法注释，检测潜在 bug 和性能复杂度问题，并调用 code-normalize 完成成员... | code-normalize, skill-common | 已发布 | 2026-08-09 |
 | [code-compose](https://github.com/xjxlx/skills/tree/main/code-compose) | 生成符合当前项目规范的 Android Compose 代码，并随使用持续积累项目约定。接收从蓝湖（Lanhu）复制的设计信息（尺寸、颜色、字号、间距、布... | skill-common | 已发布 | 2026-08-09 |
-| [code-image](https://github.com/xjxlx/skills/tree/main/code-image) | Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并转换为合规 Android 资源名和稳定映射。 | 无 | 已发布 | 2026-08-09 |
+| [code-image](https://github.com/xjxlx/skills/tree/main/code-image) | Use when 需要导入 Android 图片资源，或明确要求比较设计图与应用截图的视觉差异。 | 无 | 已发布 | 2026-08-09 |
 | [code-lanhu-compose](https://github.com/xjxlx/skills/tree/main/code-lanhu-compose) | Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，需要在 Android 项目中生成或还原 Jetpack Compose 页面，... | code-image | 已发布 | 2026-08-09 |
 | [code-normalize](https://github.com/xjxlx/skills/tree/main/code-normalize) | 检测并安全规范 Java、Kotlin 类中的成员变量命名，更新全部引用，补充缺失的类注释，并为关键成员添加作用说明；发现已启用 ViewBinding ... | skill-common | 已发布 | 2026-08-09 |
 | [github-manager](https://github.com/xjxlx/skills/tree/main/github-manager) | 实现个人 Codex Skills 的变更检测、凭据扫描、GitHub 发布、目录维护和本地恢复。当用户要求检查发布状态、发布或更新 skill、扫描敏感... | 无 | 已发布 | 2026-08-09 |
@@ -59,9 +59,9 @@ graph LR
 ### code-image
 
 - **目录名**：`code-image`
-- **用途**：Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并转换为合规 Android 资源名和稳定映射。
+- **用途**：Use when 需要导入 Android 图片资源，或明确要求比较设计图与应用截图的视觉差异。
 - **依赖**：无
-- **文件数**：7
+- **文件数**：11
 - **UI 元数据**：有 agents/openai.yaml
 - **路径**：`~/.codex/skills/code-image/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-image

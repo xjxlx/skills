@@ -1,4 +1,4 @@
 interface:
   display_name: "Code Image"
-  short_description: "导入单图或 ZIP 的 mipmap 图片并保存映射"
-  default_prompt: "Use $code-image 处理一个指定图片或一个含 mipmap 目录的 ZIP；Compose 文件可选。"
+  short_description: "导入 mipmap 图片或显式执行设计图视觉对比"
+  default_prompt: "Use $code-image 导入一个指定图片/ZIP；只有明确要求时才使用独立 compare_images.py 对比设计图和应用截图。"

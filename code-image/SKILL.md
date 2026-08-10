@@ -1,11 +1,11 @@
 ---
 name: code-image
-description: Use when 需要导入单张图片或含 mipmap 目录的 ZIP，并转换为合规 Android 资源名和稳定映射。
+description: Use when 需要导入 Android 图片资源，或明确要求比较设计图与应用截图的视觉差异。
 ---
 
 # Code Image
 
-导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 解压后按其中的 `mipmap` 或 `mipmap-*` 目录复制到项目对应目录。每张导入图片均独立生成合规名称并记录映射。
+导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 解压后按其中的 `mipmap` 或 `mipmap-*` 目录复制到项目对应目录。每张导入图片均独立生成合规名称并记录映射。视觉对比是独立能力，不会在图片转换时自动执行。
 
 ## 强制入口与维护边界
 
@@ -74,6 +74,17 @@ python3 scripts/normalize_images.py \
   --apply
 ```
 
+## 独立视觉对比（必须显式调用）
+
+只有用户明确要求比较两张图时，才调用 `scripts/compare_images.py`；它不复制图片、不修改 Compose、不写入资源映射，也不被 `normalize_images.py` 或 `--image/--zip` 流程隐式调用。脚本会校验宽高比、按设计图尺寸对齐应用截图，并输出像素差、SSIM、边缘差异、差异区域和三张证据图。完整参数和输出契约见 [image-comparison.md](references/image-comparison.md)。
+
+```bash
+python3 scripts/compare_images.py \
+  --design <设计截图.png> \
+  --app <应用截图.png> \
+  --output-dir <差异证据目录>
+```
+
 ## 禁止事项
 
 - 禁止覆盖已有图片、自动合并不同来源的图片或修改 Compose 引用。
@@ -85,6 +96,7 @@ python3 scripts/normalize_images.py \
 
 ```bash
 python3 scripts/test_normalize_images.py
+python3 scripts/test_compare_images.py
 python3 /Users/XJX/.codex/skills/.system/skill-creator/scripts/quick_validate.py /Users/XJX/.codex/skills/code-image
 ```
 
