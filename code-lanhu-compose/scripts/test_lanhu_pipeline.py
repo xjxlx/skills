@@ -187,7 +187,7 @@ class LanhuPipelineContractTest(unittest.TestCase):
                     PIPELINE.discover_compile_task(root, compose)
             self.assertIn("多个 Debug Kotlin", str(error.exception))
 
-    def test_run_fixed_waits_for_compose_generation_before_compile(self) -> None:
+    def test_run_fixed_generates_compose_from_dom_before_compile(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             archive = root / "design.zip"
@@ -204,24 +204,18 @@ class LanhuPipelineContractTest(unittest.TestCase):
             for phase in ("validated", "preflight", "assets_imported"):
                 PIPELINE.transition(state, phase)
             state["composeFile"] = str(compose.resolve())
-            state["composeBaselineMd5"] = PIPELINE.md5_file(compose)
             PIPELINE._write_state(artifact, state)
 
             with patch.object(PIPELINE, "ensure_design_evidence") as ensure_design, patch.object(
-                PIPELINE, "compile_project"
-            ) as compile_project:
-                waiting = PIPELINE.run_fixed_pipeline(archive, project_root, compose)
-                self.assertEqual(waiting["status"], "awaiting_compose_generation")
-                compile_project.assert_not_called()
-                ensure_design.assert_called_once()
-
-                compose.write_text("@Composable fun Page() { Text(\"generated\") }\n", encoding="utf-8")
+                PIPELINE, "generate_compose_from_dom", return_value={"outputPath": str(compose)}
+            ) as generate, patch.object(PIPELINE, "compile_project") as compile_project:
                 compiled = PIPELINE.run_fixed_pipeline(archive, project_root, compose)
-                self.assertEqual(compiled["status"], "compile_started")
+                self.assertEqual(compiled["status"], "compose_generated_and_compile_started")
+                ensure_design.assert_called_once()
+                generate.assert_called_once_with(archive.resolve(), project_root.resolve(), compose.resolve())
                 compile_project.assert_called_once_with(archive.resolve(), project_root.resolve())
             _, _, updated = PIPELINE.load_source(archive, project_root)
-            self.assertEqual(updated["phase"], "generated")
-            self.assertNotEqual(updated["composeBaselineMd5"], PIPELINE.md5_file(compose))
+            self.assertEqual(updated["phase"], "assets_imported")
 
     def test_inspect_writes_source_manifest(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -241,6 +235,11 @@ class LanhuPipelineContractTest(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["sourceMd5"], result["sourceMd5"])
             self.assertEqual(manifest["html"]["path"], "index.html")
+            dom_path = Path(result["artifactPath"]) / "dom.json"
+            dom = json.loads(dom_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["dom"]["path"], "dom.json")
+            self.assertEqual(dom["htmlPath"], "index.html")
+            self.assertGreater(manifest["dom"]["nodeCount"], 0)
 
     def test_inspect_reuses_matching_manifest_without_resetting_pipeline_state(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -387,7 +386,8 @@ class LanhuPipelineContractTest(unittest.TestCase):
             self.assertTrue(result["cacheHit"])
             self.assertTrue(cached_start["cacheHit"])
             self.assertEqual(design["sourceMd5"], inspected["sourceMd5"])
-            self.assertEqual(design["设计根节点"]["选择器"], ".page")
+            self.assertEqual(design["设计根节点"]["选择器"], "body > :first-child")
+            self.assertIn("domPath", design)
             self.assertEqual(design["设计画布"]["宽度像素"], 344)
             self.assertEqual(design["设计画布"]["高度像素"], 204)
 

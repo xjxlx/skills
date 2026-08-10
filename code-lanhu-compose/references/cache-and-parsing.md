@@ -8,6 +8,7 @@
 .code-lanhu-compose/
 └── <zip-stem>-<md5前6位>/
     ├── 设计解析.json
+    ├── dom.json
     ├── images.json
     ├── repeated-block-candidates.json
     └── runs/
@@ -16,7 +17,7 @@
         └── 应用截图_1.png
 ```
 
-`<zip-stem>` 必须经过安全文件名规范化；目录名由 ZIP 文件名和完整 MD5 前六位组成。`设计解析.json`、`images.json` 和每次运行证据均只属于这个 ZIP，不保存最终 Compose 代码。项目文件始终依据当前代码、主题和组件重新适配。
+`<zip-stem>` 必须经过安全文件名规范化；目录名由 ZIP 文件名和完整 MD5 前六位组成。`dom.json`、`设计解析.json`、`images.json` 和每次运行证据均只属于这个 ZIP，不保存最终 Compose 代码缓存。目标 Compose 首稿由 `generate_compose.py` 每次根据这些输入重新生成。
 
 两个 JSON 都必须记录完整 `sourceMd5`。首次创建和后续写入前先校验已有完整 Hash：相同 MD5 可以原子更新当前产物，不同 MD5 必须拒绝覆盖，即使前六位恰好相同。旧版根目录下的 `designs/`、`images/`、`runs/` 不得当作新布局的缓存命中，也不得自动移动或删除。
 
@@ -51,18 +52,18 @@ python3 scripts/import_zip_images.py \
 }
 ```
 
-首次处理时先用 `start-design-server` 启动仅本机可访问的设计服务，再执行 `采集设计`。解析结果固定写入专属目录内的 `设计解析.json`。同一完整 MD5 只保留一个当前解析结果和一份公共设计截图 `runs/设计截图.png`；后续调用会校验完整 Hash、设计解析版本、根节点和公共截图，全部匹配时直接复用，不再启动服务、解压 ZIP、启动浏览器或重复截图。资源导入也复用同一 Hash 对应且文件完整的下载解压目录。所有运行证据直接保留在同一目录的 `runs/` 根目录，禁止创建时间戳子目录；App 截图按 `应用截图.png`、`应用截图_1.png`、`应用截图_2.png`……递增保存。
+首次处理时先由 `inspect`/`parse-dom` 把完整入口 HTML 固定写入 `dom.json`，再用 `start-design-server` 启动仅本机可访问的设计服务并执行 `采集设计`。浏览器结果固定写入专属目录内的 `设计解析.json`。同一完整 MD5 只保留一个当前解析结果和一份公共设计截图 `runs/设计截图.png`；后续调用会校验完整 Hash、DOM/设计解析版本、根节点和公共截图，全部匹配时直接复用，不再启动服务、解压 ZIP、启动浏览器或重复截图。资源导入也复用同一 Hash 对应且文件完整的下载解压目录。所有运行证据直接保留在同一目录的 `runs/` 根目录，禁止创建时间戳子目录；App 截图按 `应用截图.png`、`应用截图_1.png`、`应用截图_2.png`……递增保存。
 
 ## 缓存命中
 
 只有以下条件全部成立才复用：
 
 1. 当前 ZIP 对应的专属目录存在。
-2. `设计解析.json` 真实存在且可解析。
-3. 解析文件记录的源 MD5 与当前 ZIP 一致。
-4. 解析结构与当前读取逻辑兼容。
+2. `dom.json` 和 `设计解析.json` 真实存在且可解析。
+3. 两个解析文件记录的源 MD5 与当前 ZIP 一致。
+4. DOM IR 版本、设计解析版本和当前读取逻辑兼容。
 
-任一条件失败时重新执行 `start-design-server → 采集设计` 并原子更新 `设计解析.json`；只有截图证据而没有设计解析文件时，不得判定为缓存命中。写入 JSON 时先写临时文件，再原子替换，避免中断造成半文件。
+任一条件失败时重新执行 `parse-dom → start-design-server → 采集设计` 并原子更新两个 JSON；只有截图证据而没有 DOM/设计解析文件时，不得判定为缓存命中。写入 JSON 时先写临时文件，再原子替换，避免中断造成半文件。
 
 ## 标准化设计产物
 
@@ -70,8 +71,8 @@ python3 scripts/import_zip_images.py \
 
 - 源 ZIP 名称、完整 MD5、HTML/CSS 相对路径。
 - 设计画布宽高、设计根节点和浏览器渲染环境。
-- DOM 父子层级、元素标签、class、id、文本和伪元素内容。
-- 每个 class 的原始 token、主节点 token、布局工具 token，以及各自命中的 CSS 选择器；`flex-row`、`flex-col` 只归为布局工具，仍保留其参与的最终计算样式。
+- `dom.json` 中完整 DOM 父子层级、元素标签、原始属性、class token、id、文本和资源引用；class 只保存原文，不承担结构推断。
+- `设计解析.json` 中按 `nodeId` 对齐的最终计算样式，不用 class 选择器重新建立结构。
 - 每个节点的最终边界、可见性、层叠顺序和变换矩阵。
 - 布局模式、方向、对齐、`gap`、padding、margin、宽高约束和 overflow。
 - 最终颜色、字体族、字号、字重、行高、字距、文本对齐和最大行数。
@@ -82,7 +83,7 @@ python3 scripts/import_zip_images.py \
 ## 解析要求
 
 - 用 DOM 关系确定结构，不只扫描 `.paragraph_4` 一类选择器。
-- 节点身份、图片资源名优先取非布局工具的主类或 ID；`flex-row`、`flex-col` 不能单独成为节点名。它们若在实际加载 CSS 中命中规则，必须通过 `getComputedStyle()` 保留对布局的贡献。
+- 节点身份固定使用 DOM 顺序生成的 `nodeId`；不能用 class 名替换节点身份或资源映射键。
 - 用 `getComputedStyle()` 解析继承、层叠、行内样式和 CSS 变量。
 - 用 `getBoundingClientRect()` 记录浏览器完成 flex、transform 和定位计算后的边界。
 - 分别读取 `::before`、`::after`；有可见内容时作为设计节点记录。

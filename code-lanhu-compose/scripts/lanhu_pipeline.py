@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """code-lanhu-compose 的固定编排器。
 
-脚本只负责可确定、可重放的流程和状态；设计语义、Compose 代码与补丁仍由
-大模型在白名单决策契约内完成，避免为了绕过流程临时生成另一套脚本。
+脚本负责可确定、可重放的流程、DOM IR、Compose 首稿和状态；大模型只在
+项目适配、异常确认和视觉修正阶段通过白名单决策契约参与。
 """
 
 from __future__ import annotations
@@ -25,6 +25,8 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from detect_repeated_blocks import detect_repeated_blocks
+from generate_compose import GenerationError, generate_compose
+from parse_html_dom import parse_html_archive
 
 
 PHASES = (
@@ -48,7 +50,8 @@ GRADLE_COMPILE_TASK = re.compile(
 SAFE_SERIAL = re.compile(r"^[A-Za-z0-9_.:-]+$")
 DESIGN_SERVER_PROCESSES: dict[int, subprocess.Popen[Any]] = {}
 DESIGN_DOCUMENT_NAME = "设计解析.json"
-DESIGN_DOCUMENT_VERSION = 1
+DESIGN_DOCUMENT_VERSION = 2
+DOM_DOCUMENT_NAME = "dom.json"
 CHROME_EXECUTABLE = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
 
 
@@ -184,6 +187,19 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
     cached = _load_cached_inspection(artifact, source_sha)
     if cached is not None:
         source_manifest, state = cached
+        dom_path = artifact / DOM_DOCUMENT_NAME
+        if not dom_path.is_file() or "dom" not in source_manifest:
+            if dom_path.is_file():
+                try:
+                    dom = json.loads(dom_path.read_text(encoding="utf-8"))
+                except (OSError, ValueError):
+                    dom = parse_html_archive(archive, source_manifest["html"]["path"])
+            else:
+                dom = parse_html_archive(archive, source_manifest["html"]["path"])
+            dom["sourceMd5"] = source_sha
+            atomic_json(dom_path, dom)
+            source_manifest["dom"] = {"path": dom_path.name, "nodeCount": len(dom["nodes"]), "resourceCount": len(dom["resources"])}
+            atomic_json(artifact / "source.json", source_manifest)
         return {**source_manifest, "phase": state["phase"], "cacheHit": True}
 
     entries = zip_entries(archive)
@@ -196,6 +212,10 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
         html_text = zipped.read(html_info).decode("utf-8", errors="replace")
     names = [safe_zip_name(info.filename) for info in entries]
     css_files = _referenced_css(html_text, names, safe_zip_name(html_info.filename))
+    dom = parse_html_archive(archive, safe_zip_name(html_info.filename))
+    dom["sourceMd5"] = source_sha
+    dom_path = artifact / DOM_DOCUMENT_NAME
+    atomic_json(dom_path, dom)
     repeated_blocks = detect_repeated_blocks(archive, css_files, safe_zip_name(html_info.filename))
     repeated_blocks["sourceMd5"] = source_sha
     repeated_blocks_path = artifact / "repeated-block-candidates.json"
@@ -208,6 +228,7 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
         "artifactPath": str(artifact),
         "html": {"path": safe_zip_name(html_info.filename)},
         "css": [{"path": path} for path in css_files],
+        "dom": {"path": dom_path.name, "nodeCount": len(dom["nodes"]), "resourceCount": len(dom["resources"])},
         "repeatedBlockCandidates": {
             "path": repeated_blocks_path.name,
             "candidateCount": repeated_blocks["candidateCount"],
@@ -541,10 +562,22 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
     except ImportError as error:
         raise PipelineError("缺少 Playwright，无法采集浏览器最终布局") from error
 
+    dom_path = artifact / DOM_DOCUMENT_NAME
+    try:
+        dom = json.loads(dom_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise PipelineError(f"缺少完整 DOM IR，无法采集设计：{dom_path}") from error
+    element_node_ids = [
+        node["nodeId"] for node in dom.get("nodes", [])
+        if isinstance(node, dict) and not str(node.get("tag", "")).startswith("#") and node.get("tag") != "document"
+    ]
     script = """
-        () => {
-          const root = document.querySelector('.page');
+        (elementNodeIds) => {
+          const body = document.body;
+          const root = body && body.children.length === 1 ? body.firstElementChild : body;
           if (!root) return null;
+          const browserElements = Array.from(document.querySelectorAll('*'));
+          const nodeIdByElement = new Map(browserElements.map((element, index) => [element, elementNodeIds[index] || null]));
           const rect = (node) => {
             const value = node.getBoundingClientRect();
             return { x: value.x, y: value.y, width: value.width, height: value.height };
@@ -568,7 +601,7 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
             const style = getComputedStyle(node);
             const index = nodes.length;
             nodes.push({
-              parentIndex, tag: node.tagName.toLowerCase(), id: node.id || null,
+              nodeId: nodeIdByElement.get(node), parentIndex, tag: node.tagName.toLowerCase(), id: node.id || null,
               classNames: Array.from(node.classList), text: Array.from(node.childNodes)
                 .filter((child) => child.nodeType === Node.TEXT_NODE)
                 .map((child) => child.textContent.trim()).filter(Boolean).join(' '),
@@ -578,11 +611,11 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
           };
           walk(root, null);
           return {
-            root: { selector: '.page', bounds: rect(root) },
+            root: { selector: root === body ? 'body' : 'body > :first-child', nodeId: nodeIdByElement.get(root), bounds: rect(root) },
             browser: { userAgent: navigator.userAgent, viewport: { width: window.innerWidth, height: window.innerHeight } },
             nodes,
             images: Array.from(root.querySelectorAll('img')).map((image) => ({
-              source: image.currentSrc || image.src, naturalWidth: image.naturalWidth,
+              nodeId: nodeIdByElement.get(image), source: image.currentSrc || image.src, naturalWidth: image.naturalWidth,
               naturalHeight: image.naturalHeight, bounds: rect(image), objectFit: getComputedStyle(image).objectFit
             }))
           };
@@ -595,13 +628,13 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
                 page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1)
                 page.goto(url, wait_until="networkidle")
                 page.evaluate("() => document.fonts.ready")
-                result = page.evaluate(script)
+                result = page.evaluate(script, element_node_ids)
             finally:
                 browser.close()
     except PlaywrightError as error:
         raise PipelineError(f"浏览器采集设计失败：{error}") from error
     if result is None:
-        raise UserInputRequired("设计页未找到 .page 根节点，无法确定有效截图区域")
+        raise UserInputRequired("设计页没有可确定的 body 根节点，无法确定有效截图区域")
 
     bounds = result["root"]["bounds"]
     design = {
@@ -612,10 +645,11 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
         "入口文件": source["html"]["path"],
         "样式文件": [item["path"] for item in source["css"]],
         "设计画布": {"宽度像素": round(bounds["width"]), "高度像素": round(bounds["height"])},
-        "设计根节点": {"选择器": result["root"]["selector"], "边界": bounds},
+        "设计根节点": {"选择器": result["root"]["selector"], "nodeId": result["root"].get("nodeId"), "边界": bounds},
         "浏览器环境": result["browser"],
         "节点": result["nodes"],
         "图片资源": result["images"],
+        "domPath": str(dom_path),
         "采集时间": utc_now(),
     }
     design_path = artifact / DESIGN_DOCUMENT_NAME
@@ -714,6 +748,76 @@ def import_assets(archive: Path, project_root: Path, compose_file: Path, apply: 
     return {"artifactPath": str(artifact), "phase": state["phase"], "composeBaselineMd5": state["composeBaselineMd5"]}
 
 
+def infer_package_name(compose_file: Path) -> str:
+    try:
+        source = compose_file.read_text(encoding="utf-8")
+    except OSError as error:
+        raise PipelineError(f"无法读取 Compose 包名：{compose_file}") from error
+    match = re.search(r"^\s*package\s+([A-Za-z_][\w.]*)", source, flags=re.MULTILINE)
+    if not match:
+        raise UserInputRequired(f"目标 Compose 缺少 package 声明，无法确定代码生成包名：{compose_file}")
+    return match.group(1)
+
+
+def infer_resource_package(compose_file: Path) -> str | None:
+    try:
+        source = compose_file.read_text(encoding="utf-8")
+    except OSError as error:
+        raise PipelineError(f"无法读取资源包名：{compose_file}") from error
+    match = re.search(r"^\s*import\s+([A-Za-z_][\w.]*)\.R\s*$", source, flags=re.MULTILINE)
+    return match.group(1) if match else None
+
+
+def generate_compose_from_dom(archive: Path, project_root: Path, compose_file: Path) -> dict[str, Any]:
+    """由已保存的 DOM IR 和浏览器计算结果生成目标 Compose，不读取模型补丁。"""
+    artifact, source, state = load_source(archive, project_root)
+    if state["phase"] not in {"assets_imported", "generated"}:
+        raise PipelineError(f"当前阶段不能 generate-compose：{state['phase']}")
+    dom_path = artifact / DOM_DOCUMENT_NAME
+    design_path = artifact / DESIGN_DOCUMENT_NAME
+    if not dom_path.is_file() or not design_path.is_file():
+        raise PipelineError(f"缺少 DOM/设计解析输入：{dom_path}、{design_path}")
+    try:
+        dom_identity = json.loads(dom_path.read_text(encoding="utf-8"))
+        design_identity = json.loads(design_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise PipelineError("DOM/设计解析输入不是有效 JSON") from error
+    if dom_identity.get("sourceMd5") != source["sourceMd5"] or design_identity.get("sourceMd5") != source["sourceMd5"]:
+        raise PipelineError("DOM 或设计解析结果与当前 ZIP 的 sourceMd5 不一致，拒绝生成")
+    compose_file = compose_file.expanduser().resolve()
+    try:
+        images_path = artifact / "images.json"
+        result = generate_compose(
+            dom_path,
+            design_path,
+            compose_file,
+            infer_package_name(compose_file),
+            images_path if images_path.is_file() else None,
+            infer_resource_package(compose_file),
+        )
+    except GenerationError as error:
+        raise PipelineError(str(error)) from error
+    validate_compose_source(compose_file)
+    state["composeFile"] = str(compose_file)
+    if state["phase"] != "generated":
+        transition(state, "generated", {"composeFile": str(compose_file), "generator": "generate_compose.py", **result})
+    state["domPath"] = str(dom_path)
+    state["designPath"] = str(design_path)
+    state["composeGeneration"] = result
+    _write_state(artifact, state)
+    return {"artifactPath": str(artifact), "phase": state["phase"], **result, "sourceMd5": source["sourceMd5"]}
+
+
+def parse_dom(archive: Path, project_root: Path) -> dict[str, Any]:
+    """显式重建并保存完整 DOM IR，供调试和固定管线复用。"""
+    artifact, source, _ = load_source(archive, project_root)
+    dom = parse_html_archive(archive, source["html"]["path"])
+    dom["sourceMd5"] = source["sourceMd5"]
+    dom_path = artifact / DOM_DOCUMENT_NAME
+    atomic_json(dom_path, dom)
+    return {"artifactPath": str(artifact), "domPath": str(dom_path), "nodeCount": len(dom["nodes"]), "resourceCount": len(dom["resources"]), "sourceMd5": source["sourceMd5"]}
+
+
 def run_fixed_pipeline(archive: Path, project_root: Path, compose_file: Path) -> dict[str, Any]:
     """自动推进浏览器采集、资源导入和编译，只在等待页面代码时暂停。"""
     archive = archive.expanduser().resolve()
@@ -732,20 +836,9 @@ def run_fixed_pipeline(archive: Path, project_root: Path, compose_file: Path) ->
         import_assets(archive, project_root, compose_file, apply=True)
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] == "assets_imported":
-        baseline = state.get("composeBaselineMd5")
-        current = md5_file(compose_file)
-        if not isinstance(baseline, str):
-            state["composeBaselineMd5"] = current
-            _write_state(artifact, state)
-            baseline = current
-        if current == baseline:
-            return {"artifactPath": str(artifact), "phase": state["phase"], "status": "awaiting_compose_generation", "design": design}
-        validate_compose_source(compose_file)
-        state["composeFile"] = str(compose_file)
-        transition(state, "generated", {"composeFile": str(compose_file), "composeMd5": current})
-        _write_state(artifact, state)
+        generated = generate_compose_from_dom(archive, project_root, compose_file)
         compile_project(archive, project_root)
-        return {"artifactPath": str(artifact), "phase": "compiled", "status": "compile_started", "design": design}
+        return {"artifactPath": str(artifact), "phase": "compiled", "status": "compose_generated_and_compile_started", "design": design, "generation": generated}
     if state["phase"] == "compiled":
         current = md5_file(compose_file)
         last_generated = None
@@ -1227,7 +1320,14 @@ def build_parser() -> argparse.ArgumentParser:
     assets.add_argument("--project-root", required=True, type=Path)
     assets.add_argument("--compose", required=True, type=Path)
     assets.add_argument("--apply", action="store_true")
-    fixed = subparsers.add_parser("run-fixed", help="自动执行设计采集、资源导入和编译，仅在等待 Compose 生成时暂停")
+    parse_dom_command = subparsers.add_parser("parse-dom", help="解析并保存入口 HTML 的完整 DOM IR")
+    parse_dom_command.add_argument("--zip", required=True, type=Path)
+    parse_dom_command.add_argument("--project-root", required=True, type=Path)
+    generate = subparsers.add_parser("generate-compose", help="根据 DOM IR 和浏览器计算结果生成 Compose")
+    generate.add_argument("--zip", required=True, type=Path)
+    generate.add_argument("--project-root", required=True, type=Path)
+    generate.add_argument("--compose", required=True, type=Path)
+    fixed = subparsers.add_parser("run-fixed", help="自动执行 DOM 解析、设计采集、资源导入、Compose 生成和编译")
     fixed.add_argument("--zip", required=True, type=Path)
     fixed.add_argument("--project-root", required=True, type=Path)
     fixed.add_argument("--compose", required=True, type=Path)
@@ -1301,6 +1401,10 @@ def main(argv: list[str] | None = None) -> int:
             result = validate_project(args.zip, args.project_root, args.compose)
         elif args.command == "assets":
             result = import_assets(args.zip, args.project_root, args.compose, apply=args.apply)
+        elif args.command == "parse-dom":
+            result = parse_dom(args.zip, args.project_root)
+        elif args.command == "generate-compose":
+            result = generate_compose_from_dom(args.zip, args.project_root, args.compose)
         elif args.command == "run-fixed":
             result = run_fixed_pipeline(args.zip, args.project_root, args.compose)
         elif args.command == "mark-generated":

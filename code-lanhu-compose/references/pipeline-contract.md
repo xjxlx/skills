@@ -2,12 +2,12 @@
 
 `scripts/lanhu_pipeline.py` 是本 Skill 唯一的流程入口。它把一次蓝湖还原拆成可重放的阶段，并在 `.code-lanhu-compose/<name>-<md5前6位>/pipeline.json` 保存状态。压缩包的完整 `sourceMd5` 是唯一输入身份；输入变化时必须重新 `inspect`，不能沿用旧状态。相同 MD5 的 `inspect` 直接返回已有阶段，不重复运行 ZIP 检查和 `detect_repeated_blocks.py`，也不重置状态；首次检查才把尺寸差不超过 `2` 的重复背景卡片写入 `repeated-block-candidates.json`。
 
-默认入口是 `run-fixed`。它由 Python 自动串联设计服务/浏览器采集、资源导入、Gradle 任务发现和编译；模型不再逐个选择这些子命令。流程只会在 `assets_imported` 阶段等待 Compose 文件发生模型修改，下一次 `run-fixed` 检测到文件 Hash 变化后自动进入 `generated -> compile`。
+默认入口是 `run-fixed`。它由 Python 自动串联完整 DOM 解析、设计服务/浏览器采集、资源导入、Compose 代码生成、Gradle 任务发现和编译；模型不再逐个选择这些子命令，也不再负责首稿结构转换。
 
 ## 阶段与命令
 
 ```text
-inspect -> validate -> preflight -> assets -> mark-generated -> compile -> package-debug
+inspect/parse-dom -> validate -> preflight -> assets -> generate-compose -> compile -> package-debug
         -> install-k80 -> screenshot-k80 -> normalize-screenshot -> compare-screenshots -> mark-diff -> complete
                                       \-> repair（最多三轮后回到 compile）
 ```
@@ -22,7 +22,7 @@ start-design-server -> 采集设计（缓存未命中时写入设计解析.json�
 完整设计缓存命中时，`start-design-server` 与 `采集设计` 都返回 `cacheHit: true`，不会启动静态服务、解压 ZIP 或启动浏览器；仍可调用 `screenshot-design` 登记公共设计图。
 ```
 
-每个阶段都必须使用脚本子命令，阶段不能跳过。浏览器采集、资源 Hash、图片清单和 `assets` 均由 Python 固定执行，`assets` 只调用现有的 `import_zip_images.py`；`preflight` 根据目标 Compose 路径和 `gradlew tasks --all` 自动确定模块的 Debug Kotlin 任务，`compile` 只能复用状态中的任务，`package-debug` 再由该任务推导同变体 `assemble` 任务。只有出现多个 Debug variant 或无法识别时才暂停请求用户；禁止模型传入临时 Gradle task。Gradle 在项目根目录优先运行 `./gradlew`（仅 Wrapper 缺失且系统存在 `gradle` 时回退）；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。`install-k80` 只接受当前 Compose Hash 对应且时间戳不早于 Compose 文件的 `package-debug` 产物。
+每个阶段都必须使用脚本子命令，阶段不能跳过。完整 DOM、浏览器采集、资源 Hash、图片清单、`assets` 和 `generate-compose` 均由 Python 固定执行；生成器只读取 `dom.json`、`设计解析.json`、`images.json` 和目标 package 声明。`preflight` 根据目标 Compose 路径和 `gradlew tasks --all` 自动确定模块的 Debug Kotlin 任务，`compile` 只能复用状态中的任务，`package-debug` 再由该任务推导同变体 `assemble` 任务。只有出现多个 Debug variant 或无法识别时才暂停请求用户；禁止模型传入临时 Gradle task。Gradle 在项目根目录优先运行 `./gradlew`（仅 Wrapper 缺失且系统存在 `gradle` 时回退）；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。`install-k80` 只接受当前 Compose Hash 对应且时间戳不早于 Compose 文件的 `package-debug` 产物。
 
 `validate`、`mark-generated` 和 `compile` 会自动检查目标 Compose 源码中的 `padding(...)` 参数；发现负值时在生成或编译阶段立即停止，并要求改用 `Modifier.offset` 或父级布局表达跨边界位置，保留负位移语义并避免运行时 `PaddingElement` 崩溃。
 
@@ -31,6 +31,7 @@ start-design-server -> 采集设计（缓存未命中时写入设计解析.json�
 ```bash
 python3 scripts/lanhu_pipeline.py run-fixed --zip <zip> --project-root <project> --compose <Compose.kt>
 python3 scripts/lanhu_pipeline.py inspect --zip <zip> --project-root <project>
+python3 scripts/lanhu_pipeline.py parse-dom --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py start-design-server --zip <zip> --project-root <project>
 # 采集浏览器最终布局，并写入本次 ZIP 的 设计解析.json：
 python3 scripts/lanhu_pipeline.py 采集设计 --zip <zip> --project-root <project>
@@ -41,6 +42,8 @@ python3 scripts/lanhu_pipeline.py stop-design-server --zip <zip> --project-root 
 python3 scripts/lanhu_pipeline.py validate --zip <zip> --project-root <project> --compose <Compose.kt>
 python3 scripts/lanhu_pipeline.py preflight --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py assets --zip <zip> --project-root <project> --compose <Compose.kt> --apply
+python3 scripts/lanhu_pipeline.py generate-compose --zip <zip> --project-root <project> --compose <Compose.kt>
+# 旧 artifact 兼容检查（新流程不调用，不用于生成首稿）
 python3 scripts/lanhu_pipeline.py mark-generated --zip <zip> --project-root <project> --compose <Compose.kt>
 python3 scripts/lanhu_pipeline.py compile --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py package-debug --zip <zip> --project-root <project> --apk <apk>
