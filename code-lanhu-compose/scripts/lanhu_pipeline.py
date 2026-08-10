@@ -24,7 +24,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
 
-from detect_repeated_blocks import detect_repeated_blocks
 from generate_compose import GenerationError, generate_compose
 from parse_html_dom import parse_html_archive
 
@@ -216,10 +215,6 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
     dom["sourceMd5"] = source_sha
     dom_path = artifact / DOM_DOCUMENT_NAME
     atomic_json(dom_path, dom)
-    repeated_blocks = detect_repeated_blocks(archive, css_files, safe_zip_name(html_info.filename))
-    repeated_blocks["sourceMd5"] = source_sha
-    repeated_blocks_path = artifact / "repeated-block-candidates.json"
-    atomic_json(repeated_blocks_path, repeated_blocks)
     source_manifest = {
         "version": 1,
         "sourceName": archive.name,
@@ -229,11 +224,6 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
         "html": {"path": safe_zip_name(html_info.filename)},
         "css": [{"path": path} for path in css_files],
         "dom": {"path": dom_path.name, "nodeCount": len(dom["nodes"]), "resourceCount": len(dom["resources"])},
-        "repeatedBlockCandidates": {
-            "path": repeated_blocks_path.name,
-            "candidateCount": repeated_blocks["candidateCount"],
-            "tolerance": repeated_blocks["tolerance"],
-        },
         "assets": [{"path": name} for name in names if name.lower().endswith((".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"))],
         "createdAt": utc_now(),
     }

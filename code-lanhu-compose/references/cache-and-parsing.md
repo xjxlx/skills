@@ -10,7 +10,6 @@
     ├── 设计解析.json
     ├── dom.json
     ├── images.json
-    ├── repeated-block-candidates.json
     └── runs/
         ├── 设计截图.png
         ├── 应用截图.png
@@ -78,7 +77,7 @@ python3 scripts/import_zip_images.py \
 - 最终颜色、字体族、字号、字重、行高、字距、文本对齐和最大行数。
 - 背景、边框、圆角、阴影、透明度和资源 URL。
 - 图片相对路径、内容 Hash、原始像素尺寸和展示裁剪方式。
-- `repeated-block-candidates.json` 中的近似尺寸卡片候选、四项尺寸范围、背景资源、共享父节点要求与待确认的布局方向。
+- 重复视觉单元直接由 `dom.json` 的真实兄弟节点和 `设计解析.json` 的最终布局事实确定；不再运行 class/选择器层级候选扫描。
 
 ## 解析要求
 
@@ -90,4 +89,4 @@ python3 scripts/import_zip_images.py \
 - 等待 `document.fonts.ready`、图片完成和布局稳定后再采集。
 - 同时保留父级和子级的 padding、gap、margin 声明，避免只看最终坐标后丢失间距归属。
 - 记录遮挡与 `z-index`，但不可据此把正常流布局改写成全页面绝对定位。
-- 每次 `inspect` 对实际加载 CSS 运行重复卡片检测：仅在宽、高、背景宽、背景高单位一致且每项总范围不超过 `2`、并由 HTML 确认共享父节点时写入候选；候选不是方向或可滚动性的证据，后续必须以共享父节点的 `getComputedStyle()` 和最终边界确认。
+- `inspect` 不再运行 class/选择器层级重复卡片检测；固定流程只保存 `dom.json` 和按 `nodeId` 对齐的浏览器事实。

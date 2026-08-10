@@ -255,14 +255,13 @@ class LanhuPipelineContractTest(unittest.TestCase):
             PIPELINE.transition(state, "validated")
             PIPELINE._write_state(artifact, state)
 
-            with patch.object(PIPELINE, "detect_repeated_blocks", side_effect=AssertionError("不应重复解析 ZIP")):
-                second = PIPELINE.inspect_archive(archive, project_root)
+            second = PIPELINE.inspect_archive(archive, project_root)
 
             self.assertTrue(second["cacheHit"])
             self.assertEqual(second["phase"], "validated")
             self.assertEqual(second["artifactPath"], first["artifactPath"])
 
-    def test_inspect_writes_repeated_block_candidates(self) -> None:
+    def test_inspect_does_not_run_class_hierarchy_candidate_scan(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
             archive = root / "design.zip"
@@ -282,10 +281,8 @@ class LanhuPipelineContractTest(unittest.TestCase):
             result = PIPELINE.inspect_archive(archive, root / "project")
 
             candidates_path = Path(result["artifactPath"]) / "repeated-block-candidates.json"
-            candidates = json.loads(candidates_path.read_text(encoding="utf-8"))
-            self.assertEqual(candidates["candidateCount"], 1)
-            self.assertEqual(candidates["candidates"][0]["nodeNames"], ["block_4", "block_5"])
-            self.assertEqual(candidates["candidates"][0]["listAxis"], "requires-computed-layout")
+            self.assertFalse(candidates_path.exists())
+            self.assertNotIn("repeatedBlockCandidates", result)
 
     def test_inspect_rejects_multiple_entry_html_files(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

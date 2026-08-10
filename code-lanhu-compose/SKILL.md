@@ -35,7 +35,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 首次处理 ZIP 先执行 `python3 scripts/lanhu_pipeline.py run-fixed --zip <zip> --project-root <project> --compose <Compose.kt>`；同一完整 `sourceMd5` 命中完整缓存时直接复用当前阶段，不得重新解析 ZIP 或重置 `pipeline.json`。固定阶段和参数见 [固定编排链路契约](references/pipeline-contract.md)。
 - 确认 ZIP、当前工作目录中的 Android 项目、目标模块和构建入口可访问；在项目根目录优先执行 `./gradlew`，仅当 Wrapper 缺失且系统存在 `gradle` 时才回退到 `gradle`。
 - 在解析 ZIP、导入图片或生成 Compose 前，从项目任务列表确定唯一最小相关编译任务并执行一次 Gradle 编译。编译失败时立即停止本次 Skill：只报告该次命令和首个可行动的失败原因，不再运行其他 Gradle 任务，也不继续检查、解析或修改任何设计与资源文件。
-- 首轮取证完成后一次性读取 `dom.json`、`设计解析.json`、`images.json`、`repeated-block-candidates.json` 和目标页面的项目模式；后续实现阶段复用这些结果，不为同一 ZIP 重复启动浏览器、重复解析或逐项探索相同证据。
+- 首轮取证完成后一次性读取 `dom.json`、`设计解析.json`、`images.json` 和目标页面的项目模式；后续实现阶段复用这些结果，不为同一 ZIP 重复启动浏览器、重复解析或逐项探索相同证据。
 - 计算 ZIP 完整 MD5；禁止根据文件名判断是否为同一设计。
 - 以规范化的 ZIP 文件名和完整 MD5 前六位确定本次专属工作目录：`.code-lanhu-compose/<zip-stem>-<md5前6位>/`。目录内保存 `设计解析.json`、`images.json` 与 `runs/`；完整 MD5 必须写入 JSON 供身份校验。
 - 安全解压到当前用户下载目录的 `<zip-stem>-<md5前6位>/`，解压前拒绝绝对路径、`..` 路径穿越和指向目录外的符号链接。
@@ -49,7 +49,6 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 
 - 先运行 `parse-dom` 或让 `inspect` 自动运行 `scripts/parse_html_dom.py`，解析整个 `index.html`（包括 `head`、`body`、元素属性、文本、注释、父子关系和本地资源引用），原子写入 `dom.json`。`class` 只作为原始属性保存，不作为模型推断页面结构的输入。
 - 浏览器采集只负责把 `getComputedStyle()`、`getBoundingClientRect()`、可见性、字体、层叠、变换和最终资源 URL 按 `nodeId` 写入 `设计解析.json`；不得以 class 选择器重新建立结构树。
-- `inspect` 会写入 `repeated-block-candidates.json`：同一单位的宽、高、背景宽和背景高的总范围均不超过 `2`、且至少有两个共享父节点的兄弟项时，先按数据列表生成。候选的横竖方向只能由共享父节点的最终 DOM 布局决定；没有最终坐标证据时不得猜测方向或滚动性。
 - 仅当完整设计缓存未命中时，才通过 `start-design-server` 启动本机服务并执行 `采集设计`；该命令使用本机 Chrome 等待字体和图片完成，读取 `getComputedStyle()`、`getBoundingClientRect()`、可见性、层叠顺序、变换和最终资源 URL。
 - 同时处理继承、层叠覆盖、行内样式、flex 计算、绝对定位、伪元素、字体加载、遮挡和 `z-index`。
 - 保留“声明来源”和“最终计算结果”：前者用于判断间距归属，后者用于确认最终边界和视觉验证。
@@ -71,7 +70,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 禁止定义或调用 `Modifier.offsetPx`、`Modifier.sizePx` 等自定义像素换算 Modifier；普通间距使用布局层级、`padding`/`Arrangement`，确有负位移语义时使用标准 `Modifier.offset`，尺寸使用 `width`、`height`、`size` 或 `fillMax*` 表达。
 - 使用 `BoxWithConstraints` 的 Composable 必须导入 `android.annotation.SuppressLint`，并直接标注 `@SuppressLint("UnusedBoxWithConstraintsScope")`；根布局使用时标注根 Composable，局部使用时标注对应私有 Composable。
 - 标题、标签、数值、单位和右侧图标组成的复合内容必须使用 `Row`/`Column` 的对齐关系或项目已有标签组件表达；禁止用互不关联的固定 `offset` 拼接，完成后检查文字是否裁剪、标签文字是否真实存在、数值和单位是否同一基线。
-- 重复视觉单元与 `repeated-block-candidates.json` 命中的候选必须先建数据列表；共享父节点的最终方向决定 `Row`/`Column`，仅在 item 超出可视范围、页面支持滑动或用户要求滑动时使用对应 `Lazy*` 组件。禁止逐个硬编码同类 Composable 或用固定 `Row`/`Column` 堆叠可能超出视口的 item。复合卡片必须逐项保留设计中可见的图片、左右装饰、标签和操作入口，不得只保留中心文字或主数值。
+- 重复视觉单元必须依据完整 DOM IR 中的真实兄弟节点生成数据列表；共享父节点的最终方向决定 `Row`/`Column`，仅在 item 超出可视范围、页面支持滑动或用户要求滑动时使用对应 `Lazy*` 组件。禁止逐个硬编码同类 Composable 或用固定 `Row`/`Column` 堆叠可能超出视口的 item。复合卡片必须逐项保留设计中可见的图片、左右装饰、标签和操作入口，不得只保留中心文字或主数值。
 布局映射和间距归属必须遵循 [Compose 映射规则](references/compose-mapping.md)。
 
 ### 4. 接入图片资源
