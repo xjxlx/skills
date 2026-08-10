@@ -55,7 +55,7 @@ build_commit_message() {
   local summary="新增 ${added} 个文件，修改 ${modified} 个文件，删除 ${deleted} 个文件"
   [[ "$renamed" -gt 0 ]] && summary="${summary}，重命名 ${renamed} 个文件"
   COMMIT_TITLE="更新技能：${skill_names:-仓库文档}（${summary}）"
-  COMMIT_BODY="本次提交的具体变化：${details}"
+  COMMIT_BODY=$'本次提交的具体变化：\n'"$details"
 
   if [[ -n "$skills_root" ]]; then
     # 仅确认传入路径有效；描述始终来自暂存区文件，避免把英文 frontmatter 当提交文案。
@@ -65,4 +65,3 @@ build_commit_message() {
     }
   fi
 }
-
