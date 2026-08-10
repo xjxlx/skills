@@ -9,13 +9,15 @@
 ├── 设计截图.png
 ├── 应用截图.png
 ├── 应用截图_1.png
-├── 差异.json
-└── 差异_1.json
+├── diff.json
+├── diff-mask.png
+├── diff-heatmap.png
+└── diff-overlay.png
 ```
 
 把公共设计截图复制到 `~/Downloads/设计截图.png`，最近一次 App 截图复制到 `~/Downloads/应用截图.png`。下载目录文件允许覆盖，`runs/` 内已有证据不得覆盖。
 
-`runs/` 下不创建任何时间戳子目录。设计稿截图固定为 `设计截图.png`：同一 ZIP 首次采集后即作为公共基准图复用，后续采集不得重复截取。App 截图从 `应用截图.png` 开始按顺序递增为 `应用截图_1.png`、`应用截图_2.png`……；多轮修正不得覆盖已有截图。差异报告也直接放在 `runs/` 下，按 `差异.json`、`差异_1.json`……递增。
+`runs/` 下不创建任何时间戳子目录。设计稿截图固定为 `设计截图.png`：同一 ZIP 首次采集后即作为公共基准图复用，后续采集不得重复截取。App 截图从 `应用截图.png` 开始按顺序递增为 `应用截图_1.png`、`应用截图_2.png`……；多轮修正不得覆盖已有截图。当前机器对比产物固定写入 `diff.json` 及其三张证据图，并由 `pipeline.json` 记录最近一次对比输入和指标。
 
 创建本目录前必须确认当前 ZIP 专属目录中的 `设计解析.json` 已完成，且其完整 `sourceMd5` 与当前 ZIP 一致；只有运行目录而没有设计解析文件的结果属于不完整证据，必须先回到设计解析阶段补齐。
 
@@ -66,7 +68,15 @@ adb -s <serial> pull /sdcard/lanhu_compose_screen.png <artifact>/runs/应用截�
 
 禁止直接比较两个未经归一化的整屏截图。
 
-## 差异顺序
+## 机器对比与差异顺序
+
+完成 `screenshot-k80` 后，必须让固定管线调用 `$code-image` 的独立图片对比脚本：
+
+```bash
+python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project>
+```
+
+该命令以 `runs/设计截图.png` 和最近一次 `应用截图*.png` 为输入，生成 `diff.json` 及遮罩、热力图、叠加图。报告中的 `sourceMd5`、输入路径、整体指标和连通差异区域是后续修复的唯一机器证据；`mark-diff --outcome ...` 省略 `--report` 时也会自动执行这一步。脚本只识别和记录差异，不直接改动 Compose。
 
 按以下顺序定位和修正：
 

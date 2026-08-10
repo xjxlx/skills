@@ -103,6 +103,8 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - `采集设计` 的完整缓存以 ZIP 完整 MD5、设计解析版本和 `runs/设计截图.png` 共同校验；命中时不得启动服务或浏览器。未命中时才执行 `start-design-server → 采集设计 → screenshot-design`，并在首次采集后固定复用 `runs/设计截图.png`。`screenshot-design` 无论登记成功或失败都会回收本次静态服务。去掉蓝湖预览外壳的缩小变换，但保留设计元素自身的变换。
 - `runs/` 禁止创建时间戳子目录。App 截图固定按顺序保存为 `应用截图.png`、`应用截图_1.png`、`应用截图_2.png`……，不得覆盖已有证据。
 - 将设计截图与 App 截图裁剪到相同有效区域，并统一画布尺寸、系统栏、颜色空间和缩放比例。
+- K80 截图完成后必须执行 `python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project>`；该阶段只调用 `$code-image` 的独立 `compare_images.py`，在 `runs/` 生成 `diff.json`、`diff-mask.png`、`diff-heatmap.png` 和 `diff-overlay.png`，并把本次 ZIP 的 `sourceMd5` 写入报告。也可以省略 `mark-diff` 的 `--report`，由它自动触发同一对比阶段。
+- 模型必须读取 `diff.json` 的指标、区域和证据图后，才决定 `repair`、`pass` 或 `stop`；Python 只生成对比证据，不自动修改 Compose，修复仍通过模型的契约化补丁完成。
 - 逐项比较整体布局、元素边界、文本基线、字号、行高、字距、间距、颜色、圆角、阴影、图片裁剪和遮挡关系。
 - 初次生成后最多执行三轮“修正 → 编译 → 安装/运行 → 截图 → 对比”。达到目标、连续修正无改善或遇到外部阻塞时提前停止。
 - 每轮只修复有截图或布局数据支持的差异；禁止为了追求像素一致破坏项目公共组件或扩大修改范围。

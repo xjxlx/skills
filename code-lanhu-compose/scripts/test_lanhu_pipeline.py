@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 import tempfile
 import unittest
@@ -23,6 +24,72 @@ SPEC.loader.exec_module(PIPELINE)
 
 
 class LanhuPipelineContractTest(unittest.TestCase):
+    def test_compare_screenshots_calls_code_image_and_records_report(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("index.html", '<link href="style.css" rel="stylesheet">')
+                zipped.writestr("style.css", ".box { width: 10px; }")
+
+            inspected = PIPELINE.inspect_archive(archive, project_root)
+            artifact, source, state = PIPELINE.load_source(archive, project_root)
+            for phase in ("validated", "preflight", "assets_imported", "generated", "compiled", "installed", "screenshot"):
+                PIPELINE.transition(state, phase)
+            runs = artifact / "runs"
+            runs.mkdir(parents=True, exist_ok=True)
+            design = runs / "设计截图.png"
+            app = runs / "应用截图.png"
+            image_bytes = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            )
+            design.write_bytes(image_bytes)
+            app.write_bytes(image_bytes)
+            state["lastScreenshot"] = str(app)
+            PIPELINE._write_state(artifact, state)
+
+            result = PIPELINE.compare_screenshots(archive, project_root)
+
+            report = Path(result["report"])
+            self.assertTrue(report.is_file())
+            report_data = json.loads(report.read_text(encoding="utf-8"))
+            self.assertEqual(report_data["sourceMd5"], source["sourceMd5"])
+            self.assertEqual(result["phase"], "screenshot")
+            _, _, saved_state = PIPELINE.load_source(archive, project_root)
+            self.assertEqual(saved_state["comparison"]["report"], str(report))
+
+    def test_mark_diff_without_report_runs_comparison(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("index.html", '<link href="style.css" rel="stylesheet">')
+                zipped.writestr("style.css", ".box { width: 10px; }")
+
+            PIPELINE.inspect_archive(archive, project_root)
+            artifact, _, state = PIPELINE.load_source(archive, project_root)
+            for phase in ("validated", "preflight", "assets_imported", "generated", "compiled", "installed", "screenshot"):
+                PIPELINE.transition(state, phase)
+            runs = artifact / "runs"
+            runs.mkdir(parents=True, exist_ok=True)
+            image_bytes = base64.b64decode(
+                "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="
+            )
+            (runs / "设计截图.png").write_bytes(image_bytes)
+            app = runs / "应用截图.png"
+            app.write_bytes(image_bytes)
+            state["lastScreenshot"] = str(app)
+            PIPELINE._write_state(artifact, state)
+
+            result = PIPELINE.mark_diff(archive, project_root, None, "pass")
+
+            self.assertEqual(result["phase"], "diffed")
+            self.assertTrue(Path(result["report"]).is_file())
+            _, _, saved_state = PIPELINE.load_source(archive, project_root)
+            self.assertEqual(saved_state["comparison"]["report"], result["report"])
+
     def test_gradle_command_prefers_project_wrapper(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)

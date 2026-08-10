@@ -8,7 +8,7 @@
 
 ```text
 inspect -> validate -> preflight -> assets -> mark-generated -> compile
-        -> install-k80 -> screenshot-k80 -> mark-diff -> complete
+        -> install-k80 -> screenshot-k80 -> compare-screenshots -> mark-diff -> complete
                                       \-> repair（最多三轮后回到 compile）
 ```
 
@@ -45,9 +45,13 @@ python3 scripts/lanhu_pipeline.py mark-generated --zip <zip> --project-root <pro
 python3 scripts/lanhu_pipeline.py compile --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py install-k80 --zip <zip> --project-root <project> --serial emulator-5554 --expected-avd K80 --apk <apk>
 python3 scripts/lanhu_pipeline.py screenshot-k80 --zip <zip> --project-root <project> --serial emulator-5554 --expected-avd K80
-python3 scripts/lanhu_pipeline.py mark-diff --zip <zip> --project-root <project> --report <diff.json> --outcome pass
+python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project>
+# 已完成 compare-screenshots 时传入报告；省略 --report 会自动执行 compare-screenshots：
+python3 scripts/lanhu_pipeline.py mark-diff --zip <zip> --project-root <project> --outcome pass
 python3 scripts/lanhu_pipeline.py complete --zip <zip> --project-root <project>
 ```
+
+`compare-screenshots` 只调用 `$code-image` 的独立 `scripts/compare_images.py`，不复制图片算法，也不修改 Compose。它把设计图、最近一次 App 截图和 `diff.json` 绑定到本次 artifact；模型读取报告后再选择 `repair`、`pass` 或 `stop`。
 
 ## 模型决策契约
 

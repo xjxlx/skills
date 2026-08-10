@@ -1002,16 +1002,103 @@ def screenshot_k80(archive: Path, project_root: Path, serial: str, expected_avd:
         raise PipelineError(f"截图失败：{result.stderr.decode(errors='replace').strip()}")
     if state["phase"] != "screenshot":
         transition(state, "screenshot", {"serial": serial, "image": str(image)})
+    state["lastScreenshot"] = str(image)
     _write_state(artifact, state)
     return {"artifactPath": str(artifact), "phase": state["phase"], "image": str(image)}
 
 
-def mark_diff(archive: Path, project_root: Path, report: Path, outcome: str) -> dict[str, Any]:
+def code_image_compare_script() -> Path:
+    """定位 code-image 的独立图片对比脚本，不把对比实现复制到本 Skill。"""
+    candidates: list[Path] = []
+    codex_home = os.environ.get("CODEX_HOME")
+    if codex_home:
+        candidates.append(Path(codex_home) / "skills" / "code-image" / "scripts" / "compare_images.py")
+    candidates.append(Path.home() / ".codex" / "skills" / "code-image" / "scripts" / "compare_images.py")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate.resolve()
+    searched = ", ".join(str(candidate) for candidate in candidates)
+    raise PipelineError(f"找不到 code-image 图片对比脚本，已检查：{searched}")
+
+
+def _latest_app_screenshot(artifact: Path, state: dict[str, Any]) -> Path:
+    """取得最近一次由 screenshot-k80 登记的 App 截图，并限制在证据目录内。"""
+    candidates: list[Path] = []
+    if state.get("lastScreenshot"):
+        candidates.append(Path(str(state["lastScreenshot"])))
+    for history in reversed(state.get("history", [])):
+        detail = history.get("detail", {}) if isinstance(history, dict) else {}
+        image = detail.get("image") if isinstance(detail, dict) else None
+        if image:
+            candidates.append(Path(str(image)))
+    runs = (artifact / "runs").resolve()
+    for candidate in candidates:
+        resolved = candidate.expanduser().resolve()
+        if runs in resolved.parents and resolved.is_file():
+            return resolved
+    raise PipelineError("找不到最近一次 App 截图，请先执行 screenshot-k80")
+
+
+def compare_screenshots(archive: Path, project_root: Path) -> dict[str, Any]:
+    """调用 code-image 的独立视觉对比脚本，生成可追溯的差异证据。"""
+    artifact, source, state = load_source(archive, project_root)
+    if state["phase"] != "screenshot":
+        raise PipelineError(f"当前阶段不能 compare-screenshots：{state['phase']}")
+    runs = artifact / "runs"
+    design = runs / "设计截图.png"
+    if not design.is_file():
+        raise PipelineError(f"设计截图不存在：{design}")
+    app = _latest_app_screenshot(artifact, state)
+    output_dir = runs
+    log_path = artifact / "logs" / "compare-images.log"
+    command = [
+        sys.executable,
+        str(code_image_compare_script()),
+        "--design",
+        str(design),
+        "--app",
+        str(app),
+        "--output-dir",
+        str(output_dir),
+    ]
+    completed = _run_fixed(command, project_root.resolve(), log_path)
+    if completed.returncode != 0:
+        raise PipelineError(f"图片对比失败，日志已写入：{log_path}")
+    report = output_dir / "diff.json"
+    if not report.is_file():
+        raise PipelineError(f"图片对比未生成差异报告：{report}")
+    try:
+        report_data = json.loads(report.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise PipelineError(f"图片对比生成的报告不是有效 JSON：{report}") from error
+    if not isinstance(report_data, dict):
+        raise PipelineError(f"图片对比报告必须是 JSON 对象：{report}")
+    report_data["sourceMd5"] = source["sourceMd5"]
+    report_data["designScreenshot"] = str(design)
+    report_data["appScreenshot"] = str(app)
+    atomic_json(report, report_data)
+    state["comparison"] = {
+        "report": str(report),
+        "designScreenshot": str(design),
+        "appScreenshot": str(app),
+        "metrics": report_data.get("metrics", {}),
+    }
+    state.setdefault("history", []).append(
+        {"phase": "compared", "at": utc_now(), "detail": state["comparison"]}
+    )
+    _write_state(artifact, state)
+    return {"artifactPath": str(artifact), "phase": state["phase"], **state["comparison"]}
+
+
+def mark_diff(archive: Path, project_root: Path, report: Path | None, outcome: str) -> dict[str, Any]:
     if outcome not in {"pass", "repair", "stop"}:
         raise PipelineError("diff outcome 必须是 pass、repair 或 stop")
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] != "screenshot":
         raise PipelineError(f"当前阶段不能 mark-diff：{state['phase']}")
+    if report is None:
+        report = Path(compare_screenshots(archive, project_root)["report"])
+        artifact, source, state = load_source(archive, project_root)
     report = report.expanduser().resolve()
     if artifact not in report.parents or not report.is_file():
         raise PipelineError(f"差异报告不存在：{report}")
@@ -1100,10 +1187,13 @@ def build_parser() -> argparse.ArgumentParser:
     stop_design_server_command = subparsers.add_parser("stop-design-server")
     stop_design_server_command.add_argument("--zip", required=True, type=Path)
     stop_design_server_command.add_argument("--project-root", required=True, type=Path)
+    compare = subparsers.add_parser("compare-screenshots", help="调用 code-image 独立视觉对比脚本")
+    compare.add_argument("--zip", required=True, type=Path)
+    compare.add_argument("--project-root", required=True, type=Path)
     diff = subparsers.add_parser("mark-diff")
     diff.add_argument("--zip", required=True, type=Path)
     diff.add_argument("--project-root", required=True, type=Path)
-    diff.add_argument("--report", required=True, type=Path)
+    diff.add_argument("--report", type=Path, help="已有差异报告；省略时自动调用 compare-screenshots")
     diff.add_argument("--outcome", required=True, choices=("pass", "repair", "stop"))
     complete = subparsers.add_parser("complete")
     complete.add_argument("--zip", required=True, type=Path)
@@ -1158,6 +1248,8 @@ def main(argv: list[str] | None = None) -> int:
             result = complete_design_screenshot(args.zip, args.project_root, args.image)
         elif args.command == "stop-design-server":
             result = stop_design_server(args.zip, args.project_root)
+        elif args.command == "compare-screenshots":
+            result = compare_screenshots(args.zip, args.project_root)
         elif args.command == "mark-diff":
             result = mark_diff(args.zip, args.project_root, args.report, args.outcome)
         elif args.command == "complete":
