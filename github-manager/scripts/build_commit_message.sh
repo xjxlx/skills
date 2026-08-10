@@ -25,6 +25,7 @@ describe_change_path() {
 build_commit_message() {
   local repo_dir="${1:?缺少仓库目录}"
   local skills_root="${2:-}"
+  local skill_name_hint="${3:-}"
   local staged_changes
   staged_changes=$(git -C "$repo_dir" diff --cached --name-status --find-renames)
   if [[ -z "$staged_changes" ]]; then
@@ -36,7 +37,11 @@ build_commit_message() {
   local added=0 modified=0 deleted=0 renamed=0
   local details=""
   local skill_names
-  skill_names=$(printf '%s\n' "$staged_changes" | awk -F '\t' '{ split($2, parts, "/"); if (length(parts[1]) > 0 && parts[1] != "SKILLS_CATALOG.md" && parts[1] != "README.md") print parts[1]; else print "仓库文档" }' | sort -u | paste -sd '、' -)
+  if [[ -n "$skill_name_hint" ]]; then
+    skill_names="$skill_name_hint"
+  else
+    skill_names=$(printf '%s\n' "$staged_changes" | awk -F '\t' '{ split($2, parts, "/"); if (length(parts[1]) > 0 && parts[1] != "SKILLS_CATALOG.md" && parts[1] != "README.md") print parts[1]; else print "仓库文档" }' | sort -u | paste -sd '、' -)
+  fi
 
   local status path new_path action detail display_path
   while IFS=$'\t' read -r status path new_path; do

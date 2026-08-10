@@ -69,7 +69,7 @@ CHANGE_FILES=$(printf '%s\n' "$CHANGE_OUTPUT" | grep -E "^[AMD] " | sed 's/^[AMD
 # 提交并推送
 echo "📁 提交变更..."
 git add -A
-build_commit_message "$SKILL_DIR" "$(dirname "$SKILL_DIR")"
+build_commit_message "$SKILL_DIR" "$(dirname "$SKILL_DIR")" "$SKILL_NAME"
 echo "提交标题：$COMMIT_TITLE"
 echo "提交正文："
 echo "$COMMIT_BODY"

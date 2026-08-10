@@ -72,7 +72,7 @@ fi
 echo "添加文件..."
 git add -A
 if ! git diff --cached --quiet; then
-  build_commit_message "$SKILL_DIR" "$(dirname "$SKILL_DIR")"
+  build_commit_message "$SKILL_DIR" "$(dirname "$SKILL_DIR")" "$SKILL_NAME"
   echo "提交标题：$COMMIT_TITLE"
   echo "提交正文："
   echo "$COMMIT_BODY"

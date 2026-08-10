@@ -34,4 +34,7 @@ if [[ "$COMMIT_BODY" == *"Use when"* || "$COMMIT_BODY" == *"updated"* ]]; then
   exit 1
 fi
 
+build_commit_message "$REPO_DIR/github-manager" "$SKILLS_ROOT" "github-manager"
+[[ "$COMMIT_TITLE" == "更新技能：github-manager（新增 1 个文件，修改 1 个文件，删除 1 个文件）" ]]
+
 echo "build_commit_message 测试通过"
