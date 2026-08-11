@@ -62,6 +62,7 @@ description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，
 - 生成器只按存储的 DOM 父子关系、标签、文本、资源映射和浏览器计算样式选择 `Column`、`Row`、`Box`、`Text`、`Image`；不得让模型重写首稿或根据 class 名猜测组件。
 - 生成失败、资源未映射、包名缺失或输入证据冲突时立即暂停并写入用户输入状态；模型只可处理项目已有组件/交互的适配决策，不可绕过 IR 直接手写结构。
 - 需要重新生成时运行 `python3 scripts/lanhu_pipeline.py generate-compose --zip <zip> --project-root <project> --compose <Compose.kt>`；不要再使用“等待模型修改 Compose”的旧流程。
+- 已因视觉差异 `stop` 后，只有用户明确纠正实现方向时才先运行 `restart-generation --reason <用户原因>`，再重新生成；复用同一 MD5 的 DOM、设计解析和图片映射，不手工重置 `pipeline.json`。
 - 只修改目标页面及其必需的同作用域文件，保留用户已有修改，不做无关清理。
 
 实现细节约束：

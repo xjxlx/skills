@@ -851,6 +851,44 @@ def run_fixed_pipeline(archive: Path, project_root: Path, compose_file: Path) ->
     return {"artifactPath": str(artifact), "phase": state["phase"], "status": "unchanged", "design": design}
 
 
+def restart_generation_cycle(archive: Path, project_root: Path, reason: str) -> dict[str, Any]:
+    """在用户明确纠正实现方向后，从已停止的视觉结果重开代码生成周期。"""
+    artifact, source, state = load_source(archive, project_root)
+    if state.get("phase") != "diffed" or state.get("lastDiffOutcome") != "stop":
+        raise PipelineError("只有 outcome=stop 的差异阶段才能重新开始代码生成")
+    reason = reason.strip()
+    if not reason:
+        raise PipelineError("重新开始代码生成必须记录用户给出的原因")
+    for name in (DOM_DOCUMENT_NAME, DESIGN_DOCUMENT_NAME, "images.json"):
+        path = artifact / name
+        if not path.is_file():
+            raise PipelineError(f"重新生成缺少固定输入：{path}")
+        try:
+            identity = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise PipelineError(f"重新生成输入不是有效 JSON：{path}") from error
+        if identity.get("sourceMd5") != source["sourceMd5"]:
+            raise PipelineError(f"重新生成输入与当前 ZIP 的 sourceMd5 不一致：{path}")
+    state["phase"] = "generated"
+    state["generationCycle"] = state.get("generationCycle", 1) + 1
+    state.setdefault("attempts", {})["repair"] = 0
+    state.pop("lastDiffOutcome", None)
+    state.setdefault("history", []).append(
+        {
+            "phase": "generation_restarted",
+            "at": utc_now(),
+            "detail": {"reason": reason, "generationCycle": state["generationCycle"]},
+        }
+    )
+    _write_state(artifact, state)
+    return {
+        "artifactPath": str(artifact),
+        "phase": state["phase"],
+        "generationCycle": state["generationCycle"],
+        "reason": reason,
+    }
+
+
 def validate_project(archive: Path, project_root: Path, compose_file: Path | None = None) -> dict[str, Any]:
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] not in {"inspected", "validated"}:
@@ -1321,6 +1359,10 @@ def build_parser() -> argparse.ArgumentParser:
     fixed.add_argument("--zip", required=True, type=Path)
     fixed.add_argument("--project-root", required=True, type=Path)
     fixed.add_argument("--compose", required=True, type=Path)
+    restart = subparsers.add_parser("restart-generation", help="在用户纠正实现方向后重开已停止的代码生成周期")
+    restart.add_argument("--zip", required=True, type=Path)
+    restart.add_argument("--project-root", required=True, type=Path)
+    restart.add_argument("--reason", required=True)
     generated = subparsers.add_parser("mark-generated")
     generated.add_argument("--zip", required=True, type=Path)
     generated.add_argument("--project-root", required=True, type=Path)
@@ -1397,6 +1439,8 @@ def main(argv: list[str] | None = None) -> int:
             result = generate_compose_from_dom(args.zip, args.project_root, args.compose)
         elif args.command == "run-fixed":
             result = run_fixed_pipeline(args.zip, args.project_root, args.compose)
+        elif args.command == "restart-generation":
+            result = restart_generation_cycle(args.zip, args.project_root, args.reason)
         elif args.command == "mark-generated":
             artifact, _, state = load_source(args.zip, args.project_root)
             if state["phase"] not in {"assets_imported", "generated"}:

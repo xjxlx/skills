@@ -12,6 +12,8 @@ inspect/parse-dom -> validate -> preflight -> assets -> generate-compose -> comp
                                       \-> repair（最多三轮后回到 compile）
 ```
 
+当差异结果已经 `stop`，但用户随后明确纠正实现方向时，先运行 `restart-generation --reason <用户原因>`。该命令校验并复用同一 `sourceMd5` 的 `dom.json`、`设计解析.json` 和 `images.json`，保留既有编译、打包和截图历史，只重开代码生成周期并把视觉修正轮数归零；不得手工改写 `pipeline.json` 或重新解析 ZIP。
+
 设计稿浏览器采集与截图是 `inspect` 后可执行的独立证据生命周期，不改变 Android 编译阶段：
 
 ```text
@@ -30,6 +32,7 @@ start-design-server -> 采集设计（缓存未命中时写入设计解析.json�
 
 ```bash
 python3 scripts/lanhu_pipeline.py run-fixed --zip <zip> --project-root <project> --compose <Compose.kt>
+python3 scripts/lanhu_pipeline.py restart-generation --zip <zip> --project-root <project> --reason <用户明确给出的原因>
 python3 scripts/lanhu_pipeline.py inspect --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py parse-dom --zip <zip> --project-root <project>
 python3 scripts/lanhu_pipeline.py start-design-server --zip <zip> --project-root <project>

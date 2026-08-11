@@ -510,6 +510,53 @@ class LanhuPipelineContractTest(unittest.TestCase):
             with self.assertRaises(PIPELINE.PipelineError):
                 PIPELINE.mark_diff(archive, root / "project", artifact / "diff.json", "repair")
 
+    def test_restart_generation_cycle_reopens_stopped_pipeline_without_reparsing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("index.html", '<link href="style.css" rel="stylesheet">')
+                zipped.writestr("style.css", ".box { width: 10px; }")
+
+            PIPELINE.inspect_archive(archive, project_root)
+            artifact, source, state = PIPELINE.load_source(archive, project_root)
+            PIPELINE.atomic_json(artifact / "设计解析.json", {"sourceMd5": source["sourceMd5"]})
+            PIPELINE.atomic_json(artifact / "images.json", {"sourceMd5": source["sourceMd5"], "images": []})
+            for phase in ("validated", "preflight", "assets_imported", "generated", "compiled", "installed", "screenshot"):
+                PIPELINE.transition(state, phase)
+            state["attempts"].update({"compile": 3, "repair": 2, "package": 3})
+            PIPELINE.transition(state, "diffed", {"outcome": "stop"})
+            state["lastDiffOutcome"] = "stop"
+            original_history_size = len(state["history"])
+            PIPELINE._write_state(artifact, state)
+
+            result = PIPELINE.restart_generation_cycle(archive, project_root, "用户要求改为独立实现")
+
+            self.assertEqual(result["phase"], "generated")
+            _, _, reopened = PIPELINE.load_source(archive, project_root)
+            self.assertEqual(reopened["phase"], "generated")
+            self.assertEqual(reopened["attempts"]["repair"], 0)
+            self.assertEqual(reopened["attempts"]["compile"], 3)
+            self.assertEqual(reopened["attempts"]["package"], 3)
+            self.assertNotIn("lastDiffOutcome", reopened)
+            self.assertEqual(reopened["generationCycle"], 2)
+            self.assertEqual(len(reopened["history"]), original_history_size + 1)
+            self.assertEqual(reopened["history"][-1]["phase"], "generation_restarted")
+
+    def test_restart_generation_cycle_rejects_non_stopped_pipeline(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            project_root = root / "project"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("index.html", '<link href="style.css" rel="stylesheet">')
+                zipped.writestr("style.css", ".box { width: 10px; }")
+            PIPELINE.inspect_archive(archive, project_root)
+
+            with self.assertRaises(PIPELINE.PipelineError):
+                PIPELINE.restart_generation_cycle(archive, project_root, "不应允许")
+
 
 if __name__ == "__main__":
     unittest.main()
