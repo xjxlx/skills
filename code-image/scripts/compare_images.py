@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import sys
+import tempfile
 from pathlib import Path
 
 import cv2
@@ -115,6 +116,28 @@ def atomic_write_json(path: Path, payload: dict) -> None:
     os.replace(temporary, path)
 
 
+def write_image_artifacts(images: dict[Path, np.ndarray]) -> None:
+    temporary_files: dict[Path, Path] = {}
+    try:
+        for target, image in images.items():
+            with tempfile.NamedTemporaryFile(
+                dir=target.parent,
+                prefix=f".{target.stem}.",
+                suffix=target.suffix,
+                delete=False,
+            ) as temporary:
+                temporary_path = Path(temporary.name)
+            temporary_files[target] = temporary_path
+            if not cv2.imwrite(str(temporary_path), image):
+                raise ComparisonError(f"无法写入差异证据图：{target}")
+        for target, temporary_path in temporary_files.items():
+            os.replace(temporary_path, target)
+        temporary_files.clear()
+    finally:
+        for temporary_path in temporary_files.values():
+            temporary_path.unlink(missing_ok=True)
+
+
 def compare_images(
     design_path: Path,
     app_path: Path,
@@ -130,6 +153,20 @@ def compare_images(
     if aspect_tolerance < 0:
         raise ComparisonError("--aspect-tolerance 不能为负数")
 
+    design_path = design_path.expanduser().resolve()
+    app_path = app_path.expanduser().resolve()
+    output_dir = output_dir.expanduser().resolve()
+    mask_path = output_dir / "diff-mask.png"
+    heatmap_path = output_dir / "diff-heatmap.png"
+    overlay_path = output_dir / "diff-overlay.png"
+    report_path = output_dir / "diff.json"
+    output_paths = {mask_path, heatmap_path, overlay_path, report_path}
+    conflicts = output_paths & {design_path, app_path}
+    if conflicts:
+        raise ComparisonError(f"差异输出不能覆盖输入图片：{sorted(map(str, conflicts))}")
+
+    design_md5 = md5_file(design_path)
+    app_md5 = md5_file(app_path)
     design = load_image(design_path)
     app = load_image(app_path)
     aligned_app, transform = align_images(design, app, aspect_tolerance)
@@ -145,20 +182,23 @@ def compare_images(
     edges_app = cv2.Canny(aligned_app, 100, 200)
     edge_mask = cv2.bitwise_xor(edges_design, edges_app)
 
+    if md5_file(design_path) != design_md5 or md5_file(app_path) != app_md5:
+        raise ComparisonError("输入图片在对比过程中发生变化，拒绝写入证据")
     output_dir.mkdir(parents=True, exist_ok=True)
-    mask_path = output_dir / "diff-mask.png"
-    heatmap_path = output_dir / "diff-heatmap.png"
-    overlay_path = output_dir / "diff-overlay.png"
-    report_path = output_dir / "diff.json"
-    cv2.imwrite(str(mask_path), mask)
-    cv2.imwrite(str(heatmap_path), cv2.applyColorMap(max_error, cv2.COLORMAP_JET))
     overlay = cv2.addWeighted(design, 0.5, aligned_app, 0.5, 0)
     overlay[mask > 0] = (0, 0, 255)
-    cv2.imwrite(str(overlay_path), overlay)
+    write_image_artifacts(
+        {
+            mask_path: mask,
+            heatmap_path: cv2.applyColorMap(max_error, cv2.COLORMAP_JET),
+            overlay_path: overlay,
+        }
+    )
+    similarity = round(ssim_score(design, aligned_app), 8)
     report = {
-        "version": 1,
-        "design": {"path": str(design_path.resolve()), "md5": md5_file(design_path)},
-        "app": {"path": str(app_path.resolve()), "md5": md5_file(app_path)},
+        "version": 2,
+        "design": {"path": str(design_path), "md5": design_md5},
+        "app": {"path": str(app_path), "md5": app_md5},
         "transform": transform,
         "threshold": threshold,
         "minRegionArea": minimum_region_area,
@@ -169,16 +209,21 @@ def compare_images(
             "mae": round(mae, 6),
             "rmse": round(rmse, 6),
             "maxError": int(max_error.max()),
-            "similarity": round(ssim_score(design, aligned_app), 8),
+            "similarity": similarity,
             "edgeChangedRatio": round(float(np.count_nonzero(edge_mask) / edge_mask.size), 8),
         },
         "changedPixels": changed_pixels,
-        "similarity": round(ssim_score(design, aligned_app), 8),
+        "similarity": similarity,
         "regions": regions,
         "artifacts": {
-            "mask": str(mask_path.resolve()),
-            "heatmap": str(heatmap_path.resolve()),
-            "overlay": str(overlay_path.resolve()),
+            "mask": str(mask_path),
+            "heatmap": str(heatmap_path),
+            "overlay": str(overlay_path),
+        },
+        "artifactMd5": {
+            "mask": md5_file(mask_path),
+            "heatmap": md5_file(heatmap_path),
+            "overlay": md5_file(overlay_path),
         },
     }
     atomic_write_json(report_path, report)

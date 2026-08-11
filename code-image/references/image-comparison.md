@@ -27,12 +27,14 @@ python3 scripts/compare_images.py \
 
 输出目录包含：
 
-- `diff.json`：输入 Hash、对齐变换、阈值、changed ratio、MAE、RMSE、SSIM、边缘差异和区域列表。
+- `diff.json` 版本 2：输入 Hash、对齐变换、阈值、changed ratio、MAE、RMSE、SSIM、边缘差异、区域列表和三张证据图 MD5。
 - `diff-mask.png`：超过阈值的像素遮罩。
 - `diff-heatmap.png`：差异强度热力图。
 - `diff-overlay.png`：设计图与应用截图叠加，差异像素标为红色。
 
 区域 `bounds` 使用设计图对齐后的像素坐标 `[x, y, width, height]`。调用方可以把它与设计解析节点边界或页面区域映射，再决定是否修改 Compose；脚本本身不做代码修改。
+
+四个固定输出先写临时文件再原子替换。任一输出路径与设计图或应用截图相同时立即拒绝；输入内容在读取期间变化时也拒绝写入，避免报告绑定混合版本。
 
 ## 判定边界
 

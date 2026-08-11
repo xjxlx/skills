@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-11 18:03:42，由 github-manager 维护
+> 自动生成于 2026-08-11 18:24:43，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -47,7 +47,7 @@ graph LR
 - **目录名**：`code-image`
 - **用途**：Use when 需要导入 Android 图片资源，或明确要求比较设计图与应用截图的视觉差异。
 - **依赖**：无
-- **文件数**：11
+- **文件数**：8
 - **UI 元数据**：有 agents/openai.yaml
 - **路径**：`~/.codex/skills/code-image/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-image
@@ -59,7 +59,7 @@ graph LR
 - **目录名**：`code-lanhu-compose`
 - **用途**：Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，需要在 Android 项目中高保真生成或还原 Jetpack Compose ...
 - **依赖**：code-image
-- **文件数**：17
+- **文件数**：27
 - **UI 元数据**：有 agents/openai.yaml
 - **路径**：`~/.codex/skills/code-lanhu-compose/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-lanhu-compose

@@ -2,6 +2,7 @@
 """code-image 单图和 ZIP 导入行为测试。"""
 
 import hashlib
+import io
 import json
 import os
 import subprocess
@@ -9,6 +10,8 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+
+from PIL import Image
 
 
 SCRIPT = Path(__file__).with_name("normalize_images.py")
@@ -25,6 +28,9 @@ class NormalizeImagesTest(unittest.TestCase):
         self.compose = self.project / "app/src/main/java/com/example/ReportHomePage.kt"
         self.compose.parent.mkdir(parents=True)
         self.compose.write_text("@Composable fun ReportHomePage() = Unit\n", encoding="utf-8")
+        self.feature_compose = self.project / "feature/src/main/java/com/example/FeaturePage.kt"
+        self.feature_compose.parent.mkdir(parents=True)
+        self.feature_compose.write_text("@Composable fun FeaturePage() = Unit\n", encoding="utf-8")
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -54,9 +60,18 @@ class NormalizeImagesTest(unittest.TestCase):
         path = manifests[0]
         return json.loads(path.read_text(encoding="utf-8"))["resources"]
 
+    @staticmethod
+    def image_bytes(color: tuple[int, int, int] = (12, 34, 56)) -> bytes:
+        output = io.BytesIO()
+        Image.new("RGB", (4, 4), color).save(output, format="PNG")
+        return output.getvalue()
+
+    def write_image(self, path: Path, color: tuple[int, int, int] = (12, 34, 56)) -> None:
+        path.write_bytes(self.image_bytes(color))
+
     def test_single_image_copies_to_mipmap_xxhdpi_and_writes_minimal_record(self):
         image = self.input_dir / "Group 62.png"
-        image.write_bytes(b"new")
+        self.write_image(image)
 
         result = self.run_skill("--image", image)
 
@@ -71,13 +86,11 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertNotIn("updatedAt", record)
         self.assertFalse((self.project / ".code-image/resources.json").exists())
         source_hash = hashlib.md5(image.read_bytes()).hexdigest()
-        self.assertTrue(
-            (self.project / ".code-image" / f"Group_62-{source_hash[:6]}.resources.json").is_file()
-        )
+        self.assertTrue((self.project / ".code-image" / f"Group_62-{source_hash}.resources.json").is_file())
 
     def test_optional_compose_adds_page_namespace_for_single_image(self):
         image = self.input_dir / "Group 62.png"
-        image.write_bytes(b"new")
+        self.write_image(image)
 
         result = self.run_skill("--image", image, "--compose", str(self.compose))
 
@@ -89,7 +102,7 @@ class NormalizeImagesTest(unittest.TestCase):
 
     def test_explicit_asset_name_replaces_hash_style_export_name(self):
         image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
-        image.write_bytes(b"new")
+        self.write_image(image)
 
         result = self.run_skill(
             "--image",
@@ -108,7 +121,7 @@ class NormalizeImagesTest(unittest.TestCase):
 
     def test_reimport_reuses_existing_resource_mapping(self):
         image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
-        image.write_bytes(b"new")
+        self.write_image(image)
 
         first = self.run_skill("--image", image, "--compose", str(self.compose))
         migrated = self.run_skill(
@@ -145,8 +158,8 @@ class NormalizeImagesTest(unittest.TestCase):
     def test_shared_source_manifest_reuses_same_content_from_another_zip_entry(self):
         first = self.input_dir / "first.png"
         second = self.input_dir / "second.png"
-        first.write_bytes(b"same-content")
-        second.write_bytes(b"same-content")
+        self.write_image(first)
+        self.write_image(second)
         resources_path = self.project / ".code-image/design-abcdef.resources.json"
 
         first_result = self.run_skill(
@@ -177,7 +190,7 @@ class NormalizeImagesTest(unittest.TestCase):
 
     def test_explicit_asset_name_preserves_semantic_trailing_number(self):
         image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
-        image.write_bytes(b"new")
+        self.write_image(image)
 
         result = self.run_skill(
             "--image",
@@ -199,7 +212,7 @@ class NormalizeImagesTest(unittest.TestCase):
         existing = target_dir / "icon_group_62.png"
         existing.write_bytes(b"existing")
         image = self.input_dir / "Group 62.png"
-        image.write_bytes(b"new")
+        self.write_image(image)
 
         result = self.run_skill("--image", image)
 
@@ -207,19 +220,20 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertTrue((target_dir / "icon_group_62_1.png").is_file())
         self.assertEqual(existing.read_bytes(), b"existing")
 
-    def test_zip_extracts_to_downloads_and_copies_each_mipmap_directory(self):
+    def test_zip_uses_private_cache_and_copies_each_mipmap_directory(self):
         archive = self.input_dir / "design.zip"
         with zipfile.ZipFile(archive, "w") as zip_file:
-            zip_file.writestr("design/app/src/main/res/mipmap-xhdpi/Group 62.png", b"xhdpi")
-            zip_file.writestr("design/app/src/main/res/mipmap-xxhdpi/Group 62.png", b"xxhdpi")
+            zip_file.writestr("design/app/src/main/res/mipmap-xhdpi/Group 62.png", self.image_bytes((1, 2, 3)))
+            zip_file.writestr("design/app/src/main/res/mipmap-xxhdpi/Group 62.png", self.image_bytes((4, 5, 6)))
             zip_file.writestr("design/readme.txt", "ignored")
 
         result = self.run_skill("--zip", archive)
 
         self.assertEqual(result.returncode, 0, result.stderr)
         source_hash = hashlib.md5(archive.read_bytes()).hexdigest()
-        extracted = self.home / "Downloads" / f"design-{source_hash[:6]}"
+        extracted = self.project / ".code-image/extracted" / f"design-{source_hash}"
         self.assertTrue((extracted / "design/app/src/main/res/mipmap-xhdpi/Group 62.png").is_file())
+        self.assertTrue((extracted / ".extraction.json").is_file())
         self.assertTrue(
             (self.project / "app/src/main/res/mipmap-xhdpi/icon_group_62.png").is_file()
         )
@@ -228,7 +242,7 @@ class NormalizeImagesTest(unittest.TestCase):
         )
         self.assertEqual(len(self.resources()), 2)
         self.assertTrue(
-            (self.project / ".code-image" / f"design-{source_hash[:6]}.resources.json").is_file()
+            (self.project / ".code-image" / f"design-{source_hash}.resources.json").is_file()
         )
 
         repeated = self.run_skill("--zip", archive)
@@ -246,7 +260,7 @@ class NormalizeImagesTest(unittest.TestCase):
         result = self.run_skill("--zip", archive)
 
         source_hash = hashlib.md5(archive.read_bytes()).hexdigest()
-        extracted = self.home / "Downloads" / f"not-mipmap-{source_hash[:6]}"
+        extracted = self.project / ".code-image/extracted" / f"not-mipmap-{source_hash}"
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("--image", result.stderr)
         self.assertFalse(extracted.exists())
@@ -255,8 +269,8 @@ class NormalizeImagesTest(unittest.TestCase):
         first = self.input_dir / "first.png"
         second = self.input_dir / "second.png"
         archive = self.input_dir / "design.zip"
-        first.write_bytes(b"first")
-        second.write_bytes(b"second")
+        self.write_image(first, (1, 1, 1))
+        self.write_image(second, (2, 2, 2))
         with zipfile.ZipFile(archive, "w"):
             pass
         environment = dict(os.environ)
@@ -286,6 +300,66 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertNotEqual(mixed.returncode, 0)
         self.assertTrue(first.is_file())
         self.assertTrue(second.is_file())
+
+    def test_feature_compose_imports_into_its_own_module(self):
+        image = self.input_dir / "Feature icon.png"
+        self.write_image(image)
+
+        result = self.run_skill("--image", image, "--compose", str(self.feature_compose))
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertTrue(
+            (self.project / "feature/src/main/res/mipmap-xxhdpi/icon_feature_feature_icon.png").is_file()
+        )
+        self.assertFalse(
+            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_feature_feature_icon.png").exists()
+        )
+
+    def test_valid_cache_hit_does_not_rewrite_output(self):
+        image = self.input_dir / "Stable.png"
+        self.write_image(image)
+        first = self.run_skill("--image", image)
+        output = self.project / "app/src/main/res/mipmap-xxhdpi/icon_stable.png"
+        fixed_time = 1_600_000_000_000_000_000
+        os.utime(output, ns=(fixed_time, fixed_time))
+
+        second = self.run_skill("--image", image)
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertEqual(output.stat().st_mtime_ns, fixed_time)
+
+    def test_invalid_image_content_is_rejected_before_manifest_write(self):
+        image = self.input_dir / "broken.png"
+        image.write_bytes(b"not-a-real-image")
+
+        result = self.run_skill("--image", image)
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("图片", result.stderr)
+        self.assertFalse((self.project / ".code-image").exists())
+
+    def test_zip_rejects_normalized_duplicate_and_extreme_compression(self):
+        duplicate = self.input_dir / "duplicate.zip"
+        with zipfile.ZipFile(duplicate, "w") as zip_file:
+            payload = self.image_bytes()
+            zip_file.writestr("mipmap-xhdpi/a.png", payload)
+            zip_file.writestr("mipmap-xhdpi\\a.png", payload)
+
+        duplicate_result = self.run_skill("--zip", duplicate)
+
+        self.assertNotEqual(duplicate_result.returncode, 0)
+        self.assertIn("重复", duplicate_result.stderr)
+
+        compressed = self.input_dir / "compressed.zip"
+        with zipfile.ZipFile(compressed, "w", compression=zipfile.ZIP_DEFLATED) as zip_file:
+            zip_file.writestr("mipmap-xhdpi/a.png", self.image_bytes())
+            zip_file.writestr("payload.txt", b"0" * (2 * 1024 * 1024))
+
+        compressed_result = self.run_skill("--zip", compressed)
+
+        self.assertNotEqual(compressed_result.returncode, 0)
+        self.assertIn("压缩比", compressed_result.stderr)
 
 
 if __name__ == "__main__":

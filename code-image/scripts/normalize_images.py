@@ -9,13 +9,21 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import unicodedata
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from zipfile import ZipFile
+from zipfile import ZipFile, ZipInfo
+
+from PIL import Image, UnidentifiedImageError
 
 
 IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
+EXTRACTION_MARKER = ".extraction.json"
+MAX_ARCHIVE_ENTRIES = 5000
+MAX_SINGLE_FILE_BYTES = 256 * 1024 * 1024
+MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 200
 
 
 @dataclass(frozen=True)
@@ -72,16 +80,6 @@ def normalize_asset_stem(original_stem: str, remove_copy_suffix: bool = True) ->
     return "image_" + token if token[0].isdigit() else token
 
 
-def find_project_root(source_path: Path) -> Path:
-    resolved = source_path.resolve()
-    for parent in (resolved.parent, *resolved.parents):
-        if (parent / ".git").exists() or (parent / "settings.gradle").exists() or (parent / "settings.gradle.kts").exists():
-            return parent
-        if parent.name == "app":
-            return parent.parent
-    return Path.cwd()
-
-
 def relative_path(path: Path, project_root: Path) -> str:
     try:
         return path.resolve().relative_to(project_root.resolve()).as_posix()
@@ -101,10 +99,22 @@ def load_resources(path: Path) -> dict:
     return data
 
 
+def validate_image_file(path: Path) -> None:
+    """拒绝只有图片扩展名、实际内容却不可解码的输入。"""
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+            image.verify()
+    except (OSError, UnidentifiedImageError) as error:
+        raise ValueError(f"图片内容无效或无法解码：{path}") from error
+    if width < 1 or height < 1:
+        raise ValueError(f"图片尺寸无效：{path} ({width}x{height})")
+
+
 def resources_path_for_source(project_root: Path, source_path: Path) -> Path:
     """以稳定来源身份定位可复用的资源清单。"""
     source_hash = md5_file(source_path)
-    prefix = f"{safe_token(source_path.stem)}-{source_hash[:6]}"
+    prefix = f"{safe_token(source_path.stem)}-{source_hash}"
     return project_root / ".code-image" / f"{prefix}.resources.json"
 
 
@@ -112,17 +122,30 @@ def requested_resources_path(value: str, project_root: Path) -> Path:
     path = Path(value).expanduser().resolve()
     records_directory = (project_root / ".code-image").resolve()
     if path.parent != records_directory or not re.fullmatch(
-        r".+-[0-9a-f]{6}\.resources\.json", path.name
+        r".+-(?:[0-9a-f]{6}|[0-9a-f]{32})\.resources\.json", path.name
     ):
         raise ValueError(
             "--resources-file 必须是项目 .code-image/ 下 "
-            "<来源名>-<hash前6位>.resources.json 格式的来源清单"
+            "<来源名>-<6位或完整MD5>.resources.json 格式的来源清单"
         )
     return path
 
 
-def _find_record(records: list[dict], current_path: str, file_hash: str) -> dict | None:
+def _record_matches_target(record: dict, target_dir: Path, project_root: Path) -> bool:
+    output_path = _record_output_path(record, project_root)
+    return output_path is not None and output_path.parent.resolve() == target_dir.resolve()
+
+
+def _find_record(
+    records: list[dict],
+    current_path: str,
+    file_hash: str,
+    target_dir: Path,
+    project_root: Path,
+) -> dict | None:
     for record in records:
+        if not _record_matches_target(record, target_dir, project_root):
+            continue
         if current_path == record.get("originalPath") and file_hash == record.get("originalHash"):
             return record
         if current_path == record.get("outputPath") and file_hash == record.get("originalHash"):
@@ -157,7 +180,23 @@ def _find_record_by_hash(
 
 
 def _is_normalized(name: str) -> bool:
-    return Path(name).stem.lower().startswith("icon_")
+    stem = Path(name).stem
+    return stem.startswith("icon_") and re.fullmatch(r"[a-z][a-z0-9_]*", stem) is not None
+
+
+def resource_root_for_compose(project_root: Path, compose_path: Path | None) -> Path:
+    if compose_path is None:
+        return (project_root / "app/src/main/res").resolve()
+    root = project_root.resolve()
+    compose = compose_path.resolve()
+    try:
+        relative = compose.relative_to(root)
+        source_index = relative.parts.index("src")
+    except (ValueError, IndexError) as error:
+        raise ValueError(f"无法从 Compose 路径确定目标模块资源目录：{compose}") from error
+    if source_index == 0:
+        raise ValueError(f"Compose 文件必须位于项目模块的 src 目录中：{compose}")
+    return root.joinpath(*relative.parts[:source_index], "src", "main", "res").resolve()
 
 
 def next_output_path(
@@ -197,12 +236,13 @@ def build_plan(
     source = Path(source_path).resolve()
     if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS:
         raise ValueError(f"不是支持的图片文件：{source}")
+    validate_image_file(source)
     target_dir = Path(target_dir).resolve()
     project_root = Path(project_root).resolve()
     current_path = relative_path(source, project_root)
     file_hash = md5_file(source)
     manifest = load_resources(resources_path)
-    record = _find_record(manifest["resources"], current_path, file_hash)
+    record = _find_record(manifest["resources"], current_path, file_hash, target_dir, project_root)
     if record is None:
         record = _find_record_by_hash(manifest["resources"], file_hash, target_dir, project_root)
     original_path = record.get("originalPath") if record else current_path
@@ -232,7 +272,9 @@ def build_plan(
         set() if record else reserved or set(),
         replaceable,
     )
-    identity = record.get("identity") if record else f"{original_path}:{file_hash}"
+    identity = record.get("identity") if record else (
+        f"{original_path}:{file_hash}:{relative_path(target_dir, project_root)}"
+    )
     return RenamePlan(
         source=source,
         target=target,
@@ -248,9 +290,34 @@ def build_plan(
 
 def write_resources(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    content = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    try:
+        if path.read_text(encoding="utf-8") == content:
+            return
+    except OSError:
+        pass
     temporary = path.parent / f".{path.name}.tmp"
-    temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    temporary.write_text(content, encoding="utf-8")
     os.replace(temporary, path)
+
+
+def atomic_copy(source: Path, target: Path) -> None:
+    temporary_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            dir=target.parent,
+            prefix=f".{target.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as temporary:
+            temporary_path = Path(temporary.name)
+            with source.open("rb") as input_stream:
+                shutil.copyfileobj(input_stream, temporary)
+        os.replace(temporary_path, target)
+        temporary_path = None
+    finally:
+        if temporary_path is not None:
+            temporary_path.unlink(missing_ok=True)
 
 
 def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Path) -> None:
@@ -259,11 +326,13 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
     for plan in plans:
         plan.target.parent.mkdir(parents=True, exist_ok=True)
         if plan.source.resolve() != plan.target.resolve():
-            if plan.target.exists() and plan.previous_target != plan.target:
-                if md5_file(plan.target) != plan.file_hash:
-                    raise FileExistsError(f"目标文件已存在，拒绝覆盖：{plan.target}")
+            target_hash = md5_file(plan.target) if plan.target.is_file() else None
+            if target_hash == plan.file_hash:
+                pass
+            elif plan.target.exists() and plan.previous_target != plan.target:
+                raise FileExistsError(f"目标文件已存在，拒绝覆盖：{plan.target}")
             else:
-                shutil.copyfile(plan.source, plan.target)
+                atomic_copy(plan.source, plan.target)
         if plan.previous_target and plan.previous_target.resolve() != plan.target.resolve():
             if plan.previous_target.is_file():
                 plan.previous_target.unlink()
@@ -276,19 +345,53 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
             "outputName": plan.output_name,
             "composeFile": plan.compose_file,
         }
-    manifest["version"] = 1
+    manifest["version"] = 2
     manifest["resources"] = sorted(records.values(), key=lambda record: record["identity"])
     write_resources(resources_path, manifest)
 
 
-def _safe_zip_entries(archive: ZipFile):
-    entries = []
-    for entry in archive.infolist():
-        path = PurePosixPath(entry.filename)
+def normalized_zip_path(value: str) -> PurePosixPath:
+    normalized = unicodedata.normalize("NFC", value.replace("\\", "/"))
+    if normalized.startswith("/") or re.match(r"^[A-Za-z]:/", normalized):
+        raise ValueError(f"ZIP 包含绝对路径：{value}")
+    parts: list[str] = []
+    for part in normalized.split("/"):
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            raise ValueError(f"ZIP 包含越界路径：{value}")
+        parts.append(part)
+    if not parts:
+        raise ValueError(f"ZIP 包含空路径：{value}")
+    return PurePosixPath(*parts)
+
+
+def _safe_zip_entries(archive: ZipFile) -> list[tuple[ZipInfo, PurePosixPath]]:
+    infos = archive.infolist()
+    if len(infos) > MAX_ARCHIVE_ENTRIES:
+        raise ValueError(f"ZIP 条目过多：{len(infos)} > {MAX_ARCHIVE_ENTRIES}")
+    entries: list[tuple[ZipInfo, PurePosixPath]] = []
+    seen: set[str] = set()
+    total_size = 0
+    for entry in infos:
+        path = normalized_zip_path(entry.filename)
         mode = (entry.external_attr >> 16) & 0o170000
-        if path.is_absolute() or ".." in path.parts or mode == 0o120000:
+        if mode == 0o120000:
             raise ValueError(f"ZIP 包含不安全路径或符号链接：{entry.filename}")
-        entries.append(entry)
+        key = path.as_posix().casefold()
+        if key in seen:
+            raise ValueError(f"ZIP 包含重复规范化路径：{entry.filename}")
+        seen.add(key)
+        if not entry.is_dir():
+            if entry.file_size > MAX_SINGLE_FILE_BYTES:
+                raise ValueError(f"ZIP 单文件过大：{entry.filename}")
+            total_size += entry.file_size
+            if total_size > MAX_UNCOMPRESSED_BYTES:
+                raise ValueError(f"ZIP 解压总大小过大：{total_size}")
+            ratio = entry.file_size / max(entry.compress_size, 1)
+            if entry.file_size >= 1024 * 1024 and ratio > MAX_COMPRESSION_RATIO:
+                raise ValueError(f"ZIP 条目压缩比异常：{entry.filename} ({ratio:.1f})")
+        entries.append((entry, path))
     return entries
 
 
@@ -302,23 +405,72 @@ def archive_mipmap_directory(entry_name: str) -> str | None:
     return None
 
 
-def extract_zip_to_downloads(zip_path: Path) -> Path:
+def _extraction_cache_is_complete(
+    destination: Path,
+    source_hash: str,
+    entries: list[tuple[ZipInfo, PurePosixPath]],
+) -> bool:
+    marker = destination / EXTRACTION_MARKER
+    try:
+        data = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    expected = {
+        path.as_posix(): entry.file_size
+        for entry, path in entries
+        if not entry.is_dir()
+    }
+    recorded = data.get("files") if isinstance(data, dict) else None
+    if data.get("sourceMd5") != source_hash or not isinstance(recorded, list):
+        return False
+    records = {item.get("path"): item for item in recorded if isinstance(item, dict)}
+    if set(records) != set(expected):
+        return False
+    for relative, size in expected.items():
+        target = destination / PurePosixPath(relative)
+        record = records[relative]
+        if (
+            target.is_symlink()
+            or not target.is_file()
+            or target.stat().st_size != size
+            or record.get("size") != size
+            or record.get("md5") != md5_file(target)
+        ):
+            return False
+    return True
+
+
+def extract_zip_to_cache(zip_path: Path, project_root: Path) -> Path:
     source_hash = md5_file(zip_path)
-    destination = Path.home() / "Downloads" / f"{safe_token(zip_path.stem)}-{source_hash[:6]}"
+    destination = project_root / ".code-image/extracted" / f"{safe_token(zip_path.stem)}-{source_hash}"
     with ZipFile(zip_path) as archive:
         entries = _safe_zip_entries(archive)
         if not any(
-            not entry.is_dir() and archive_mipmap_directory(entry.filename)
-            for entry in entries
+            not entry.is_dir() and archive_mipmap_directory(path.as_posix())
+            for entry, path in entries
         ):
             raise ValueError("ZIP 不含 mipmap 图片，不能按 ZIP 处理；请传入单个图片使用 --image")
-        for entry in entries:
-            if entry.is_dir():
-                continue
-            target = destination / PurePosixPath(entry.filename)
-            target.parent.mkdir(parents=True, exist_ok=True)
-            with archive.open(entry) as input_stream, target.open("wb") as output_stream:
-                shutil.copyfileobj(input_stream, output_stream)
+        if _extraction_cache_is_complete(destination, source_hash, entries):
+            return destination
+        if destination.exists():
+            raise ValueError(f"ZIP 私有解压缓存不完整，拒绝覆盖；请移除后重试：{destination}")
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=f".{destination.name}.", dir=destination.parent) as temporary_value:
+            temporary = Path(temporary_value)
+            files = []
+            for entry, relative in entries:
+                if entry.is_dir():
+                    continue
+                target = temporary / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(entry) as input_stream, target.open("xb") as output_stream:
+                    shutil.copyfileobj(input_stream, output_stream)
+                files.append({"path": relative.as_posix(), "size": entry.file_size, "md5": md5_file(target)})
+            write_resources(
+                temporary / EXTRACTION_MARKER,
+                {"version": 1, "sourceMd5": source_hash, "files": sorted(files, key=lambda item: item["path"])},
+            )
+            os.replace(temporary, destination)
     return destination
 
 
@@ -381,7 +533,7 @@ def main() -> int:
         if args.resources_file
         else resources_path_for_source(project_root, source_path)
     )
-    res_root = project_root / "app/src/main/res"
+    res_root = resource_root_for_compose(project_root, compose)
 
     if args.image:
         source = source_path
@@ -396,7 +548,7 @@ def main() -> int:
             )
         ]
     else:
-        extraction_root = extract_zip_to_downloads(source_path)
+        extraction_root = extract_zip_to_cache(source_path, project_root)
         reserved: set[Path] = set()
         imported_hashes: set[tuple[Path, str]] = set()
         plans = []

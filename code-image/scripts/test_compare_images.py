@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import tempfile
 import unittest
@@ -49,6 +50,9 @@ class CompareImagesTest(unittest.TestCase):
         self.assertAlmostEqual(report["similarity"], 1.0)
         for name in ("diff.json", "diff-mask.png", "diff-heatmap.png", "diff-overlay.png"):
             self.assertTrue((self.output / name).is_file(), name)
+        for key, name in (("mask", "diff-mask.png"), ("heatmap", "diff-heatmap.png"), ("overlay", "diff-overlay.png")):
+            expected = hashlib.md5((self.output / name).read_bytes()).hexdigest()
+            self.assertEqual(report["artifactMd5"][key], expected)
 
     def test_difference_is_grouped_into_a_region(self) -> None:
         self.write_image(self.design, (255, 255, 255))
@@ -74,6 +78,19 @@ class CompareImagesTest(unittest.TestCase):
 
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("宽高比", result.stderr)
+
+    def test_output_artifact_cannot_overwrite_an_input_image(self) -> None:
+        self.output.mkdir()
+        self.design = self.output / "diff-mask.png"
+        self.write_image(self.design, (255, 255, 255))
+        original_hash = hashlib.md5(self.design.read_bytes()).hexdigest()
+        self.write_image(self.app, (255, 255, 255))
+
+        result = self.run_compare()
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("覆盖输入", result.stderr)
+        self.assertEqual(hashlib.md5(self.design.read_bytes()).hexdigest(), original_hash)
 
 
 if __name__ == "__main__":
