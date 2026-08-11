@@ -2,80 +2,46 @@
 
 ## 证据目录
 
-同一 ZIP 共用一个证据目录：
-
 ```text
-<project>/.code-lanhu-compose/<zip-stem>-<md5前6位>/runs/
+<artifact>/runs/
 ├── 设计截图.png
 ├── 应用截图.png
 ├── 应用截图_1.png
+├── 应用截图_归一化.png
 ├── diff.json
 ├── diff-mask.png
 ├── diff-heatmap.png
 └── diff-overlay.png
 ```
 
-把公共设计截图复制到 `~/Downloads/设计截图.png`，最近一次 App 截图复制到 `~/Downloads/应用截图.png`。下载目录文件允许覆盖，`runs/` 内已有证据不得覆盖。
+不创建时间戳子目录。设计图同一来源只保留一个公共基准；App 截图按后缀递增，永不覆盖原始证据。`pipeline.json` 记录最近一次截图和对比输入。
 
-`runs/` 下不创建任何时间戳子目录。设计稿截图固定为 `设计截图.png`：同一 ZIP 首次采集后即作为公共基准图复用，后续采集不得重复截取。App 截图从 `应用截图.png` 开始按顺序递增为 `应用截图_1.png`、`应用截图_2.png`……；多轮修正不得覆盖已有截图。当前机器对比产物固定写入 `diff.json` 及其三张证据图，并由 `pipeline.json` 记录最近一次对比输入和指标。
+## 设计截图
 
-创建本目录前必须确认当前 ZIP 专属目录中的 `设计解析.json` 已完成，且其完整 `sourceMd5` 与当前 ZIP 一致；只有运行目录而没有设计解析文件的结果属于不完整证据，必须先回到设计解析阶段补齐。
+设计缓存未命中时，固定脚本：
 
-## 设计稿截图
+1. 安全解压到 artifact 内的本地服务缓存；
+2. 注入稳定 DOM ID 并绑定 `127.0.0.1` 随机端口；
+3. 在本机 Chrome 等待字体、图片和布局稳定；
+4. 在同一 page 采集最终事实并按根节点截图；
+5. 原子写入版本 5 的 `设计解析.json`、截图 MD5 并回收服务。
 
-本地 `file://` 地址可能被 Codex 浏览器策略拒绝。仅在完整设计缓存未命中时，由固定管线启动仅本机可访问的静态服务；不能手动启动一个无法追溯的服务：
+根节点候选会过滤 script/noscript/template 和零 bounds 节点；唯一视觉根使用其稳定 `data-code-lanhu-node-id` selector，多个顶层视觉兄弟使用完整 `body`。viewport 和 DPR 会写入证据并参与缓存键；响应式设计通过 `run-fixed --viewport-width <px> --viewport-height <px> --dpr <倍数>` 改变环境并强制重新采集。
 
-```bash
-python3 scripts/lanhu_pipeline.py start-design-server --zip <zip> --project-root <project>
-```
+## App 截图有效性
 
-随后执行 `采集设计`。该命令使用本机 Chrome 等待页面资源完成，采集最终 DOM、计算样式与有效边界，写入 `设计解析.json`，并仅在公共设计图缺失时按其中的设计根节点自动保存 `runs/设计截图.png`。同一 ZIP 的完整缓存命中时，这两个命令均返回 `cacheHit: true`，不会启动服务或浏览器。
+优先使用 `test-android-apps:android-emulator-qa` 做页面启动与稳定性验证。回退到本 Skill 的 ADB 命令时：
 
-根节点选择器必须来自解析结果，`.page` 只是蓝湖常见示例。去掉预览外壳的缩小 `transform`，保留设计元素自身的 transform；固定 viewport、背景和 `deviceScaleFactor`。
+- 始终指定 `adb -s <serial>`，并核验项目要求的 AVD 名；
+- 先确认目标 Activity resumed、UI 树/页面标识正确、加载与动画已稳定；
+- 确认语言、字体缩放、density、主题、测试数据和滚动位置；
+- 避免键盘、Toast、弹窗和系统过渡遮挡。
 
-截图保存后立即登记并回收服务；即使图片路径、选择器或浏览器操作失败，也必须执行 `stop-design-server`：
+`screenshot-k80` 只负责设备身份与 PNG 完整性：截图不可解码、不是 PNG 或尺寸无效时删除该文件并保持原状态。它不会判断截图内容是不是目标页面，因此页面就绪证据仍需由 QA 流程或调用方记录。
 
-```bash
-python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <project> --image <artifact>/runs/设计截图.png
-# 浏览器截图失败时改为执行：
-python3 scripts/lanhu_pipeline.py stop-design-server --zip <zip> --project-root <project>
-```
+## 归一化后再比较
 
-服务固定绑定 `127.0.0.1`，端口默认由系统自动分配。`screenshot-design` 会校验图片位于本次 artifact 的 `runs/` 目录且命名为 `设计截图.png`，随后停止脚本自身启动且已核验的 `http.server` PID；它不会终止用户手动启动的其他服务。
-
-## App 截图
-
-优先使用 `test-android-apps:android-emulator-qa`。回退到 ADB 时必须指定设备：
-
-```bash
-adb -s <serial> shell screencap -p /sdcard/lanhu_compose_screen.png
-adb -s <serial> pull /sdcard/lanhu_compose_screen.png <artifact>/runs/应用截图.png
-```
-
-截图前必须完成启动稳定性检查：等待启动页/启动图标消失，确认目标 Activity 已处于 resumed 状态，并通过 UI 树、页面标识或稳定的目标节点确认目标页面已显示；连续两次检查结果一致后，才允许截图。空白加载态、启动图、首页或过渡动画截图必须标记为无效证据，不得用于视觉对比。
-
-同时确认目标数据和滚动位置正确，动画已经稳定，并且没有键盘、Toast 或弹窗遮挡。把启动稳定性检查结果和目标页面标识写入本轮 `logs/`，便于追溯截图是否有效。
-
-## 对齐后再比较
-
-比较前统一：
-
-- 有效内容裁剪区域。
-- 画布宽高和缩放比例。
-- 状态栏、导航栏及安全区处理。
-- 背景色、透明通道和颜色空间。
-- 设计状态、文本内容、语言、字体缩放和测试数据。
-
-### 设计像素、窗口适配和归一化策略
-
-- 从 `设计解析.json` 读取设计画布的宽高像素；蓝湖标注的 `1600×720` 是设计像素（px/PS），不是 Android dp。
-- 从实际截图或 Compose `BoxWithConstraints` 读取可用窗口的物理像素宽高，并记录是否包含状态栏、导航栏和安全区。不要用模拟器外层窗口截图尺寸代替 App 内容尺寸。
-- 需求为“铺满全屏”时，页面根节点使用左上角虚拟画布，横纵分别计算缩放比例：`scaleX = viewportWidthPx / designWidthPx`、`scaleY = viewportHeightPx / designHeightPx`；Compose 中再分别除以 `density`。不要用动态 `translationX/Y` 补偿父布局居中。
-- 需求为“保持设计比例”时使用统一比例，并明确选择留白或裁剪；不要为了消除留白而偷偷拉伸设计内容。
-- 宽高比不一致时，保留原始 App 截图作为证据，再生成归一化截图：全屏填充模式把有效 App 内容按横纵比例重采样到设计画布尺寸；等比适配模式先按实际画布位置裁剪，再重采样到设计画布尺寸。记录输入路径、裁剪区域、缩放比例和适配模式。
-- 只有归一化截图的宽高比与设计图一致后，才能调用 `compare_images.py`；禁止用 `--aspect-tolerance` 绕过宽高比错误。通过固定管线的 `compare-screenshots --app <归一化截图>` 传入该文件。
-
-归一化使用 Skill 自带脚本，`fill` 模式默认使用整张有效 App 截图，`fit` 模式必须显式提供设计画布裁剪区域：
+保留原始 App 截图，随后运行：
 
 ```bash
 python3 scripts/normalize_compare_screenshot.py \
@@ -85,44 +51,42 @@ python3 scripts/normalize_compare_screenshot.py \
   --mode fill
 ```
 
-等比适配示例：`--mode fit --crop x,y,width,height`。脚本输出的 JSON 变换信息应保存到本轮日志或对比决策中。
+- `fill`：明确允许横纵独立缩放到设计画布，适用于全屏填充契约。
+- `fit --crop x,y,width,height`：裁剪区域宽高比必须与设计稿在 0.1% 内一致，再做等比重采样；不一致立即失败。
+- 输出路径不能等于设计图或 App 原图；写入使用同目录临时文件和原子替换。
+- 同名 `.normalization.json` sidecar 保存输入/输出 MD5、原尺寸、有效区域、`scaleX/scaleY` 和宽高比误差；`compare-screenshots` 会验证这份绑定。
 
-禁止直接比较两个未经归一化的整屏截图，也禁止覆盖原始 App 截图。
+系统栏、安全区或信箱留白必须通过真实 crop 处理。禁止用 `--aspect-tolerance` 放行不同宽高比，也禁止直接覆盖原图。
 
-## 机器对比与差异顺序
-
-完成 `screenshot-k80` 并生成归一化截图后，必须让固定管线调用 `$code-image` 的独立图片对比脚本：
+## 对比与修正顺序
 
 ```bash
 python3 scripts/lanhu_pipeline.py compare-screenshots \
-  --zip <zip> \
-  --project-root <project> \
+  --zip <zip> --project-root <project> \
   --app <artifact>/runs/应用截图_归一化.png
 ```
 
-该命令以 `runs/设计截图.png` 和显式传入的归一化 App 截图为输入，生成 `diff.json` 及遮罩、热力图、叠加图。报告中的 `sourceMd5`、输入路径、整体指标和连通差异区域是后续修复的唯一机器证据；`mark-diff --outcome ...` 省略 `--report` 时也会自动执行同一对比阶段。脚本只识别和记录差异，不直接改动 Compose。
+命令调用 `$code-image` 的独立算法，生成 `diff.json`、遮罩、热力图和叠加图，并将当前 `sourceMd5`、设计图、App 图和 metrics 注册到状态。`mark-diff` 只接受这份已注册且字段完整的报告。
 
-按以下顺序定位和修正：
+按以下顺序修正，避免局部数值掩盖根因：
 
-1. 页面根边界、系统栏和整体缩放。
-2. 容器层级、方向、尺寸和父级 padding/gap。
-3. 子项位置、特殊 margin、对齐和图片裁剪。
-4. 文本基线、字号、字重、行高和字距。
-5. 颜色、透明度、圆角、边框、阴影和遮挡。
+1. 根边界、系统栏、整体横纵缩放；
+2. 主要容器和背景/资源覆盖；
+3. 节点 bounds、层叠、裁剪和遮挡；
+4. 文本基线、字号、字重、行高、字距；
+5. 颜色、透明度、圆角、边框、阴影等细节。
 
-每轮生成结构化差异，至少记录区域、属性、设计值、App 值、偏差和证据截图。
+每轮只改有 bounds、编译错误或差异图支持的属性，并重新执行同一 variant 的编译、打包、安装、截图和比较。
 
-## 三轮上限和停止条件
+## 三轮上限与提前停止
 
-初次生成不计入修正次数，之后最多修正三轮。每轮都必须重新编译、安装或运行、截图并对比。
+初稿不计修正次数，最多三轮。满足任一条件立即停止：
 
-满足任一条件立即停止：
+- 关键布局、文字和资源达到可接受范围；
+- 任意一次已完成的修正没有改善关键 metrics 或证据图；
+- 三轮用尽；
+- 缺失字体、图片、数据、页面入口或设计状态；
+- 编译、设备或外部依赖阻塞；
+- 继续需要破坏公共组件或修改未授权文件。
 
-- 关键布局、文本和资源差异已达到可接受范围。
-- 已完成三轮修正。
-- 连续两轮没有改善或差异变大。
-- 缺失字体、图片、测试数据或设计状态，无法可靠复现。
-- 编译、设备、页面入口或外部依赖阻塞。
-- 继续修正需要破坏公共组件或修改未授权文件。
-
-停止时列出剩余差异和具体原因，不用猜测性代码填补信息缺口。
+停止时报告当前指标、剩余差异和具体原因。只有 `pass` 可进入 `complete`；`stop` 不是成功完成。

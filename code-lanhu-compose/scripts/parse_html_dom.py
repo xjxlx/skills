@@ -12,6 +12,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from typing import Any
 
+from import_zip_images import normalized_zip_path
+
 
 class DomParseError(ValueError):
     """HTML DOM 或本地资源引用无法安全解析。"""
@@ -22,10 +24,13 @@ URL_PATTERN = re.compile(r"url\(\s*([^)]*?)\s*\)", re.IGNORECASE)
 
 
 def _normalise_zip_path(value: str) -> str:
-    value = value.replace("\\", "/")
-    if value.startswith("/") or ".." in Path(value).parts:
+    try:
+        path = normalized_zip_path(value)
+    except ValueError as error:
+        raise DomParseError(str(error)) from error
+    if path.is_absolute() or ".." in path.parts:
         raise DomParseError(f"资源路径不安全：{value}")
-    return value.lstrip("./")
+    return path.as_posix()
 
 
 def _resolve_local_path(document_path: str, raw: str, available: set[str]) -> str | None:

@@ -5,19 +5,26 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import re
-import subprocess
+import sys
+import unicodedata
 from pathlib import Path, PurePosixPath
+from types import ModuleType
 from zipfile import ZipFile
 
 
 IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
 CODE_IMAGE_SCRIPT = Path(__file__).resolve().parents[2] / "code-image/scripts/normalize_images.py"
+_CODE_IMAGE_MODULE: ModuleType | None = None
 LAYOUT_UTILITY_CLASSES = frozenset({"flex-row", "flex-col"})
 SELECTOR_TOKEN_PATTERN = re.compile(r"([.#])([A-Za-z][A-Za-z0-9_-]*)")
 EXTRACTION_MARKER_NAME = ".code-lanhu-compose-extraction.json"
+MAX_ARCHIVE_ENTRIES = 5000
+MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
+MAX_COMPRESSION_RATIO = 200
 
 
 def md5_file(path: Path) -> str:
@@ -56,15 +63,82 @@ def project_relative(path: Path, project_root: Path) -> str:
         return str(path.resolve())
 
 
+def target_resource_root(compose_path: Path, project_root: Path) -> Path:
+    """从目标 Compose 的真实路径确定所属模块 src/main/res，避免跨模块复用资源。"""
+    root = project_root.resolve()
+    compose = compose_path.resolve()
+    try:
+        relative = compose.relative_to(root)
+        source_index = relative.parts.index("src")
+    except (ValueError, IndexError) as error:
+        raise ValueError(f"无法从 Compose 路径确定目标模块资源目录：{compose}") from error
+    return root.joinpath(*relative.parts[:source_index], "src", "main", "res").resolve()
+
+
+def record_targets_resource_root(record: dict, project_root: Path, resource_root: Path) -> bool:
+    output_path = record.get("outputPath")
+    if not isinstance(output_path, str):
+        return False
+    candidate = Path(output_path)
+    candidate = candidate if candidate.is_absolute() else project_root.resolve() / candidate
+    resolved = candidate.resolve()
+    return (
+        resource_root in resolved.parents
+        and not candidate.is_symlink()
+        and resolved.is_file()
+    )
+
+
+def normalized_zip_path(name: str) -> PurePosixPath:
+    """按实际解压语义规范 ZIP 路径，避免别名覆盖同一文件。"""
+    normalized = unicodedata.normalize("NFC", name.replace("\\", "/"))
+    path = PurePosixPath(normalized)
+    if not path.parts or path == PurePosixPath("."):
+        raise ValueError(f"ZIP 包含空路径：{name}")
+    return path
+
+
 def safe_entries(archive: ZipFile):
     entries = []
+    seen: set[str] = set()
+    total_size = 0
     for entry in archive.infolist():
-        path = PurePosixPath(entry.filename)
+        path = normalized_zip_path(entry.filename)
         mode = (entry.external_attr >> 16) & 0o170000
         if path.is_absolute() or ".." in path.parts or mode == 0o120000:
             raise ValueError(f"ZIP 包含不安全路径或符号链接：{entry.filename}")
+        collision_key = path.as_posix().casefold()
+        if collision_key in seen:
+            raise ValueError(f"ZIP 包含重复路径：{entry.filename}")
+        seen.add(collision_key)
+        total_size += entry.file_size
+        if len(seen) > MAX_ARCHIVE_ENTRIES or total_size > MAX_UNCOMPRESSED_BYTES:
+            raise ValueError("ZIP 条目数或解压总大小超过安全上限")
+        if entry.compress_size and entry.file_size / entry.compress_size > MAX_COMPRESSION_RATIO:
+            raise ValueError(f"ZIP 条目压缩比超过安全上限：{entry.filename}")
         entries.append(entry)
     return entries
+
+
+def safe_extraction_target(destination: Path, relative: PurePosixPath) -> Path:
+    """拒绝缓存目录中的预存符号链接，确保写入仍位于目标根目录。"""
+    if destination.is_symlink():
+        raise ValueError(f"解压缓存目录不能是符号链接：{destination}")
+    destination.mkdir(parents=True, exist_ok=True)
+    root = destination.resolve()
+    current = destination
+    for part in relative.parts[:-1]:
+        current = current / part
+        if current.is_symlink():
+            raise ValueError(f"解压目标父目录不能是符号链接：{current}")
+        current.mkdir(exist_ok=True)
+    target = destination.joinpath(*relative.parts)
+    if target.is_symlink():
+        raise ValueError(f"解压目标不能是符号链接：{target}")
+    resolved = target.resolve()
+    if root not in resolved.parents:
+        raise ValueError(f"ZIP 解压路径越界：{relative.as_posix()}")
+    return target
 
 
 def extraction_cache_is_complete(destination: Path, entries, source_hash: str) -> bool:
@@ -79,7 +153,7 @@ def extraction_cache_is_complete(destination: Path, entries, source_hash: str) -
     for entry in entries:
         if entry.is_dir():
             continue
-        candidate = root / PurePosixPath(entry.filename)
+        candidate = root / normalized_zip_path(entry.filename)
         target = candidate.resolve()
         if root not in target.parents or candidate.is_symlink() or not target.is_file():
             return False
@@ -88,21 +162,41 @@ def extraction_cache_is_complete(destination: Path, entries, source_hash: str) -
     return True
 
 
-def extract_zip(zip_path: Path, source_hash: str) -> tuple[Path, list[tuple[PurePosixPath, Path]]]:
-    destination = Path.home() / "Downloads" / f"{safe_file_token(zip_path.stem)}-{source_hash[:6]}"
+def reject_extraction_identity_collision(destination: Path, source_hash: str) -> None:
+    marker = destination / EXTRACTION_MARKER_NAME
+    if not marker.is_file():
+        return
+    try:
+        cached = json.loads(marker.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as error:
+        raise ValueError(f"解压缓存身份文件损坏，拒绝覆盖：{marker}") from error
+    existing = cached.get("sourceMd5") if isinstance(cached, dict) else None
+    if isinstance(existing, str) and existing != source_hash:
+        raise ValueError(f"检测到 MD5 前缀碰撞，拒绝覆盖解压缓存：{existing} != {source_hash}")
+
+
+def extract_zip(
+    zip_path: Path,
+    source_hash: str,
+    project_root: Path,
+    extraction_root: Path | None = None,
+) -> tuple[Path, list[tuple[PurePosixPath, Path]]]:
+    destination = (
+        extraction_root.expanduser().resolve()
+        if extraction_root is not None
+        else artifact_directory(zip_path, source_hash, project_root.resolve()) / "source-cache"
+    )
     with ZipFile(zip_path) as archive:
         entries = safe_entries(archive)
+        reject_extraction_identity_collision(destination, source_hash)
         image_entries = [
-            entry for entry in entries if not entry.is_dir() and PurePosixPath(entry.filename).suffix.lower() in IMAGE_EXTENSIONS
+            entry for entry in entries if not entry.is_dir() and normalized_zip_path(entry.filename).suffix.lower() in IMAGE_EXTENSIONS
         ]
-        if not image_entries:
-            raise ValueError("ZIP 中没有图片，无法逐图导入")
         if not extraction_cache_is_complete(destination, entries, source_hash):
             for entry in entries:
                 if entry.is_dir():
                     continue
-                target = destination / PurePosixPath(entry.filename)
-                target.parent.mkdir(parents=True, exist_ok=True)
+                target = safe_extraction_target(destination, normalized_zip_path(entry.filename))
                 with archive.open(entry) as source, target.open("wb") as output:
                     while chunk := source.read(1024 * 1024):
                         output.write(chunk)
@@ -110,7 +204,10 @@ def extract_zip(zip_path: Path, source_hash: str) -> tuple[Path, list[tuple[Pure
                 destination / EXTRACTION_MARKER_NAME,
                 {"version": 1, "sourceMd5": source_hash},
             )
-    return destination, [(PurePosixPath(entry.filename), destination / PurePosixPath(entry.filename)) for entry in image_entries]
+    return destination, [
+        (normalized_zip_path(entry.filename), destination / normalized_zip_path(entry.filename))
+        for entry in image_entries
+    ]
 
 
 def verify_manifest_identity(path: Path, source_hash: str) -> None:
@@ -124,7 +221,13 @@ def verify_manifest_identity(path: Path, source_hash: str) -> None:
         raise ValueError(f"图片清单已属于另一个 ZIP，拒绝覆盖：{path}")
 
 
-def load_code_image_record(resources_path: Path, source_path: Path, file_hash: str, project_root: Path) -> dict:
+def load_code_image_record(
+    resources_path: Path,
+    source_path: Path,
+    file_hash: str,
+    project_root: Path,
+    compose_path: Path,
+) -> dict:
     try:
         data = json.loads(resources_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
@@ -133,27 +236,39 @@ def load_code_image_record(resources_path: Path, source_path: Path, file_hash: s
         str(source_path.resolve()),
         project_relative(source_path, project_root),
     }
+    resource_root = target_resource_root(compose_path, project_root)
     for record in data.get("resources", []):
-        if record.get("originalPath") in source_values and record.get("originalHash") == file_hash:
+        if (
+            record.get("originalPath") in source_values
+            and record.get("originalHash") == file_hash
+            and record_targets_resource_root(record, project_root, resource_root)
+        ):
             return record
     for record in data.get("resources", []):
-        if record.get("originalHash") == file_hash:
+        if record.get("originalHash") == file_hash and record_targets_resource_root(record, project_root, resource_root):
             return record
     raise ValueError(f"code-image 未记录刚导入的图片：{source_path}")
 
 
-def load_code_image_records_by_hash(resources_path: Path) -> dict[str, dict]:
+def load_code_image_records_by_hash(resources_path: Path, project_root: Path, compose_path: Path) -> dict[str, dict]:
     if not resources_path.is_file():
         return {}
     try:
         data = json.loads(resources_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
         raise ValueError(f"无法读取 code-image 资源记录：{resources_path}") from error
-    return {
-        record["originalHash"]: record
-        for record in data.get("resources", [])
-        if isinstance(record.get("originalHash"), str)
-    }
+    root = project_root.resolve()
+    resource_root = target_resource_root(compose_path, project_root)
+    result: dict[str, dict] = {}
+    for record in data.get("resources", []):
+        original_hash = record.get("originalHash")
+        output_path = record.get("outputPath")
+        if not isinstance(original_hash, str) or not isinstance(output_path, str):
+            continue
+        if not record_targets_resource_root(record, root, resource_root):
+            continue
+        result[original_hash] = record
+    return result
 
 
 def resource_manifest_path(
@@ -236,33 +351,55 @@ def lanhu_asset_names(extraction_root: Path, image_entries: list[tuple[PurePosix
     return names
 
 
-def run_code_image(
-    image_path: Path,
+def load_code_image_module() -> ModuleType:
+    """进程内加载 code-image，避免每张图片重复启动解释器和解析清单。"""
+    global _CODE_IMAGE_MODULE
+    if _CODE_IMAGE_MODULE is not None:
+        return _CODE_IMAGE_MODULE
+    spec = importlib.util.spec_from_file_location("code_lanhu_compose_code_image", CODE_IMAGE_SCRIPT)
+    if spec is None or spec.loader is None:
+        raise ValueError(f"无法加载 code-image：{CODE_IMAGE_SCRIPT}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
+    _CODE_IMAGE_MODULE = module
+    return module
+
+
+def run_code_image_batch(
+    images: list[tuple[Path, str | None]],
     compose_path: Path,
     project_root: Path,
     resources_path: Path,
     apply: bool,
-    asset_name: str | None,
 ) -> None:
-    command = [
-        "python3",
-        str(CODE_IMAGE_SCRIPT),
-        "--image",
-        str(image_path),
-        "--compose",
-        str(compose_path),
-        "--project-root",
-        str(project_root),
-        "--resources-file",
-        str(resources_path),
-    ]
-    if asset_name:
-        command.extend(["--asset-name", asset_name])
-    if apply:
-        command.append("--apply")
-    result = subprocess.run(command, capture_output=True, text=True)
-    if result.returncode != 0:
-        raise ValueError(f"code-image 处理失败：{image_path}\n{result.stderr or result.stdout}")
+    if not images:
+        return
+    module = load_code_image_module()
+    target_dir = target_resource_root(compose_path, project_root) / "mipmap-xxhdpi"
+    reserved: set[Path] = set()
+    plans = []
+    try:
+        for image_path, asset_name in images:
+            plan = module.build_plan(
+                image_path,
+                target_dir,
+                project_root,
+                compose_path,
+                resources_path,
+                reserved,
+                asset_name=asset_name,
+            )
+            plans.append(plan)
+            reserved.add(plan.target.resolve())
+        if apply:
+            module.apply_plans(plans, resources_path, project_root)
+    except (OSError, ValueError) as error:
+        raise ValueError(f"code-image 批量处理失败：{error}") from error
 
 
 def write_json(path: Path, data: dict) -> None:
@@ -272,34 +409,45 @@ def write_json(path: Path, data: dict) -> None:
     os.replace(temporary, path)
 
 
-def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, apply: bool) -> dict:
+def import_zip_images(
+    zip_path: Path,
+    compose_path: Path,
+    project_root: Path,
+    apply: bool,
+    extraction_root: Path | None = None,
+) -> dict:
     zip_path = zip_path.resolve()
     compose_path = compose_path.resolve()
     project_root = project_root.resolve()
     source_hash = md5_file(zip_path)
     manifest_path = manifest_path_for(zip_path, source_hash, project_root)
     verify_manifest_identity(manifest_path, source_hash)
-    extraction_root, images = extract_zip(zip_path, source_hash)
-    asset_names = lanhu_asset_names(extraction_root, images)
+    extracted_root, images = extract_zip(zip_path, source_hash, project_root, extraction_root)
+    asset_names = lanhu_asset_names(extracted_root, images)
     resources_path = resource_manifest_path(project_root, zip_path, source_hash)
-    records_by_hash = load_code_image_records_by_hash(resources_path) if apply else {}
-    records = []
+    records_by_hash = load_code_image_records_by_hash(resources_path, project_root, compose_path) if apply else {}
+    image_facts = []
+    pending_by_hash: dict[str, tuple[Path, str | None]] = {}
     for zip_entry, image_path in images:
         content_hash = content_md5_file(image_path)
         asset_name = asset_names.get(zip_entry)
+        image_facts.append((zip_entry, image_path, content_hash, asset_name))
+        if content_hash not in records_by_hash and content_hash not in pending_by_hash:
+            pending_by_hash[content_hash] = (image_path, asset_name)
+    run_code_image_batch(
+        list(pending_by_hash.values()),
+        compose_path,
+        project_root,
+        resources_path,
+        apply,
+    )
+    if apply and pending_by_hash:
+        records_by_hash = load_code_image_records_by_hash(resources_path, project_root, compose_path)
+    records = []
+    for zip_entry, image_path, content_hash, asset_name in image_facts:
         record = records_by_hash.get(content_hash)
-        if record is None:
-            run_code_image(
-                image_path,
-                compose_path,
-                project_root,
-                resources_path,
-                apply,
-                asset_name,
-            )
-            record = load_code_image_record(resources_path, image_path, content_hash, project_root) if apply else None
-            if record is not None:
-                records_by_hash[content_hash] = record
+        if apply and record is None:
+            raise ValueError(f"code-image 未记录批量导入的图片：{image_path}")
         records.append(
             {
                 "sourcePath": zip_entry.as_posix(),
@@ -318,7 +466,7 @@ def import_zip_images(zip_path: Path, compose_path: Path, project_root: Path, ap
         "sourceName": zip_path.name,
         "sourcePath": str(zip_path),
         "sourceMd5": source_hash,
-        "extractionPath": str(extraction_root),
+        "extractionPath": str(extracted_root),
         "composeFile": project_relative(compose_path, project_root),
         "images": records,
     }
@@ -332,13 +480,14 @@ def main() -> int:
     parser.add_argument("--zip", required=True, help="蓝湖 ZIP 文件")
     parser.add_argument("--compose", required=True, help="目标 Compose 文件")
     parser.add_argument("--project-root", default=".", help="Android 项目根目录")
+    parser.add_argument("--extraction-root", type=Path, help="复用 pipeline 已验证的私有解压缓存")
     parser.add_argument("--apply", action="store_true", help="实际复制、改名并写入图片清单")
     args = parser.parse_args()
 
     compose = Path(args.compose).resolve()
     if not compose.is_file():
         raise ValueError(f"Compose 文件不存在：{compose}")
-    data = import_zip_images(Path(args.zip), compose, Path(args.project_root), args.apply)
+    data = import_zip_images(Path(args.zip), compose, Path(args.project_root), args.apply, args.extraction_root)
     print(f"已处理 {len(data['images'])} 张图片：{data['extractionPath']}")
     if not args.apply:
         print("当前为 Dry Run，确认后追加 --apply 写入资源与清单。")

@@ -1,99 +1,72 @@
 # 固定编排链路契约
 
-`scripts/lanhu_pipeline.py` 是本 Skill 唯一的流程入口。它把一次蓝湖还原拆成可重放的阶段，并在 `.code-lanhu-compose/<name>-<md5前6位>/pipeline.json` 保存状态。压缩包的完整 `sourceMd5` 是唯一输入身份；输入变化时必须重新 `inspect`，不能沿用旧状态。相同 MD5 的 `inspect` 直接返回已有阶段，不重复运行 ZIP 检查，也不重置状态；固定流程不运行 class/选择器层级候选扫描。
+`scripts/lanhu_pipeline.py` 是唯一编排器；状态写入本次 ZIP 的 `pipeline.json`，所有阶段绑定完整 `sourceMd5`。
 
-默认入口是 `run-fixed`。它由 Python 自动串联完整 DOM 解析、设计服务/浏览器采集、资源导入、Compose 代码生成、Gradle 任务发现和编译；模型不再逐个选择这些子命令，也不再负责首稿结构转换。
-
-## 阶段与命令
+## 状态机
 
 ```text
-inspect/parse-dom -> validate -> preflight -> assets -> generate-compose -> compile -> package-debug
-        -> install-k80 -> screenshot-k80 -> normalize-screenshot -> compare-screenshots -> mark-diff -> complete
-                                      \-> repair（最多三轮后回到 compile）
+created → inspected → validated → preflight → assets_imported → generated → compiled
+       → installed → screenshot → diffed → completed
+                              ↖ repair（最多三轮）
 ```
 
-当差异结果已经 `stop`，但用户随后明确纠正实现方向时，先运行 `restart-generation --reason <用户原因>`。该命令校验并复用同一 `sourceMd5` 的 `dom.json`、`设计解析.json` 和 `images.json`，保留既有编译、打包和截图历史，只重开代码生成周期并把视觉修正轮数归零；不得手工改写 `pipeline.json` 或重新解析 ZIP。
+`package-debug` 在 compiled 状态登记 APK，不伪造新阶段；APK 必须来自目标 Compose 模块的 `build/outputs/apk/`，安装前复核路径、Compose Hash 与 APK 内容 Hash。只有当前已注册的视觉报告 `outcome=pass` 才能 `complete`；`stop` 保留为未完成的证据终点。用户明确纠正方向后，可从 `stop` 运行 `restart-generation --reason ...`，复用同一来源证据并把修正计数归零。
 
-设计稿浏览器采集与截图是 `inspect` 后可执行的独立证据生命周期，不改变 Android 编译阶段：
+## `run-fixed` 顺序
 
 ```text
-start-design-server -> 采集设计（缓存未命中时写入设计解析.json，并首次保存 runs/设计截图.png）
-                    -> screenshot-design（登记并停止服务）
-                    \-> stop-design-server（采集失败时清理）
-
-完整设计缓存命中时，`start-design-server` 与 `采集设计` 都返回 `cacheHit: true`，不会启动静态服务、解压 ZIP 或启动浏览器；仍可调用 `screenshot-design` 登记公共设计图。
+inspect/parse-dom → validate → preflight → ensure_design_evidence → assets
+                  → generate-compose → compile
 ```
 
-每个阶段都必须使用脚本子命令，阶段不能跳过。完整 DOM、浏览器采集、资源 Hash、图片清单、`assets` 和 `generate-compose` 均由 Python 固定执行；生成器只读取 `dom.json`、`设计解析.json`、`images.json` 和目标 package 声明。`preflight` 根据目标 Compose 路径和 `gradlew tasks --all` 自动确定模块的 Debug Kotlin 任务，`compile` 只能复用状态中的任务，`package-debug` 再由该任务推导同变体 `assemble` 任务。只有出现多个 Debug variant 或无法识别时才暂停请求用户；禁止模型传入临时 Gradle task。Gradle 在项目根目录优先运行 `./gradlew`（仅 Wrapper 缺失且系统存在 `gradle` 时回退）；设备操作只接受 `adb -s <serial>` 的固定探针、安装和截图命令。`install-k80` 只接受当前 Compose Hash 对应且时间戳不早于 Compose 文件的 `package-debug` 产物。
+- validate 与 preflight 必须先于浏览器和资源写入，错误项目/目标不产生昂贵副作用。
+- preflight 从目标 Compose 路径确定模块，并从 `tasks --all` 找唯一 Debug Kotlin 任务；它只做任务发现，不在生成前重复执行完整编译。
+- 设计缓存未命中时，布局采集与截图只启动一次浏览器；命中时不解压、不启动服务/浏览器。
+- 图片清单、生成器、源码检查和 Gradle 均由 Python 调用；模型不能手工标记 generated。图片按内容 Hash 去重后单进程批量导入。
+- 当前 Compose、目标模块源码、图片资源/清单、Gradle 配置和 task 的编译指纹与最近成功值一致时，热重跑返回 `unchanged`；任一输入变化都会失效下游证据并重新编译。
 
-`validate`、`generate-compose` 和 `compile` 会自动检查目标 Compose 源码中的 `padding(...)` 参数；发现负值时在生成或编译阶段立即停止，并要求改用 `Modifier.offset` 或父级布局表达跨边界位置，保留负位移语义并避免运行时 `PaddingElement` 崩溃。
+相同 ZIP、相同目标只复用当前阶段。相同 ZIP 换目标时，来源证据保留，目标绑定阶段重置为 `inspected`；禁止沿用旧模块 `preflightTask`。
 
-常用入口：
+## 常用命令
 
 ```bash
-python3 scripts/lanhu_pipeline.py run-fixed --zip <zip> --project-root <project> --compose <Compose.kt>
-python3 scripts/lanhu_pipeline.py restart-generation --zip <zip> --project-root <project> --reason <用户明确给出的原因>
-python3 scripts/lanhu_pipeline.py inspect --zip <zip> --project-root <project>
+# 默认自动链路
+python3 scripts/lanhu_pipeline.py run-fixed --zip <zip> --project-root <project> --compose <Compose.kt> \
+  --viewport-width 1600 --viewport-height 900 --dpr 1
+
+# 调试固定产物
+python3 scripts/lanhu_pipeline.py inspect --zip <zip> --project-root <project> --compose <Compose.kt>
 python3 scripts/lanhu_pipeline.py parse-dom --zip <zip> --project-root <project>
-python3 scripts/lanhu_pipeline.py start-design-server --zip <zip> --project-root <project>
-# 采集浏览器最终布局，并写入本次 ZIP 的 设计解析.json：
-python3 scripts/lanhu_pipeline.py 采集设计 --zip <zip> --project-root <project>
-# 从采集结果的 screenshotPath 取得 runs/设计截图.png 后：
-python3 scripts/lanhu_pipeline.py screenshot-design --zip <zip> --project-root <project> --image <artifact>/runs/设计截图.png
-# 若浏览器操作失败，仍必须执行：
-python3 scripts/lanhu_pipeline.py stop-design-server --zip <zip> --project-root <project>
-python3 scripts/lanhu_pipeline.py validate --zip <zip> --project-root <project> --compose <Compose.kt>
-python3 scripts/lanhu_pipeline.py preflight --zip <zip> --project-root <project>
-python3 scripts/lanhu_pipeline.py assets --zip <zip> --project-root <project> --compose <Compose.kt> --apply
 python3 scripts/lanhu_pipeline.py generate-compose --zip <zip> --project-root <project> --compose <Compose.kt>
-# 旧 artifact 兼容检查（新流程不调用，不用于生成首稿）
-python3 scripts/lanhu_pipeline.py mark-generated --zip <zip> --project-root <project> --compose <Compose.kt>
+python3 scripts/lanhu_pipeline.py status --zip <zip> --project-root <project>
+
+# 构建与设备
 python3 scripts/lanhu_pipeline.py compile --zip <zip> --project-root <project>
+# 多 variant 暂停且用户明确选择后：
+python3 scripts/lanhu_pipeline.py select-compile-task --zip <zip> --project-root <project> --task <报告中的候选>
+# 多 HTML 暂停且用户明确选择后：
+python3 scripts/lanhu_pipeline.py select-entry-html --zip <zip> --project-root <project> --html <ZIP内路径>
 python3 scripts/lanhu_pipeline.py package-debug --zip <zip> --project-root <project> --apk <apk>
 python3 scripts/lanhu_pipeline.py install-k80 --zip <zip> --project-root <project> --serial emulator-5554 --expected-avd K80 --apk <apk>
 python3 scripts/lanhu_pipeline.py screenshot-k80 --zip <zip> --project-root <project> --serial emulator-5554 --expected-avd K80
-python3 scripts/normalize_compare_screenshot.py \
-  --design <artifact>/runs/设计截图.png \
-  --app <artifact>/runs/应用截图_1.png \
-  --output <artifact>/runs/应用截图_归一化.png \
-  --mode fill
-python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project> --app <artifact>/runs/应用截图_归一化.png
-# 已完成 compare-screenshots 时传入报告；省略 --report 会自动执行 compare-screenshots：
+
+# 视觉证据
+python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project> --app <normalized.png>
 python3 scripts/lanhu_pipeline.py mark-diff --zip <zip> --project-root <project> --outcome pass
 python3 scripts/lanhu_pipeline.py complete --zip <zip> --project-root <project>
 ```
 
-截图与设计图宽高比不一致时，必须先运行 `normalize_compare_screenshot.py`；`fill` 模式分别重采样横纵尺寸，`fit` 模式必须显式传入有效画布的 `--crop x,y,width,height`。原始截图不得覆盖。`compare-screenshots --app` 只接受当前 artifact/runs 内的归一化截图。
+设计服务的 `start-design-server`、`采集设计`、`screenshot-design`、`stop-design-server` 是诊断子命令；默认由 `run-fixed` 管理。服务固定绑定 `127.0.0.1`，无论登记成功失败都回收脚本启动的 PID。
 
-`compare-screenshots` 只调用 `$code-image` 的独立 `scripts/compare_images.py`，不复制图片算法，也不修改 Compose。它把设计图、显式归一化 App 截图和 `diff.json` 绑定到本次 artifact；模型读取报告后再选择 `repair`、`pass` 或 `stop`。
+## 错误与用户输入
 
-## 模型决策契约
+- `PipelineError`：退出码 1，状态不越级，日志保留。
+- `UserInputRequired`：退出码 2；尽力写入 `needs-user-input.json`，包含命令、问题、来源路径、完整 MD5 和时间。
+- 预检失败、输入损坏、资源冲突或用户既有源码错误不进入自动修复。
+- 生成模板产生的明确编译错误可在固定规则中修复，最多重跑同一任务三次；attempt 在运行外部命令前持久化，失败日志不会被覆盖。先补回归测试，不做页面特判。
 
-模型遇到需要语义判断的地方，只能通过 `record-decision --decision decision.json` 记录以下动作之一：
+`record-decision` 只接受 `ask_user`、`apply_patch`、`continue`、`stop`。补丁目标必须是项目内相对路径且是结构化 JSON；脚本只登记，不执行模型提供的 shell 或补丁。
 
-```json
-{
-  "action": "apply_patch",
-  "target": "app/src/main/java/.../Test7Page.kt",
-  "patch": {"kind": "replace", "old": "...", "new": "..."},
-  "evidence": ["compile: receiver mismatch at line 243"]
-}
-```
+## 发布门禁
 
-允许的 `action` 为 `apply_patch`、`continue`、`stop`、`ask_user`。`apply_patch` 的目标只能是项目内相对路径，补丁必须是 JSON 对象；脚本不执行补丁，也不执行模型提供的 shell。模型使用 `apply_patch` 工具完成真实编辑，再调用下一个固定阶段。
-
-当证据不足以区分多个布局语义、资源映射或业务行为时，提交：
-
-```json
-{
-  "action": "ask_user",
-  "question": "该节点同时存在 8dp 与 12dp 间距，是否以 computed-style 的 12dp 为准？",
-  "evidence": ["..."]
-}
-```
-
-脚本会写入 `needs-user-input.json` 并以退出码 `2` 暂停。没有用户确认，不得用猜测推进后续阶段。
-
-## 可进化边界
-
-规则、模板和测试样例可以版本化演进，但必须先新增回归样例，再修改脚本或引用文档；每次变更后运行脚本单元测试、官方 `quick_validate.py` 和 `check_and_publish.sh`。脚本不得自修改，也不得为单个页面临时复制出同职责的第二套编排器。
+脚本变更必须先有 RED 测试，再实现 GREEN；发布前运行：全部 `test_*.py`、Python 语法检查、官方 `quick_validate.py` 和凭据扫描。最后才执行 `$skill-common` 的 `check_and_publish.sh`，不能把发布脚本当测试门禁。

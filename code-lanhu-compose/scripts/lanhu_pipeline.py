@@ -21,10 +21,17 @@ import sys
 import time
 import zipfile
 from datetime import datetime, timezone
-from pathlib import Path
+from html.parser import HTMLParser
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
+from urllib.parse import quote, urlparse
 
 from generate_compose import GenerationError, generate_compose
+from import_zip_images import EXTRACTION_MARKER_NAME
+from import_zip_images import artifact_directory as image_artifact_directory
+from import_zip_images import normalized_zip_path
+from import_zip_images import safe_entries as validated_zip_entries
+from import_zip_images import safe_extraction_target
 from parse_html_dom import parse_html_archive
 
 
@@ -48,10 +55,13 @@ GRADLE_COMPILE_TASK = re.compile(
 )
 SAFE_SERIAL = re.compile(r"^[A-Za-z0-9_.:-]+$")
 DESIGN_SERVER_PROCESSES: dict[int, subprocess.Popen[Any]] = {}
+MD5_CACHE: dict[tuple[str, int, int, int, int], str] = {}
 DESIGN_DOCUMENT_NAME = "设计解析.json"
-DESIGN_DOCUMENT_VERSION = 2
+DESIGN_DOCUMENT_VERSION = 5
+PIPELINE_STATE_VERSION = 2
 DOM_DOCUMENT_NAME = "dom.json"
 CHROME_EXECUTABLE = Path("/Applications/Google Chrome.app/Contents/MacOS/Google Chrome")
+DOM_NODE_ID_ATTRIBUTE = "data-code-lanhu-node-id"
 
 
 class PipelineError(RuntimeError):
@@ -62,37 +72,130 @@ class UserInputRequired(PipelineError):
     """证据不足，需要用户决定而不是猜测。"""
 
 
+class _StartTagLocator(HTMLParser):
+    """记录源码起始标签的原始位置，不重新序列化 HTML。"""
+
+    def __init__(self, source: str) -> None:
+        super().__init__(convert_charrefs=False)
+        self.source = source
+        self.line_starts = [0]
+        self.line_starts.extend(index + 1 for index, character in enumerate(source) if character == "\n")
+        self.tags: list[tuple[int, str, str]] = []
+
+    def _record(self, tag: str) -> None:
+        line, column = self.getpos()
+        raw = self.get_starttag_text()
+        if not raw:
+            raise PipelineError(f"无法取得 HTML 起始标签原文：{tag}")
+        self.tags.append((self.line_starts[line - 1] + column, tag.lower(), raw))
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._record(tag)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._record(tag)
+
+
+def instrument_html_node_ids(source: str, dom: dict[str, Any]) -> str:
+    """给原始起始标签注入稳定 nodeId，避免浏览器规范化 DOM 后按下标错绑。"""
+    if DOM_NODE_ID_ATTRIBUTE in source:
+        raise PipelineError(f"设计 HTML 已包含保留属性 {DOM_NODE_ID_ATTRIBUTE}，无法安全注入")
+    expected = [
+        (str(node["nodeId"]), str(node["tag"]).lower())
+        for node in dom.get("nodes", [])
+        if isinstance(node, dict)
+        and isinstance(node.get("nodeId"), str)
+        and str(node.get("tag", "")) not in {"document", "#comment", "#doctype"}
+    ]
+    locator = _StartTagLocator(source)
+    locator.feed(source)
+    locator.close()
+    if len(locator.tags) != len(expected):
+        raise PipelineError(f"DOM nodeId 注入数量不一致：源码 {len(locator.tags)}，DOM IR {len(expected)}")
+    insertions: list[tuple[int, str]] = []
+    for (offset, actual_tag, raw), (node_id, expected_tag) in zip(locator.tags, expected, strict=True):
+        if actual_tag != expected_tag:
+            raise PipelineError(f"DOM nodeId 注入标签错位：{node_id} 期望 {expected_tag}，实际 {actual_tag}")
+        closing = re.search(r"\s*/?>\s*$", raw)
+        if closing is None:
+            raise PipelineError(f"HTML 起始标签没有可识别的闭合位置：{raw[:80]}")
+        insertions.append((offset + closing.start(), f' {DOM_NODE_ID_ATTRIBUTE}="{node_id}"'))
+    result = source
+    for offset, attribute in reversed(insertions):
+        result = result[:offset] + attribute + result[offset:]
+    return result
+
+
+def ensure_utf8_html(source: str) -> str:
+    """让本地 http.server 的 HTML 明确以 UTF-8 解码，避免中文进入浏览器后乱码。"""
+    charset = re.search(r"<meta\b[^>]*\bcharset\s*=\s*[\"']?\s*([^\s\"'/>;]+)", source, re.I)
+    if charset is not None:
+        encoding = charset.group(1).replace("-", "").lower()
+        if encoding != "utf8":
+            raise PipelineError(f"设计 HTML 声明了暂不支持的字符集：{charset.group(1)}")
+        return source
+    head = re.search(r"<head\b[^>]*>", source, re.I)
+    if head is not None:
+        return source[: head.end()] + '<meta charset="utf-8">' + source[head.end() :]
+    html = re.search(r"<html\b[^>]*>", source, re.I)
+    if html is not None:
+        return source[: html.end()] + '<head><meta charset="utf-8"></head>' + source[html.end() :]
+    return '<meta charset="utf-8">' + source
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
 def md5_file(path: Path) -> str:
+    path = path.expanduser().resolve()
+    before = path.stat()
+    key = (str(path), before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns)
+    cached = MD5_CACHE.get(key)
+    if cached is not None:
+        return cached
     digest = hashlib.md5()
     with path.open("rb") as source:
         for chunk in iter(lambda: source.read(1024 * 1024), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    after = path.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+        after.st_ino,
+        after.st_size,
+        after.st_mtime_ns,
+        after.st_ctime_ns,
+    ):
+        return md5_file(path)
+    value = digest.hexdigest()
+    MD5_CACHE[key] = value
+    if len(MD5_CACHE) > 64:
+        MD5_CACHE.pop(next(iter(MD5_CACHE)))
+    return value
 
 
 def safe_zip_name(name: str) -> str:
-    normalized = name.replace("\\", "/")
-    path = Path(normalized)
-    if normalized.startswith("/") or ".." in path.parts:
+    try:
+        path = normalized_zip_path(name)
+    except ValueError as error:
+        raise PipelineError(str(error)) from error
+    if path.is_absolute() or ".." in path.parts:
         raise PipelineError(f"ZIP 包含不安全路径：{name}")
-    return normalized.lstrip("./")
+    return path.as_posix()
 
 
 def zip_entries(archive: Path) -> list[zipfile.ZipInfo]:
     if not archive.is_file() or archive.suffix.lower() != ".zip":
         raise PipelineError(f"ZIP 文件不存在或扩展名不正确：{archive}")
     with zipfile.ZipFile(archive) as zipped:
+        try:
+            checked = validated_zip_entries(zipped)
+        except ValueError as error:
+            raise PipelineError(str(error)) from error
         entries = []
-        for info in zipped.infolist():
+        for info in checked:
             safe_zip_name(info.filename)
             if info.is_dir():
                 continue
-            if (info.external_attr >> 16) & 0o170000 == 0o120000:
-                raise PipelineError(f"ZIP 不允许包含符号链接：{info.filename}")
             entries.append(info)
         return entries
 
@@ -119,8 +222,7 @@ def _referenced_css(html: str, names: Iterable[str], html_name: str) -> list[str
 
 
 def artifact_dir(archive: Path, project_root: Path, source_sha: str) -> Path:
-    stem = re.sub(r"[^A-Za-z0-9_.-]+", "-", archive.stem).strip("-") or "lanhu"
-    return project_root / ".code-lanhu-compose" / f"{stem}-{source_sha[:6]}"
+    return image_artifact_directory(archive, source_sha, project_root)
 
 
 def atomic_json(path: Path, payload: dict[str, Any]) -> None:
@@ -132,7 +234,7 @@ def atomic_json(path: Path, payload: dict[str, Any]) -> None:
 
 def new_state(source_sha: str, compose_file: str | None) -> dict[str, Any]:
     return {
-        "version": 1,
+        "version": PIPELINE_STATE_VERSION,
         "sourceMd5": source_sha,
         "composeFile": compose_file,
         "phase": "created",
@@ -171,11 +273,54 @@ def _load_cached_inspection(artifact: Path, source_sha: str) -> tuple[dict[str, 
         state = json.loads(state_path.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         return None
-    if source.get("sourceMd5") != source_sha or state.get("sourceMd5") != source_sha:
+    if (
+        source.get("sourceMd5") != source_sha
+        or state.get("sourceMd5") != source_sha
+        or state.get("version") != PIPELINE_STATE_VERSION
+    ):
         return None
     if state.get("phase") not in PHASES:
         return None
     return source, state
+
+
+def select_entry_html(archive: Path, project_root: Path, html_path: str) -> dict[str, Any]:
+    """从当前 ZIP 的真实 HTML 候选中登记入口，解除 inspect 暂停。"""
+    archive = archive.expanduser().resolve()
+    project_root = project_root.expanduser().resolve()
+    source_sha = md5_file(archive)
+    candidates = sorted(
+        safe_zip_name(info.filename)
+        for info in zip_entries(archive)
+        if _entry_path(info.filename).endswith((".html", ".htm"))
+    )
+    selected = safe_zip_name(html_path)
+    if selected not in candidates:
+        raise PipelineError(f"HTML 入口不属于当前 ZIP 候选：{selected}，候选：{candidates}")
+    artifact = artifact_dir(archive, project_root, source_sha)
+    atomic_json(
+        artifact / "entry-selection.json",
+        {"version": 1, "sourceMd5": source_sha, "html": selected, "selectedAt": utc_now()},
+    )
+    (artifact / "needs-user-input.json").unlink(missing_ok=True)
+    return {"artifactPath": str(artifact), "sourceMd5": source_sha, "html": selected, "candidates": candidates}
+
+
+def _reject_artifact_identity_collision(artifact: Path, source_sha: str) -> None:
+    """短目录名只用于可读性；完整 MD5 不同的 artifact 绝不能复用或覆盖。"""
+    for name in ("source.json", "pipeline.json"):
+        identity_path = artifact / name
+        if not identity_path.is_file():
+            continue
+        try:
+            identity = json.loads(identity_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise PipelineError(f"已有 artifact 身份文件损坏，拒绝覆盖：{identity_path}") from error
+        existing_sha = identity.get("sourceMd5") if isinstance(identity, dict) else None
+        if isinstance(existing_sha, str) and existing_sha != source_sha:
+            raise PipelineError(
+                f"检测到 MD5 前缀碰撞，拒绝复用或覆盖 artifact：{existing_sha} != {source_sha}"
+            )
 
 
 def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None = None) -> dict[str, Any]:
@@ -183,9 +328,37 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
     project_root = project_root.expanduser().resolve()
     source_sha = md5_file(archive)
     artifact = artifact_dir(archive, project_root, source_sha)
+    _reject_artifact_identity_collision(artifact, source_sha)
     cached = _load_cached_inspection(artifact, source_sha)
     if cached is not None:
         source_manifest, state = cached
+        requested_compose = str(compose_file.expanduser().resolve()) if compose_file is not None else None
+        existing_compose = state.get("composeFile")
+        if requested_compose and isinstance(existing_compose, str) and existing_compose != requested_compose:
+            previous = state
+            state = new_state(source_sha, requested_compose)
+            state["targetHistory"] = [
+                *previous.get("targetHistory", []),
+                {
+                    "composeFile": existing_compose,
+                    "phase": previous.get("phase"),
+                    "preflightTask": previous.get("preflightTask"),
+                    "reboundAt": utc_now(),
+                },
+            ]
+            if isinstance(previous.get("designScreenshot"), dict):
+                state["designScreenshot"] = previous["designScreenshot"]
+            transition(
+                state,
+                "inspected",
+                {
+                    "html": source_manifest["html"],
+                    "cssCount": len(source_manifest.get("css", [])),
+                    "targetChangedFrom": existing_compose,
+                    "previousPhase": previous.get("phase"),
+                },
+            )
+            _write_state(artifact, state)
         dom_path = artifact / DOM_DOCUMENT_NAME
         if not dom_path.is_file() or "dom" not in source_manifest:
             if dom_path.is_file():
@@ -203,9 +376,22 @@ def inspect_archive(archive: Path, project_root: Path, compose_file: Path | None
 
     entries = zip_entries(archive)
     html_entries = [info for info in entries if _entry_path(info.filename).endswith((".html", ".htm"))]
-    if len(html_entries) != 1:
-        raise PipelineError(f"ZIP 必须恰好包含一个入口 HTML，实际发现多个 HTML：{len(html_entries)}")
-    html_info = html_entries[0]
+    if not html_entries:
+        raise PipelineError("ZIP 中没有 HTML 入口文件")
+    if len(html_entries) > 1:
+        candidates = [safe_zip_name(info.filename) for info in html_entries]
+        selection_path = artifact / "entry-selection.json"
+        try:
+            selection = json.loads(selection_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            selection = None
+        selected_html = selection.get("html") if isinstance(selection, dict) and selection.get("sourceMd5") == source_sha else None
+        matching = [info for info in html_entries if safe_zip_name(info.filename) == selected_html]
+        if len(matching) != 1:
+            raise UserInputRequired(f"ZIP 包含多个 HTML 入口候选，请执行 select-entry-html 明确选择：{candidates}")
+        html_info = matching[0]
+    else:
+        html_info = html_entries[0]
     artifact.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(archive) as zipped:
         html_text = zipped.read(html_info).decode("utf-8", errors="replace")
@@ -245,6 +431,8 @@ def load_source(archive: Path, project_root: Path) -> tuple[Path, dict[str, Any]
     state = json.loads(state_path.read_text(encoding="utf-8"))
     if source.get("sourceMd5") != source_sha or state.get("sourceMd5") != source_sha:
         raise PipelineError("输入 ZIP 已变化，不能复用旧状态；请重新 inspect")
+    if state.get("version") != PIPELINE_STATE_VERSION:
+        raise PipelineError("pipeline.json 状态版本已过期，请重新执行 inspect/run-fixed 迁移证据")
     return artifact, source, state
 
 
@@ -309,7 +497,11 @@ def design_server_source_state_path(artifact: Path) -> Path:
     return artifact / "design-server-source.json"
 
 
-def _load_cached_design(artifact: Path, source: dict[str, Any]) -> tuple[dict[str, Any], Path] | None:
+def _load_cached_design(
+    artifact: Path,
+    source: dict[str, Any],
+    viewport: tuple[int, int, float] | None = None,
+) -> tuple[dict[str, Any], Path] | None:
     """仅复用与当前 ZIP 匹配且包含公共截图的完整设计产物。"""
     design_path = artifact / DESIGN_DOCUMENT_NAME
     screenshot_path = artifact / "runs" / "设计截图.png"
@@ -318,6 +510,19 @@ def _load_cached_design(artifact: Path, source: dict[str, Any]) -> tuple[dict[st
     except (OSError, ValueError):
         return None
     root = design.get("设计根节点")
+    painted_items = [
+        item
+        for key in ("节点", "文本片段")
+        for item in design.get(key, [])
+        if isinstance(item, dict) and item.get("visible") is not False
+    ]
+    browser = design.get("浏览器环境", {})
+    captured_viewport = browser.get("viewport", {}) if isinstance(browser, dict) else {}
+    viewport_mismatch = viewport is not None and (
+        captured_viewport.get("width") != viewport[0]
+        or captured_viewport.get("height") != viewport[1]
+        or browser.get("deviceScaleFactor") != viewport[2]
+    )
     if (
         design.get("版本") != DESIGN_DOCUMENT_VERSION
         or design.get("sourceMd5") != source["sourceMd5"]
@@ -325,9 +530,84 @@ def _load_cached_design(artifact: Path, source: dict[str, Any]) -> tuple[dict[st
         or not isinstance(root.get("选择器"), str)
         or not root["选择器"]
         or not screenshot_path.is_file()
+        or design.get("设计截图Md5") != md5_file(screenshot_path)
+        or viewport_mismatch
+        or any(isinstance(item.get("paintOrder"), bool) or not isinstance(item.get("paintOrder"), int) for item in painted_items)
     ):
         return None
+    try:
+        validate_png_evidence(screenshot_path)
+    except PipelineError:
+        return None
     return design, screenshot_path
+
+
+def is_allowed_design_request(url: str, server_url: str) -> bool:
+    """设计采集只允许本地静态服务与内嵌资源，保证 ZIP 可离线重放。"""
+    parsed = urlparse(url)
+    if parsed.scheme in {"data", "blob", "about"}:
+        return True
+    server = urlparse(server_url)
+    return (
+        parsed.scheme == server.scheme
+        and parsed.hostname == server.hostname
+        and parsed.port == server.port
+        and parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+    )
+
+
+def browser_paint_orders(snapshot: dict[str, Any]) -> dict[str, int]:
+    """把 Chrome DOMSnapshot 的真实绘制序号绑定到稳定节点/文本片段 ID。"""
+    documents = snapshot.get("documents")
+    strings = snapshot.get("strings")
+    if not isinstance(documents, list) or not documents or not isinstance(strings, list):
+        raise PipelineError("Chrome DOMSnapshot 缺少 documents/strings")
+    document = documents[0]
+    nodes = document.get("nodes", {})
+    layout = document.get("layout", {})
+    parent_indices = nodes.get("parentIndex", [])
+    node_names = nodes.get("nodeName", [])
+    attributes = nodes.get("attributes", [])
+    layout_indices = layout.get("nodeIndex", [])
+    paint_orders = layout.get("paintOrders", [])
+    if not all(isinstance(value, list) for value in (parent_indices, node_names, attributes, layout_indices, paint_orders)):
+        raise PipelineError("Chrome DOMSnapshot 结构无效")
+    if len(layout_indices) != len(paint_orders):
+        raise PipelineError("Chrome DOMSnapshot paintOrders 数量不一致")
+
+    stable_ids: dict[int, str] = {}
+    children: dict[int, list[int]] = {}
+    for node_index, parent_index in enumerate(parent_indices):
+        if isinstance(parent_index, int) and parent_index >= 0:
+            children.setdefault(parent_index, []).append(node_index)
+        raw_attributes = attributes[node_index] if node_index < len(attributes) else []
+        if not isinstance(raw_attributes, list):
+            continue
+        decoded = [strings[index] for index in raw_attributes if isinstance(index, int) and 0 <= index < len(strings)]
+        for offset in range(0, len(decoded) - 1, 2):
+            if decoded[offset] == DOM_NODE_ID_ATTRIBUTE:
+                stable_ids[node_index] = str(decoded[offset + 1])
+                break
+
+    result: dict[str, int] = {}
+    for layout_index, node_index in enumerate(layout_indices):
+        if not isinstance(node_index, int) or not 0 <= node_index < len(node_names):
+            continue
+        order = paint_orders[layout_index]
+        if isinstance(order, bool) or not isinstance(order, int):
+            raise PipelineError("Chrome DOMSnapshot 包含非整数 paintOrder")
+        key = stable_ids.get(node_index)
+        name_index = node_names[node_index]
+        node_name = strings[name_index] if isinstance(name_index, int) and 0 <= name_index < len(strings) else ""
+        if key is None and node_name == "#text":
+            parent_index = parent_indices[node_index]
+            parent_id = stable_ids.get(parent_index)
+            if parent_id is not None:
+                child_index = children.get(parent_index, []).index(node_index)
+                key = f"{parent_id}:text:{child_index}"
+        if key is not None:
+            result[key] = max(order, result.get(key, order))
+    return result
 
 
 def is_pid_alive(pid: int) -> bool:
@@ -348,10 +628,12 @@ def _safe_extract_archive(archive: Path, destination: Path) -> None:
     with zipfile.ZipFile(archive) as zipped:
         for info in zip_entries(archive):
             relative = safe_zip_name(info.filename)
-            target = (root / relative).resolve()
-            if root not in target.parents:
+            try:
+                target = safe_extraction_target(destination, PurePosixPath(relative))
+            except ValueError as error:
+                raise PipelineError(str(error)) from error
+            if root not in target.resolve().parents:
                 raise PipelineError(f"ZIP 解压路径越界：{relative}")
-            target.parent.mkdir(parents=True, exist_ok=True)
             with zipped.open(info) as source, target.open("wb") as output:
                 shutil.copyfileobj(source, output)
 
@@ -446,7 +728,14 @@ def stop_design_server(archive: Path, project_root: Path) -> dict[str, Any]:
     return {"artifactPath": str(artifact), "status": "stopped", "pid": pid}
 
 
-def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dict[str, Any]:
+def start_design_server(
+    archive: Path,
+    project_root: Path,
+    port: int = 0,
+    viewport_width: int = 1600,
+    viewport_height: int = 900,
+    dpr: float = 1.0,
+) -> dict[str, Any]:
     """启动只监听 127.0.0.1 的设计稿静态服务，并记录可安全回收的 PID。"""
     if not 0 <= port <= 65535:
         raise PipelineError(f"端口必须在 0 到 65535 之间：{port}")
@@ -459,7 +748,7 @@ def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dic
             raise PipelineError(f"设计稿静态服务已在运行（PID {previous_pid}）；请先执行 stop-design-server")
         state_path.unlink()
 
-    cached_design = _load_cached_design(artifact, source)
+    cached_design = _load_cached_design(artifact, source, (viewport_width, viewport_height, dpr))
     if cached_design is not None:
         design, screenshot_path = cached_design
         return {
@@ -481,9 +770,26 @@ def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dic
             design_server_source_state_path(artifact),
             {"version": 1, "sourceMd5": source["sourceMd5"], "createdAt": utc_now()},
         )
+    atomic_json(
+        serving_root / EXTRACTION_MARKER_NAME,
+        {"version": 1, "sourceMd5": source["sourceMd5"]},
+    )
     html_path = serving_root / source["html"]["path"]
     if not html_path.is_file():
         raise PipelineError(f"解压后找不到设计入口 HTML：{html_path}")
+    dom_path = artifact / DOM_DOCUMENT_NAME
+    try:
+        dom = json.loads(dom_path.read_text(encoding="utf-8"))
+        html_source = html_path.read_text(encoding="utf-8", errors="replace")
+    except (OSError, ValueError) as error:
+        raise PipelineError(f"无法为设计页注入稳定 DOM nodeId：{html_path}") from error
+    instrumented_path = html_path.with_name(f".code-lanhu-{html_path.name}")
+    instrumented_source = ensure_utf8_html(instrument_html_node_ids(html_source, dom))
+    if not instrumented_path.is_file() or instrumented_path.read_text(encoding="utf-8") != instrumented_source:
+        temporary = instrumented_path.with_suffix(instrumented_path.suffix + ".tmp")
+        temporary.write_text(instrumented_source, encoding="utf-8")
+        os.replace(temporary, instrumented_path)
+    instrumented_relative = instrumented_path.relative_to(serving_root).as_posix()
 
     listener = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     listener.bind(("127.0.0.1", port))
@@ -509,7 +815,7 @@ def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dic
         "version": 1,
         "pid": process.pid,
         "port": selected_port,
-        "url": f"http://127.0.0.1:{selected_port}/{source['html']['path']}",
+        "url": f"http://127.0.0.1:{selected_port}/{quote(instrumented_relative, safe='/')}",
         "servingRoot": str(serving_root.resolve()),
         "sourceMd5": source["sourceMd5"],
         "startedAt": utc_now(),
@@ -518,10 +824,18 @@ def start_design_server(archive: Path, project_root: Path, port: int = 0) -> dic
     return {"artifactPath": str(artifact), "statePath": str(state_path), "cacheHit": False, "sourceReused": source_reused, **state}
 
 
-def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]:
+def capture_rendered_design(
+    archive: Path,
+    project_root: Path,
+    viewport_width: int = 1600,
+    viewport_height: int = 900,
+    dpr: float = 1.0,
+) -> dict[str, Any]:
     """读取本机浏览器最终渲染结果，并原子写入可追溯的设计解析文件。"""
     artifact, source, _ = load_source(archive, project_root)
-    cached_design = _load_cached_design(artifact, source)
+    if not 1 <= viewport_width <= 10000 or not 1 <= viewport_height <= 10000 or not 0.5 <= dpr <= 4:
+        raise PipelineError(f"浏览器 viewport/DPR 无效：{viewport_width}×{viewport_height} @ {dpr}")
+    cached_design = _load_cached_design(artifact, source, (viewport_width, viewport_height, dpr))
     if cached_design is not None:
         design, screenshot_path = cached_design
         return {
@@ -557,74 +871,267 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
         dom = json.loads(dom_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as error:
         raise PipelineError(f"缺少完整 DOM IR，无法采集设计：{dom_path}") from error
-    element_node_ids = [
-        node["nodeId"] for node in dom.get("nodes", [])
-        if isinstance(node, dict) and not str(node.get("tag", "")).startswith("#") and node.get("tag") != "document"
-    ]
+    expected_nodes = {
+        str(node["nodeId"]): str(node["tag"]).lower()
+        for node in dom.get("nodes", [])
+        if isinstance(node, dict)
+        and isinstance(node.get("nodeId"), str)
+        and not str(node.get("tag", "")).startswith("#")
+        and node.get("tag") != "document"
+    }
     script = """
-        (elementNodeIds) => {
+        (expectedNodes) => {
           const body = document.body;
-          const root = body && body.children.length === 1 ? body.firstElementChild : body;
+          const visualRootCandidates = body ? Array.from(body.children).filter((node) => {
+            if (['script', 'noscript', 'template'].includes(node.tagName.toLowerCase())) return false;
+            const style = getComputedStyle(node);
+            const bounds = node.getBoundingClientRect();
+            return style.display !== 'none' && style.visibility !== 'hidden' &&
+              Number(style.opacity || 1) > 0 && bounds.width > 0 && bounds.height > 0;
+          }) : [];
+          const root = visualRootCandidates.length === 1 ? visualRootCandidates[0]
+            : visualRootCandidates.length > 1 ? body : null;
           if (!root) return null;
-          const browserElements = Array.from(document.querySelectorAll('*'));
-          const nodeIdByElement = new Map(browserElements.map((element, index) => [element, elementNodeIds[index] || null]));
+          const nodeId = (node) => node.getAttribute('data-code-lanhu-node-id');
           const rect = (node) => {
             const value = node.getBoundingClientRect();
             return { x: value.x, y: value.y, width: value.width, height: value.height };
           };
-          const visible = (style, bounds) =>
-            style.display !== 'none' && style.visibility !== 'hidden' && Number(style.opacity) !== 0 &&
-            bounds.width > 0 && bounds.height > 0;
+          const effectiveOpacity = (node) => {
+            let value = 1;
+            for (let current = node; current instanceof Element; current = current.parentElement) {
+              const style = getComputedStyle(current);
+              if (style.display === 'none' || style.visibility === 'hidden' || style.visibility === 'collapse') return 0;
+              value *= Number(style.opacity || 1);
+            }
+            return value;
+          };
+          const visible = (node, style, bounds) =>
+            effectiveOpacity(node) > 0 && bounds.width > 0 && bounds.height > 0;
           const styleData = (style) => ({
             display: style.display, flexDirection: style.flexDirection, justifyContent: style.justifyContent,
-            alignItems: style.alignItems, gap: style.gap, padding: style.padding, margin: style.margin,
-            overflow: style.overflow, color: style.color, backgroundColor: style.backgroundColor,
-            backgroundImage: style.backgroundImage, border: style.border, borderRadius: style.borderRadius,
+            alignItems: style.alignItems, alignSelf: style.alignSelf, flexWrap: style.flexWrap,
+            flexGrow: style.flexGrow, flexShrink: style.flexShrink, flexBasis: style.flexBasis, order: style.order,
+            gridTemplateColumns: style.gridTemplateColumns, gridTemplateRows: style.gridTemplateRows,
+            gridColumn: style.gridColumn, gridRow: style.gridRow,
+            gap: style.gap, rowGap: style.rowGap, columnGap: style.columnGap,
+            padding: style.padding, paddingTop: style.paddingTop, paddingRight: style.paddingRight,
+            paddingBottom: style.paddingBottom, paddingLeft: style.paddingLeft,
+            margin: style.margin, marginTop: style.marginTop, marginRight: style.marginRight,
+            marginBottom: style.marginBottom, marginLeft: style.marginLeft,
+            position: style.position, inset: style.inset, top: style.top, right: style.right,
+            bottom: style.bottom, left: style.left, width: style.width, height: style.height,
+            minWidth: style.minWidth, minHeight: style.minHeight, maxWidth: style.maxWidth, maxHeight: style.maxHeight,
+            boxSizing: style.boxSizing, overflow: style.overflow, overflowX: style.overflowX, overflowY: style.overflowY,
+            visibility: style.visibility, color: style.color, backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage, backgroundSize: style.backgroundSize,
+            backgroundPosition: style.backgroundPosition, backgroundRepeat: style.backgroundRepeat,
+            border: style.border, borderWidth: style.borderWidth, borderColor: style.borderColor,
+            borderStyle: style.borderStyle, borderTopStyle: style.borderTopStyle,
+            borderRightStyle: style.borderRightStyle, borderBottomStyle: style.borderBottomStyle,
+            borderLeftStyle: style.borderLeftStyle,
+            borderRadius: style.borderRadius, borderTopLeftRadius: style.borderTopLeftRadius,
+            borderTopRightRadius: style.borderTopRightRadius, borderBottomRightRadius: style.borderBottomRightRadius,
+            borderBottomLeftRadius: style.borderBottomLeftRadius,
             boxShadow: style.boxShadow, opacity: style.opacity, zIndex: style.zIndex, transform: style.transform,
             fontFamily: style.fontFamily, fontSize: style.fontSize, fontWeight: style.fontWeight,
+            fontStyle: style.fontStyle, textTransform: style.textTransform,
             lineHeight: style.lineHeight, letterSpacing: style.letterSpacing, textAlign: style.textAlign,
-            objectFit: style.objectFit
+            textDecorationLine: style.textDecorationLine,
+            whiteSpace: style.whiteSpace, textOverflow: style.textOverflow, objectFit: style.objectFit,
+            objectPosition: style.objectPosition
           });
           const nodes = [];
+          const pseudoElements = [];
+          const textRuns = [];
+          const collectPseudo = (node, hostNodeId, pseudo) => {
+            if (!hostNodeId) return;
+            const style = getComputedStyle(node, pseudo);
+            const content = style.content;
+            if (!content || content === 'none' || content === 'normal' || style.display === 'none') return;
+            pseudoElements.push({
+              nodeId: `${hostNodeId}:${pseudo.slice(2)}`, hostNodeId, pseudo, content,
+              visible: effectiveOpacity(node) * Number(style.opacity || 1) > 0,
+              bounds: null, style: styleData(style)
+            });
+          };
           const walk = (node, parentIndex) => {
             const bounds = rect(node);
             const style = getComputedStyle(node);
             const index = nodes.length;
+            const stableNodeId = nodeId(node);
             nodes.push({
-              nodeId: nodeIdByElement.get(node), parentIndex, tag: node.tagName.toLowerCase(), id: node.id || null,
+              nodeId: stableNodeId, parentIndex,
+              tag: node.tagName.toLowerCase(), id: node.id || null,
               classNames: Array.from(node.classList), text: Array.from(node.childNodes)
                 .filter((child) => child.nodeType === Node.TEXT_NODE)
                 .map((child) => child.textContent.trim()).filter(Boolean).join(' '),
-              bounds, visible: visible(style, bounds), style: styleData(style)
+              bounds, visible: visible(node, style, bounds),
+              style: { ...styleData(style), effectiveOpacity: String(effectiveOpacity(node)) }
             });
-            Array.from(node.children).forEach((child) => walk(child, index));
+            collectPseudo(node, stableNodeId, '::before');
+            Array.from(node.childNodes).forEach((child, childIndex) => {
+              if (child.nodeType === Node.ELEMENT_NODE) {
+                walk(child, index);
+                return;
+              }
+              if (child.nodeType !== Node.TEXT_NODE || !child.textContent || !child.textContent.trim()) return;
+              const range = document.createRange();
+              range.selectNodeContents(child);
+              const textBounds = range.getBoundingClientRect();
+              textRuns.push({
+                nodeId: stableNodeId ? `${stableNodeId}:text:${childIndex}` : null,
+                hostNodeId: stableNodeId,
+                text: child.textContent,
+                bounds: { x: textBounds.x, y: textBounds.y, width: textBounds.width, height: textBounds.height },
+                visible: visible(node, style, textBounds),
+                style: { ...styleData(style), effectiveOpacity: String(effectiveOpacity(node)) }
+              });
+              range.detach();
+            });
+            collectPseudo(node, stableNodeId, '::after');
           };
           walk(root, null);
+          const mappingErrors = [];
+          const seen = new Set();
+          const allowedBrowserContainers = new Set(['tbody', 'thead', 'tfoot', 'colgroup']);
+          for (const item of nodes) {
+            if (!item.nodeId) {
+              if (item.visible && !allowedBrowserContainers.has(item.tag)) {
+                mappingErrors.push(`unmapped-visible:${item.tag}`);
+              }
+              continue;
+            }
+            if (seen.has(item.nodeId)) mappingErrors.push(`duplicate:${item.nodeId}`);
+            seen.add(item.nodeId);
+            if (expectedNodes[item.nodeId] !== item.tag) {
+              mappingErrors.push(`tag:${item.nodeId}:${expectedNodes[item.nodeId]}!=${item.tag}`);
+            }
+          }
+          const expectedInRoot = [root, ...root.querySelectorAll('[data-code-lanhu-node-id]')]
+            .filter((node) => !node.closest('template,noscript,script'))
+            .map((node) => nodeId(node)).filter(Boolean);
+          for (const expectedNodeId of expectedInRoot) {
+            if (!seen.has(expectedNodeId)) mappingErrors.push(`missing:${expectedNodeId}`);
+          }
+          const rootStableId = nodeId(root);
+          const rootSelector = root === body ? 'body'
+            : `[data-code-lanhu-node-id="${CSS.escape(rootStableId || '')}"]`;
           return {
-            root: { selector: root === body ? 'body' : 'body > :first-child', nodeId: nodeIdByElement.get(root), bounds: rect(root) },
-            browser: { userAgent: navigator.userAgent, viewport: { width: window.innerWidth, height: window.innerHeight } },
-            nodes,
+            root: { selector: rootSelector, nodeId: rootStableId, bounds: rect(root) },
+            browser: { userAgent: navigator.userAgent, viewport: { width: window.innerWidth, height: window.innerHeight }, deviceScaleFactor: window.devicePixelRatio },
+            nodes, pseudoElements, textRuns, mappingErrors,
             images: Array.from(root.querySelectorAll('img')).map((image) => ({
-              nodeId: nodeIdByElement.get(image), source: image.currentSrc || image.src, naturalWidth: image.naturalWidth,
+              nodeId: nodeId(image), source: image.currentSrc || image.src, naturalWidth: image.naturalWidth,
               naturalHeight: image.naturalHeight, bounds: rect(image), objectFit: getComputedStyle(image).objectFit
             }))
           };
         }
     """
+    runs_root = artifact / "runs"
+    runs_root.mkdir(parents=True, exist_ok=True)
+    screenshot_path = runs_root / "设计截图.png"
     try:
         with sync_playwright() as runtime:
             browser = runtime.chromium.launch(headless=True, executable_path=str(CHROME_EXECUTABLE))
             try:
-                page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1)
+                blocked_requests: list[str] = []
+                blocked_websockets: list[str] = []
+                blocked_popups: list[str] = []
+                blocked_downloads: list[str] = []
+
+                def route_design_request(route: Any) -> None:
+                    request_url = route.request.url
+                    if is_allowed_design_request(request_url, url):
+                        route.continue_()
+                    else:
+                        blocked_requests.append(request_url)
+                        route.abort()
+
+                context = browser.new_context(
+                    viewport={"width": viewport_width, "height": viewport_height},
+                    device_scale_factor=dpr,
+                    service_workers="block",
+                    accept_downloads=False,
+                )
+                context.route("**/*", route_design_request)
+
+                def block_websocket(route: Any) -> None:
+                    blocked_websockets.append(route.url)
+                    route.close(code=1008, reason="design capture is offline")
+
+                context.route_web_socket("**/*", block_websocket)
+                page = context.new_page()
+
+                def block_popup(popup: Any) -> None:
+                    blocked_popups.append(popup.url)
+                    popup.close()
+
+                page.on("popup", block_popup)
+                page.on("download", lambda download: blocked_downloads.append(download.suggested_filename))
                 page.goto(url, wait_until="networkidle")
-                page.evaluate("() => document.fonts.ready")
-                result = page.evaluate(script, element_node_ids)
+                page.add_style_tag(
+                    content="*,*::before,*::after{animation:none!important;transition:none!important;caret-color:transparent!important}"
+                )
+                page.evaluate(
+                    """async () => {
+                      document.getAnimations().forEach((animation) => animation.cancel());
+                      await document.fonts.ready;
+                      await Promise.all(Array.from(document.images).map(async (image) => {
+                        if (!image.complete) {
+                          await new Promise((resolve) => {
+                            image.addEventListener('load', resolve, { once: true });
+                            image.addEventListener('error', resolve, { once: true });
+                          });
+                        }
+                        if (image.decode) await image.decode().catch(() => {});
+                      }));
+                      let previous = '';
+                      let stableFrames = 0;
+                      for (let frame = 0; frame < 30 && stableFrames < 3; frame += 1) {
+                        await new Promise((resolve) => requestAnimationFrame(resolve));
+                        const current = JSON.stringify(Array.from(document.querySelectorAll('[data-code-lanhu-node-id]')).map((node) => {
+                          const bounds = node.getBoundingClientRect();
+                          const style = getComputedStyle(node);
+                          return [node.getAttribute('data-code-lanhu-node-id'),
+                            ...[bounds.x, bounds.y, bounds.width, bounds.height].map((value) => Math.round(value * 100) / 100),
+                            style.display, style.visibility, style.opacity, style.transform,
+                            node instanceof HTMLImageElement ? node.currentSrc : ''];
+                        }));
+                        stableFrames = current === previous ? stableFrames + 1 : 0;
+                        previous = current;
+                      }
+                      if (stableFrames < 3) throw new Error('设计布局在连续帧内未稳定');
+                    }"""
+                )
+                result = page.evaluate(script, expected_nodes)
+                if result is not None:
+                    snapshot = page.context.new_cdp_session(page).send(
+                        "DOMSnapshot.captureSnapshot",
+                        {"computedStyles": [], "includePaintOrder": True, "includeDOMRects": True},
+                    )
+                    order_by_id = browser_paint_orders(snapshot)
+                    for item in [*result["nodes"], *result["textRuns"]]:
+                        item_id = item.get("nodeId")
+                        if isinstance(item_id, str) and item_id in order_by_id:
+                            item["paintOrder"] = order_by_id[item_id]
+                        elif item.get("visible") is not False:
+                            result["mappingErrors"].append(f"paint-order-missing:{item_id}")
+                    if blocked_requests or blocked_websockets or blocked_popups or blocked_downloads:
+                        raise PipelineError(
+                            "设计包含不可离线重放的浏览器副作用："
+                            f"requests={blocked_requests[:5]}, websockets={blocked_websockets[:5]}, "
+                            f"popups={blocked_popups[:5]}, downloads={blocked_downloads[:5]}"
+                        )
+                    page.locator(result["root"]["selector"]).screenshot(path=str(screenshot_path))
             finally:
                 browser.close()
     except PlaywrightError as error:
         raise PipelineError(f"浏览器采集设计失败：{error}") from error
     if result is None:
         raise UserInputRequired("设计页没有可确定的 body 根节点，无法确定有效截图区域")
+    if result.get("mappingErrors"):
+        raise PipelineError(f"浏览器 DOM 与固定 nodeId 映射冲突：{result['mappingErrors']}")
 
     bounds = result["root"]["bounds"]
     design = {
@@ -638,27 +1145,15 @@ def capture_rendered_design(archive: Path, project_root: Path) -> dict[str, Any]
         "设计根节点": {"选择器": result["root"]["selector"], "nodeId": result["root"].get("nodeId"), "边界": bounds},
         "浏览器环境": result["browser"],
         "节点": result["nodes"],
+        "伪元素": result["pseudoElements"],
+        "文本片段": result["textRuns"],
         "图片资源": result["images"],
+        "设计截图Md5": md5_file(screenshot_path),
         "domPath": str(dom_path),
         "采集时间": utc_now(),
     }
     design_path = artifact / DESIGN_DOCUMENT_NAME
     atomic_json(design_path, design)
-    runs_root = artifact / "runs"
-    screenshot_path = runs_root / "设计截图.png"
-    if not screenshot_path.is_file():
-        runs_root.mkdir(parents=True, exist_ok=True)
-        try:
-            with sync_playwright() as runtime:
-                browser = runtime.chromium.launch(headless=True, executable_path=str(CHROME_EXECUTABLE))
-                try:
-                    page = browser.new_page(viewport={"width": 1600, "height": 900}, device_scale_factor=1)
-                    page.goto(url, wait_until="networkidle")
-                    page.locator(design["设计根节点"]["选择器"]).screenshot(path=str(screenshot_path))
-                finally:
-                    browser.close()
-        except PlaywrightError as error:
-            raise PipelineError(f"浏览器截取设计图失败：{error}") from error
     return {
         "artifactPath": str(artifact),
         "designPath": str(design_path),
@@ -682,7 +1177,10 @@ def complete_design_screenshot(archive: Path, project_root: Path, image: Path) -
         expected_image = (artifact / "runs" / "设计截图.png").resolve()
         if image != expected_image or not image.is_file():
             raise PipelineError("设计截图必须位于 artifact/runs/设计截图.png")
-        state["designScreenshot"] = {"image": str(image), "capturedAt": utc_now()}
+        width, height = validate_png_evidence(image)
+        state["designScreenshot"] = {"image": str(image), "md5": md5_file(image), "capturedAt": utc_now()}
+        state["designScreenshot"]["width"] = width
+        state["designScreenshot"]["height"] = height
         state.setdefault("history", []).append({"phase": "design_screenshot", "at": utc_now(), "detail": state["designScreenshot"]})
         _write_state(artifact, state)
         return {"artifactPath": str(artifact), "image": str(image), "status": "recorded"}
@@ -690,15 +1188,31 @@ def complete_design_screenshot(archive: Path, project_root: Path, image: Path) -
         stop_design_server(archive, project_root)
 
 
-def ensure_design_evidence(archive: Path, project_root: Path) -> dict[str, Any]:
+def ensure_design_evidence(
+    archive: Path,
+    project_root: Path,
+    viewport_width: int = 1600,
+    viewport_height: int = 900,
+    dpr: float = 1.0,
+) -> dict[str, Any]:
     """自动完成设计服务、浏览器采集、设计截图登记和服务回收。"""
-    artifact, _, state = load_source(archive, project_root)
-    recorded = state.get("designScreenshot")
-    if isinstance(recorded, dict) and Path(str(recorded.get("image", ""))).is_file():
-        return {"artifactPath": str(artifact), "status": "cached", "image": recorded["image"]}
-    started = start_design_server(archive, project_root)
+    artifact, source, _ = load_source(archive, project_root)
+    cached = _load_cached_design(artifact, source, (viewport_width, viewport_height, dpr))
+    if cached is not None:
+        _, screenshot = cached
+        return {"artifactPath": str(artifact), "status": "cached", "image": str(screenshot)}
+    default_environment = (viewport_width, viewport_height, dpr) == (1600, 900, 1.0)
+    started = (
+        start_design_server(archive, project_root)
+        if default_environment
+        else start_design_server(archive, project_root, 0, viewport_width, viewport_height, dpr)
+    )
     try:
-        captured = capture_rendered_design(archive, project_root)
+        captured = (
+            capture_rendered_design(archive, project_root)
+            if default_environment
+            else capture_rendered_design(archive, project_root, viewport_width, viewport_height, dpr)
+        )
         return complete_design_screenshot(archive, project_root, Path(captured["screenshotPath"]))
     finally:
         if not started.get("cacheHit"):
@@ -720,6 +1234,8 @@ def import_assets(archive: Path, project_root: Path, compose_file: Path, apply: 
         str(compose_file),
         "--project-root",
         str(project_root),
+        "--extraction-root",
+        str(artifact / "design-server-source"),
     ]
     if apply:
         command.append("--apply")
@@ -743,19 +1259,199 @@ def infer_package_name(compose_file: Path) -> str:
         source = compose_file.read_text(encoding="utf-8")
     except OSError as error:
         raise PipelineError(f"无法读取 Compose 包名：{compose_file}") from error
-    match = re.search(r"^\s*package\s+([A-Za-z_][\w.]*)", source, flags=re.MULTILINE)
+    identifier = r"(?:[A-Za-z_][\w]*|`[^`\r\n]+`)"
+    match = re.search(rf"^\s*package\s+({identifier}(?:\.{identifier})*)\s*$", source, flags=re.MULTILINE)
     if not match:
         raise UserInputRequired(f"目标 Compose 缺少 package 声明，无法确定代码生成包名：{compose_file}")
-    return match.group(1)
+    return ".".join(part[1:-1] if part.startswith("`") else part for part in match.group(1).split("."))
 
 
-def infer_resource_package(compose_file: Path) -> str | None:
+def infer_resource_package(project_root: Path, compose_file: Path) -> str | None:
+    """优先复用显式 R import，否则读取目标模块 namespace/Manifest package。"""
     try:
         source = compose_file.read_text(encoding="utf-8")
     except OSError as error:
         raise PipelineError(f"无法读取资源包名：{compose_file}") from error
-    match = re.search(r"^\s*import\s+([A-Za-z_][\w.]*)\.R\s*$", source, flags=re.MULTILINE)
-    return match.group(1) if match else None
+    identifier = r"(?:[A-Za-z_][\w]*|`[^`\r\n]+`)"
+    match = re.search(rf"^\s*import\s+({identifier}(?:\.{identifier})*)\.R\s*$", source, flags=re.MULTILINE)
+    if match:
+        return ".".join(part[1:-1] if part.startswith("`") else part for part in match.group(1).split("."))
+    root = project_root.expanduser().resolve()
+    target = compose_file.expanduser().resolve()
+    try:
+        relative = target.relative_to(root)
+        source_index = relative.parts.index("src")
+    except (ValueError, OSError):
+        return None
+    module_root = root.joinpath(*relative.parts[:source_index])
+    for build_file in (module_root / "build.gradle.kts", module_root / "build.gradle"):
+        if not build_file.is_file():
+            continue
+        build_source = build_file.read_text(encoding="utf-8", errors="replace")
+        namespace = re.search(
+            r"\bnamespace\s*(?:=\s*)?[\"']([A-Za-z_][\w.]*)[\"']",
+            build_source,
+        )
+        if namespace:
+            return namespace.group(1)
+    manifest = module_root / "src" / "main" / "AndroidManifest.xml"
+    if manifest.is_file():
+        package = re.search(
+            r"<manifest\b[^>]*\bpackage\s*=\s*[\"']([A-Za-z_][\w.]*)[\"']",
+            manifest.read_text(encoding="utf-8", errors="replace"),
+        )
+        if package:
+            return package.group(1)
+    return None
+
+
+def _stable_fingerprint(payload: dict[str, Any]) -> str:
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    return hashlib.md5(encoded).hexdigest()
+
+
+def generation_input_fingerprint(artifact: Path, project_root: Path, compose_file: Path) -> str:
+    """绑定生成器、DOM、浏览器事实、图片清单和目标代码/资源包。"""
+    inputs: dict[str, Any] = {
+        "generatorMd5": md5_file(Path(__file__).with_name("generate_compose.py")),
+        "composePath": str(compose_file.expanduser().resolve()),
+        "package": infer_package_name(compose_file),
+        "resourcePackage": infer_resource_package(project_root, compose_file),
+    }
+    for name in (DOM_DOCUMENT_NAME, DESIGN_DOCUMENT_NAME, "images.json"):
+        path = artifact / name
+        if not path.is_file():
+            raise PipelineError(f"生成缓存缺少固定输入：{path}")
+        inputs[name] = md5_file(path)
+    return _stable_fingerprint(inputs)
+
+
+def _compose_module_root(project_root: Path, compose_file: Path) -> Path:
+    root = project_root.expanduser().resolve()
+    compose = compose_file.expanduser().resolve()
+    try:
+        relative = compose.relative_to(root)
+        source_index = relative.parts.index("src")
+    except (ValueError, IndexError) as error:
+        raise PipelineError(f"无法从 Compose 路径确定目标模块：{compose}") from error
+    return root.joinpath(*relative.parts[:source_index]).resolve()
+
+
+def _build_configuration_files(project_root: Path, compose_file: Path) -> list[Path]:
+    root = project_root.expanduser().resolve()
+    module_root = _compose_module_root(root, compose_file)
+    candidates = [
+        *(root / name for name in ("settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts", "gradle.properties")),
+        *(module_root / name for name in ("build.gradle", "build.gradle.kts", "gradle.properties")),
+        root / "gradle" / "libs.versions.toml",
+        root / "gradle" / "wrapper" / "gradle-wrapper.properties",
+    ]
+    build_src = root / "buildSrc"
+    if build_src.is_dir():
+        candidates.extend(
+            path
+            for path in build_src.rglob("*")
+            if path.is_file() and path.suffix.lower() in {".gradle", ".kts", ".kt", ".java", ".toml", ".properties"}
+        )
+    return sorted({path.resolve() for path in candidates if path.is_file()}, key=str)
+
+
+def compile_input_snapshot(
+    artifact: Path,
+    project_root: Path,
+    compose_file: Path,
+    task: str,
+) -> dict[str, Any]:
+    """生成可审计的编译缓存键，并报告已登记但丢失的 Android 资源。"""
+    root = project_root.expanduser().resolve()
+    compose = compose_file.expanduser().resolve()
+    images_path = artifact / "images.json"
+    try:
+        images = json.loads(images_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as error:
+        raise PipelineError(f"编译缓存缺少有效图片清单：{images_path}") from error
+    records = images.get("images", []) if isinstance(images, dict) else None
+    if not isinstance(records, list):
+        raise PipelineError(f"图片清单 images 必须是数组：{images_path}")
+    resource_files: list[dict[str, str]] = []
+    missing_resources: list[str] = []
+    for record in records:
+        output = record.get("outputPath") if isinstance(record, dict) else None
+        if not isinstance(output, str) or not output:
+            raise PipelineError(f"图片清单缺少 outputPath：{record}")
+        candidate = Path(output).expanduser()
+        candidate = candidate if candidate.is_absolute() else root / candidate
+        resolved = candidate.resolve()
+        if root not in resolved.parents or candidate.is_symlink():
+            raise PipelineError(f"图片资源必须位于项目目录且不能是符号链接：{candidate}")
+        if not resolved.is_file():
+            missing_resources.append(str(resolved))
+            continue
+        resource_files.append({"path": str(resolved.relative_to(root)), "md5": md5_file(resolved)})
+    build_files = [
+        {"path": str(path.relative_to(root)), "md5": md5_file(path)}
+        for path in _build_configuration_files(root, compose)
+    ]
+    module_source_root = _compose_module_root(root, compose) / "src"
+    source_files = [
+        {"path": str(path.relative_to(root)), "md5": md5_file(path)}
+        for path in sorted(module_source_root.rglob("*"), key=str)
+        if path.is_file() and not path.is_symlink()
+    ] if module_source_root.is_dir() else []
+    payload = {
+        "task": task,
+        "composePath": str(compose),
+        "composeMd5": md5_file(compose),
+        "imagesManifestMd5": md5_file(images_path),
+        "resources": resource_files,
+        "buildFiles": build_files,
+        "moduleSourceFiles": source_files,
+    }
+    return {
+        **payload,
+        "fingerprint": _stable_fingerprint(payload),
+        "missingResources": missing_resources,
+    }
+
+
+def require_current_compile_evidence(
+    artifact: Path,
+    project_root: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    compose_value = state.get("composeFile")
+    task = state.get("preflightTask")
+    if not isinstance(compose_value, str) or not isinstance(task, str):
+        raise PipelineError("缺少 Compose/Gradle task，无法验证编译证据")
+    snapshot = compile_input_snapshot(artifact, project_root, Path(compose_value), task)
+    if snapshot["missingResources"]:
+        raise PipelineError(f"已编译页面的图片资源已丢失：{snapshot['missingResources']}")
+    if (
+        state.get("lastCompiledComposeMd5") != snapshot["composeMd5"]
+        or state.get("compileInputFingerprint") != snapshot["fingerprint"]
+    ):
+        raise PipelineError("Compose、模块源码、资源或 Gradle 配置已变化，当前编译证据已过期；请重新 run-fixed")
+    return snapshot
+
+
+def require_current_install_evidence(
+    artifact: Path,
+    project_root: Path,
+    state: dict[str, Any],
+) -> dict[str, Any]:
+    snapshot = require_current_compile_evidence(artifact, project_root, state)
+    apk_value = state.get("installedApk")
+    if not isinstance(apk_value, str):
+        raise PipelineError("缺少当前安装 APK 的证据")
+    apk = Path(apk_value).expanduser().resolve()
+    if (
+        not apk.is_file()
+        or state.get("installedApkMd5") != md5_file(apk)
+        or state.get("installedComposeMd5") != snapshot["composeMd5"]
+        or state.get("installedCompileInputFingerprint") != snapshot["fingerprint"]
+    ):
+        raise PipelineError("已安装 APK 与当前源码/编译输入不一致；请重新打包并安装")
+    return snapshot
 
 
 def generate_compose_from_dom(archive: Path, project_root: Path, compose_file: Path) -> dict[str, Any]:
@@ -774,6 +1470,9 @@ def generate_compose_from_dom(archive: Path, project_root: Path, compose_file: P
         raise PipelineError("DOM/设计解析输入不是有效 JSON") from error
     if dom_identity.get("sourceMd5") != source["sourceMd5"] or design_identity.get("sourceMd5") != source["sourceMd5"]:
         raise PipelineError("DOM 或设计解析结果与当前 ZIP 的 sourceMd5 不一致，拒绝生成")
+    cached_design = _load_cached_design(artifact, source)
+    if cached_design is None or (artifact / DESIGN_DOCUMENT_NAME).resolve() != design_path.resolve():
+        raise PipelineError("设计解析版本、paintOrder 或设计截图证据无效，请重新采集设计")
     compose_file = compose_file.expanduser().resolve()
     try:
         images_path = artifact / "images.json"
@@ -783,10 +1482,11 @@ def generate_compose_from_dom(archive: Path, project_root: Path, compose_file: P
             compose_file,
             infer_package_name(compose_file),
             images_path if images_path.is_file() else None,
-            infer_resource_package(compose_file),
+            infer_resource_package(project_root, compose_file),
         )
     except GenerationError as error:
         raise PipelineError(str(error)) from error
+    result["inputFingerprint"] = generation_input_fingerprint(artifact, project_root, compose_file)
     validate_compose_source(compose_file)
     state["composeFile"] = str(compose_file)
     if state["phase"] != "generated":
@@ -808,19 +1508,48 @@ def parse_dom(archive: Path, project_root: Path) -> dict[str, Any]:
     return {"artifactPath": str(artifact), "domPath": str(dom_path), "nodeCount": len(dom["nodes"]), "resourceCount": len(dom["resources"]), "sourceMd5": source["sourceMd5"]}
 
 
-def run_fixed_pipeline(archive: Path, project_root: Path, compose_file: Path) -> dict[str, Any]:
+def _invalidate_downstream_state(state: dict[str, Any], phase: str, reason: str) -> None:
+    """缓存失效时回退到最小必要阶段，并移除与旧编译/APK/截图绑定的证据。"""
+    state["phase"] = phase
+    for key in (
+        "packagedApk",
+        "packagedComposeMd5",
+        "packagedApkMd5",
+        "installedApk",
+        "lastScreenshot",
+        "comparison",
+        "lastDiffOutcome",
+    ):
+        state.pop(key, None)
+    state.setdefault("history", []).append(
+        {"phase": "cache_invalidated", "at": utc_now(), "detail": {"resumePhase": phase, "reason": reason}}
+    )
+
+
+def run_fixed_pipeline(
+    archive: Path,
+    project_root: Path,
+    compose_file: Path,
+    viewport_width: int = 1600,
+    viewport_height: int = 900,
+    dpr: float = 1.0,
+) -> dict[str, Any]:
     """自动推进浏览器采集、资源导入和编译，只在等待页面代码时暂停。"""
     archive = archive.expanduser().resolve()
     project_root = project_root.expanduser().resolve()
     compose_file = compose_file.expanduser().resolve()
     inspect_archive(archive, project_root, compose_file)
-    design = ensure_design_evidence(archive, project_root)
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] == "inspected":
         validate_project(archive, project_root, compose_file)
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] == "validated":
         preflight_project(archive, project_root)
+    design = (
+        ensure_design_evidence(archive, project_root)
+        if (viewport_width, viewport_height, dpr) == (1600, 900, 1.0)
+        else ensure_design_evidence(archive, project_root, viewport_width, viewport_height, dpr)
+    )
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] == "preflight":
         import_assets(archive, project_root, compose_file, apply=True)
@@ -829,22 +1558,80 @@ def run_fixed_pipeline(archive: Path, project_root: Path, compose_file: Path) ->
         generated = generate_compose_from_dom(archive, project_root, compose_file)
         compile_project(archive, project_root)
         return {"artifactPath": str(artifact), "phase": "compiled", "status": "compose_generated_and_compile_started", "design": design, "generation": generated}
-    if state["phase"] == "compiled":
+    if PHASES.index(state["phase"]) >= PHASES.index("compiled"):
         current = md5_file(compose_file)
-        last_generated = None
-        for item in reversed(state.get("history", [])):
-            if item.get("phase") == "generated":
-                detail = item.get("detail", {})
-                last_generated = detail.get("composeMd5")
-                break
-        if current != last_generated:
-            validate_compose_source(compose_file)
-            state["composeFile"] = str(compose_file)
-            transition(state, "generated", {"composeFile": str(compose_file), "composeMd5": current})
+        generation = state.get("composeGeneration")
+        last_generated = generation.get("composeMd5") if isinstance(generation, dict) else None
+        generated_input = generation.get("inputFingerprint") if isinstance(generation, dict) else None
+        manual_adaptation = isinstance(last_generated, str) and current != last_generated
+        task = state.get("preflightTask")
+        if not isinstance(task, str) or not task:
+            raise PipelineError("已编译状态缺少 preflightTask，不能验证热缓存")
+
+        images_path = artifact / "images.json"
+        snapshot = None
+        if images_path.is_file():
+            snapshot = compile_input_snapshot(artifact, project_root, compose_file, task)
+        needs_asset_restore = snapshot is None or bool(snapshot["missingResources"])
+        if needs_asset_restore:
+            reason = "images.json 缺失" if snapshot is None else f"资源输出缺失：{snapshot['missingResources']}"
+            _invalidate_downstream_state(state, "preflight", reason)
+            _write_state(artifact, state)
+            import_assets(archive, project_root, compose_file, apply=True)
+            artifact, _, state = load_source(archive, project_root)
+
+        current_generation_input = generation_input_fingerprint(artifact, project_root, compose_file)
+        should_regenerate = not manual_adaptation and generated_input != current_generation_input
+        if should_regenerate:
+            _invalidate_downstream_state(state, "assets_imported", "Compose 生成输入或生成器发生变化")
+            _write_state(artifact, state)
+            generated = generate_compose_from_dom(archive, project_root, compose_file)
+            compile_project(archive, project_root)
+            return {
+                "artifactPath": str(artifact),
+                "phase": "compiled",
+                "status": "regenerated_after_input_change",
+                "design": design,
+                "generation": generated,
+            }
+
+        if needs_asset_restore:
+            _invalidate_downstream_state(
+                state,
+                "generated",
+                "资源已恢复，保留当前 Compose" + ("（用户适配版）" if manual_adaptation else ""),
+            )
             _write_state(artifact, state)
             compile_project(archive, project_root)
-            return {"artifactPath": str(artifact), "phase": "compiled", "status": "recompiled_after_compose_change", "design": design}
-        return {"artifactPath": str(artifact), "phase": state["phase"], "status": "unchanged", "design": design}
+            return {
+                "artifactPath": str(artifact),
+                "phase": "compiled",
+                "status": "recompiled_after_resource_restore",
+                "design": design,
+            }
+
+        snapshot = compile_input_snapshot(artifact, project_root, compose_file, task)
+        last_compiled = state.get("lastCompiledComposeMd5")
+        last_compile_input = state.get("compileInputFingerprint")
+        if current == last_compiled and snapshot["fingerprint"] == last_compile_input:
+            return {"artifactPath": str(artifact), "phase": state["phase"], "status": "unchanged", "design": design}
+
+        validate_compose_source(compose_file)
+        _invalidate_downstream_state(
+            state,
+            "generated",
+            "Compose 或资源/Gradle 编译输入发生变化",
+        )
+        if manual_adaptation:
+            state["manualAdaptation"] = {"composeMd5": current, "recordedAt": utc_now()}
+        _write_state(artifact, state)
+        compile_project(archive, project_root)
+        return {
+            "artifactPath": str(artifact),
+            "phase": "compiled",
+            "status": "recompiled_after_compile_input_change",
+            "design": design,
+        }
     if state["phase"] == "generated":
         compile_project(archive, project_root)
         return {"artifactPath": str(artifact), "phase": "compiled", "status": "compile_started", "design": design}
@@ -973,7 +1760,7 @@ def _normalize_gradle_task(task: str) -> str:
     return value if value.startswith(":") else f":{value}"
 
 
-def discover_compile_task(project_root: Path, compose_file: Path) -> str:
+def discover_compile_task(project_root: Path, compose_file: Path, selected_task: str | None = None) -> str:
     """由 Gradle 任务列表确定目标模块的稳定 Debug Kotlin 编译任务。"""
     root = project_root.expanduser().resolve()
     module = compose_gradle_module(root, compose_file)
@@ -1004,6 +1791,12 @@ def discover_compile_task(project_root: Path, compose_file: Path) -> str:
     if not candidates:
         raise PipelineError(f"未找到模块 {module or ':root'} 的 Kotlin 编译任务，不能让模型猜测 Gradle task")
 
+    if selected_task is not None:
+        selected = _normalize_gradle_task(selected_task)
+        if not SAFE_TASK.fullmatch(selected) or selected not in candidates:
+            raise PipelineError(f"用户选择的 Gradle task 不属于目标模块实际候选：{selected}，候选：{candidates}")
+        return selected
+
     exact_debug = [task for task in candidates if task.endswith(":compileDebugKotlin")]
     if len(exact_debug) == 1:
         return exact_debug[0]
@@ -1011,10 +1804,10 @@ def discover_compile_task(project_root: Path, compose_file: Path) -> str:
     if len(debug_candidates) == 1:
         return debug_candidates[0]
     if len(debug_candidates) > 1:
-        raise PipelineError(f"模块 {module or ':root'} 存在多个 Debug Kotlin 编译任务，请用户明确选择：{debug_candidates}")
+        raise UserInputRequired(f"模块 {module or ':root'} 存在多个 Debug Kotlin 编译任务，请用户明确选择：{debug_candidates}")
     if len(candidates) == 1:
         return candidates[0]
-    raise PipelineError(f"模块 {module or ':root'} 的 Kotlin 编译任务存在歧义，请用户明确选择：{candidates}")
+    raise UserInputRequired(f"模块 {module or ':root'} 的 Kotlin 编译任务存在歧义，请用户明确选择：{candidates}")
 
 
 def derive_package_task(compile_task: str) -> str:
@@ -1030,6 +1823,33 @@ def derive_package_task(compile_task: str) -> str:
     if not SAFE_TASK.fullmatch(package_task):
         raise PipelineError(f"推导出的打包任务不在白名单中：{package_task}")
     return package_task
+
+
+def variant_name_from_compile_task(compile_task: str) -> str:
+    task_name = compile_task.rsplit(":", 1)[-1]
+    match = re.fullmatch(r"compile(.+)Kotlin", task_name)
+    if match is None:
+        raise PipelineError(f"无法从编译任务推导 variant：{compile_task}")
+    value = match.group(1)
+    return value[:1].lower() + value[1:]
+
+
+def variant_apk_outputs(apk_output_root: Path, variant_name: str) -> set[Path]:
+    outputs: set[Path] = set()
+    for metadata_path in apk_output_root.rglob("output-metadata.json"):
+        try:
+            metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise PipelineError(f"APK 输出元数据无效：{metadata_path}") from error
+        if not isinstance(metadata, dict) or metadata.get("variantName") != variant_name:
+            continue
+        for element in metadata.get("elements", []):
+            output_name = element.get("outputFile") if isinstance(element, dict) else None
+            if isinstance(output_name, str) and output_name:
+                candidate = (metadata_path.parent / output_name).resolve()
+                if apk_output_root.resolve() in candidate.parents:
+                    outputs.add(candidate)
+    return outputs
 
 
 def record_decision(archive: Path, project_root: Path, decision_path: Path) -> dict[str, Any]:
@@ -1048,6 +1868,20 @@ def record_decision(archive: Path, project_root: Path, decision_path: Path) -> d
     return {"artifactPath": str(artifact), "action": decision["action"], "phase": state["phase"]}
 
 
+def reserve_attempt(artifact: Path, state: dict[str, Any], name: str, limit: int = 3) -> int:
+    attempts = state.setdefault("attempts", {})
+    current = int(attempts.get(name, 0))
+    if current >= limit:
+        raise PipelineError(f"{name} 已达到最多 {limit} 次，停止自动重试")
+    attempt = current + 1
+    attempts[name] = attempt
+    state.setdefault("history", []).append(
+        {"phase": f"{name}_started", "at": utc_now(), "detail": {"attempt": attempt, "limit": limit}}
+    )
+    _write_state(artifact, state)
+    return attempt
+
+
 def compile_project(archive: Path, project_root: Path) -> dict[str, Any]:
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] not in {"generated", "compiled"}:
@@ -1058,19 +1892,40 @@ def compile_project(archive: Path, project_root: Path) -> dict[str, Any]:
     if not SAFE_TASK.fullmatch(task):
         raise PipelineError(f"Gradle task 不在白名单中：{task}")
     gradle = gradle_command(project_root)
-    state["attempts"]["compile"] = state["attempts"].get("compile", 0) + 1
     if state.get("preflightTask") != task:
         raise PipelineError(f"compile 必须复用 preflight 任务：{state.get('preflightTask')!r} != {task!r}")
     compose_file = state.get("composeFile")
     if not isinstance(compose_file, str) or not compose_file:
         raise PipelineError("compile 缺少 Compose 文件，无法执行布局安全检查")
-    validate_compose_source(Path(compose_file))
-    log = artifact / "logs" / f"compile-{state['attempts']['compile']:02d}.log"
+    compose_path = Path(compose_file).expanduser().resolve()
+    validate_compose_source(compose_path)
+    cache_snapshot = compile_input_snapshot(artifact, project_root, compose_path, task)
+    if cache_snapshot["missingResources"]:
+        raise PipelineError(f"编译前发现图片资源缓存失效：{cache_snapshot['missingResources']}")
+    attempt = reserve_attempt(artifact, state, "compile")
+    log = artifact / "logs" / f"compile-{attempt:02d}.log"
     result = _run_fixed([*gradle, task, "--console=plain"], project_root, log)
     if result.returncode != 0:
+        state.setdefault("history", []).append(
+            {"phase": "compile_failed", "at": utc_now(), "detail": {"attempt": attempt, "task": task, "log": str(log)}}
+        )
+        _write_state(artifact, state)
         raise PipelineError(f"编译失败，日志已写入：{log}")
     if state["phase"] != "compiled":
-        transition(state, "compiled", {"task": task, "log": str(log)})
+        transition(
+            state,
+            "compiled",
+            {"task": task, "log": str(log), "compileInputFingerprint": cache_snapshot["fingerprint"]},
+        )
+    state["lastCompiledComposeMd5"] = cache_snapshot["composeMd5"]
+    state["compileInputFingerprint"] = cache_snapshot["fingerprint"]
+    state["compileInputs"] = {
+        "task": task,
+        "imagesManifestMd5": cache_snapshot["imagesManifestMd5"],
+        "resourceCount": len(cache_snapshot["resources"]),
+        "buildFiles": cache_snapshot["buildFiles"],
+        "moduleSourceCount": len(cache_snapshot["moduleSourceFiles"]),
+    }
     _write_state(artifact, state)
     return {"artifactPath": str(artifact), "phase": state["phase"], "log": str(log)}
 
@@ -1091,17 +1946,40 @@ def package_debug(archive: Path, project_root: Path, apk: Path) -> dict[str, Any
     compose = Path(compose_file).expanduser().resolve()
     if not compose.is_file():
         raise PipelineError(f"Compose 文件不存在：{compose}")
-    state["attempts"]["package"] = state["attempts"].get("package", 0) + 1
-    log = artifact / "logs" / f"package-{state['attempts']['package']:02d}.log"
+    root = project_root.expanduser().resolve()
+    try:
+        relative = compose.relative_to(root)
+        source_index = relative.parts.index("src")
+    except (ValueError, IndexError) as error:
+        raise PipelineError(f"无法从 Compose 路径确定模块 APK 输出目录：{compose}") from error
+    module_root = root.joinpath(*relative.parts[:source_index])
+    apk_output_root = (module_root / "build" / "outputs" / "apk").resolve()
+    if apk.suffix.lower() != ".apk" or apk_output_root not in apk.parents:
+        raise PipelineError(f"APK 必须位于目标 Compose 模块的 APK 输出目录：{apk_output_root}")
+    compile_snapshot = require_current_compile_evidence(artifact, project_root, state)
+    attempt = reserve_attempt(artifact, state, "package")
+    log = artifact / "logs" / f"package-{attempt:02d}.log"
     result = _run_fixed([*gradle_command(project_root), task, "--console=plain"], project_root, log)
     if result.returncode != 0:
+        state.setdefault("history", []).append(
+            {"phase": "package_failed", "at": utc_now(), "detail": {"attempt": attempt, "task": task, "log": str(log)}}
+        )
+        _write_state(artifact, state)
         raise PipelineError(f"打包失败，日志已写入：{log}")
     if not apk.is_file():
         raise PipelineError(f"assemble 完成但 APK 不存在：{apk}")
+    variant_name = variant_name_from_compile_task(compile_task)
+    expected_apks = variant_apk_outputs(apk_output_root, variant_name)
+    if apk not in expected_apks:
+        raise PipelineError(
+            f"APK 不属于 preflight 变体 {variant_name} 的 output-metadata.json：{apk}，候选：{sorted(map(str, expected_apks))}"
+        )
     if apk.stat().st_mtime < compose.stat().st_mtime:
         raise PipelineError(f"assemble 完成但 APK 仍早于 Compose 文件，疑似产物过期：{apk}")
     state["packagedApk"] = str(apk)
     state["packagedComposeMd5"] = md5_file(compose)
+    state["packagedApkMd5"] = md5_file(apk)
+    state["packagedCompileInputFingerprint"] = compile_snapshot["fingerprint"]
     state.setdefault("history", []).append(
         {"phase": "packaged", "at": utc_now(), "detail": {"task": task, "apk": str(apk), "log": str(log)}}
     )
@@ -1116,20 +1994,39 @@ def preflight_project(archive: Path, project_root: Path) -> dict[str, Any]:
     compose_file = state.get("composeFile")
     if not isinstance(compose_file, str) or not compose_file:
         raise PipelineError("preflight 缺少 Compose 文件，无法由 Python 解析 Gradle 模块")
-    task = discover_compile_task(project_root, Path(compose_file))
+    selected = state.get("selectedCompileTask")
+    task = discover_compile_task(project_root, Path(compose_file), selected if isinstance(selected, str) else None)
     if not SAFE_TASK.fullmatch(task):
         raise PipelineError(f"Gradle task 不在白名单中：{task}")
-    gradle = gradle_command(project_root)
     log = artifact / "logs" / "preflight.log"
-    result = _run_fixed([*gradle, task, "--console=plain"], project_root, log)
-    if result.returncode != 0:
-        raise PipelineError(f"预检编译失败，日志已写入：{log}")
+    log.parent.mkdir(parents=True, exist_ok=True)
+    log.write_text(f"已由 Gradle tasks --all 确认目标编译任务：{task}\n首稿生成后只执行一次正式编译。\n", encoding="utf-8")
     if state["phase"] != "preflight":
-        transition(state, "preflight", {"task": task, "log": str(log)})
+        transition(state, "preflight", {"task": task, "log": str(log), "mode": "task-discovery-only"})
     state["preflightTask"] = task
     state["preflightTaskSource"] = "python-discovered"
     _write_state(artifact, state)
     return {"artifactPath": str(artifact), "phase": state["phase"], "log": str(log)}
+
+
+def select_compile_task(archive: Path, project_root: Path, task: str) -> dict[str, Any]:
+    """只登记 Gradle 实际列出的目标模块候选，解除多 variant 预检歧义。"""
+    artifact, _, state = load_source(archive, project_root)
+    if state["phase"] != "validated":
+        raise PipelineError(f"只有 validated 阶段可以选择编译任务：{state['phase']}")
+    compose_file = state.get("composeFile")
+    if not isinstance(compose_file, str) or not compose_file:
+        raise PipelineError("选择编译任务前缺少目标 Compose 文件")
+    root = project_root.expanduser().resolve()
+    compose = Path(compose_file).expanduser().resolve()
+    selected = discover_compile_task(root, compose, task)
+    state["selectedCompileTask"] = selected
+    (artifact / "needs-user-input.json").unlink(missing_ok=True)
+    state.setdefault("history", []).append(
+        {"phase": "compile_task_selected", "at": utc_now(), "detail": {"task": selected}}
+    )
+    _write_state(artifact, state)
+    return {"artifactPath": str(artifact), "phase": state["phase"], "task": selected}
 
 
 def install_k80(archive: Path, project_root: Path, serial: str, expected_avd: str, apk: Path) -> dict[str, Any]:
@@ -1150,6 +2047,12 @@ def install_k80(archive: Path, project_root: Path, serial: str, expected_avd: st
         raise PipelineError(f"APK 已过期，请先执行 package-debug：{apk}")
     if state.get("packagedApk") != str(apk.expanduser().resolve()) or state.get("packagedComposeMd5") != md5_file(compose):
         raise PipelineError("APK 未由当前 Compose 源码的 package-debug 产出，请先执行 package-debug")
+    packaged_apk_md5 = state.get("packagedApkMd5")
+    if not isinstance(packaged_apk_md5, str) or packaged_apk_md5 != md5_file(apk):
+        raise PipelineError("APK 内容已变化，必须重新执行 package-debug")
+    compile_snapshot = require_current_compile_evidence(artifact, project_root, state)
+    if state.get("packagedCompileInputFingerprint") != compile_snapshot["fingerprint"]:
+        raise PipelineError("APK 绑定的编译输入已变化，必须重新执行 package-debug")
     probe = subprocess.run(["adb", "-s", serial, "shell", "getprop", "ro.boot.qemu.avd_name"], text=True, capture_output=True, check=False)
     if probe.returncode != 0:
         raise PipelineError(f"无法读取模拟器名称：{probe.stderr.strip()}")
@@ -1159,6 +2062,10 @@ def install_k80(archive: Path, project_root: Path, serial: str, expected_avd: st
         raise PipelineError(f"安装 APK 失败：{installed.stdout.strip()} {installed.stderr.strip()}")
     if state["phase"] != "installed":
         transition(state, "installed", {"serial": serial, "avd": expected_avd, "apk": str(apk.resolve())})
+    state["installedApk"] = str(apk.resolve())
+    state["installedApkMd5"] = packaged_apk_md5
+    state["installedComposeMd5"] = compile_snapshot["composeMd5"]
+    state["installedCompileInputFingerprint"] = compile_snapshot["fingerprint"]
     _write_state(artifact, state)
     return {"artifactPath": str(artifact), "phase": state["phase"], "serial": serial, "avd": expected_avd}
 
@@ -1178,6 +2085,23 @@ def next_evidence_path(directory: Path, filename: str) -> Path:
         index += 1
 
 
+def validate_png_evidence(image: Path) -> tuple[int, int]:
+    """拒绝空文件、ADB 文本错误页和损坏 PNG，避免把无效截图推进为视觉证据。"""
+    try:
+        from PIL import Image, UnidentifiedImageError
+    except ImportError as error:
+        raise PipelineError("缺少 Pillow，无法校验截图 PNG") from error
+    try:
+        with Image.open(image) as captured:
+            if captured.format != "PNG" or captured.width <= 0 or captured.height <= 0:
+                raise ValueError("格式或尺寸无效")
+            size = captured.size
+            captured.verify()
+    except (OSError, ValueError, UnidentifiedImageError) as error:
+        raise PipelineError(f"ADB 截图不是有效 PNG：{image}") from error
+    return size
+
+
 def screenshot_k80(archive: Path, project_root: Path, serial: str, expected_avd: str = "K80") -> dict[str, Any]:
     if not SAFE_SERIAL.fullmatch(serial):
         raise PipelineError(f"ADB serial 不安全：{serial}")
@@ -1186,6 +2110,11 @@ def screenshot_k80(archive: Path, project_root: Path, serial: str, expected_avd:
         raise PipelineError(f"当前阶段不能 screenshot：{state['phase']}")
     if expected_avd != "K80":
         raise PipelineError("screenshot-k80 固定要求项目约束中的 K80 模拟器")
+    install_snapshot = (
+        require_current_install_evidence(artifact, project_root, state)
+        if "installedCompileInputFingerprint" in state
+        else None
+    )
     probe = subprocess.run(["adb", "-s", serial, "shell", "getprop", "ro.boot.qemu.avd_name"], text=True, capture_output=True, check=False)
     if probe.returncode != 0:
         raise PipelineError(f"无法读取模拟器名称：{probe.stderr.strip()}")
@@ -1193,13 +2122,29 @@ def screenshot_k80(archive: Path, project_root: Path, serial: str, expected_avd:
     destination = artifact / "runs"
     destination.mkdir(parents=True, exist_ok=True)
     image = next_evidence_path(destination, "应用截图.png")
-    with image.open("wb") as output:
-        result = subprocess.run(["adb", "-s", serial, "exec-out", "screencap", "-p"], stdout=output, stderr=subprocess.PIPE, check=False)
-    if result.returncode != 0:
-        raise PipelineError(f"截图失败：{result.stderr.decode(errors='replace').strip()}")
+    valid = False
+    try:
+        with image.open("wb") as output:
+            result = subprocess.run(["adb", "-s", serial, "exec-out", "screencap", "-p"], stdout=output, stderr=subprocess.PIPE, check=False)
+        if result.returncode != 0:
+            raise PipelineError(f"截图失败：{result.stderr.decode(errors='replace').strip()}")
+        width, height = validate_png_evidence(image)
+        valid = True
+    finally:
+        if not valid:
+            image.unlink(missing_ok=True)
+    image_md5 = md5_file(image)
     if state["phase"] != "screenshot":
-        transition(state, "screenshot", {"serial": serial, "image": str(image)})
+        transition(
+            state,
+            "screenshot",
+            {"serial": serial, "image": str(image), "imageMd5": image_md5, "width": width, "height": height},
+        )
     state["lastScreenshot"] = str(image)
+    state["lastScreenshotMd5"] = image_md5
+    if install_snapshot is not None:
+        state["screenshotCompileInputFingerprint"] = install_snapshot["fingerprint"]
+        state["screenshotInstalledApkMd5"] = state["installedApkMd5"]
     _write_state(artifact, state)
     return {"artifactPath": str(artifact), "phase": state["phase"], "image": str(image)}
 
@@ -1219,19 +2164,13 @@ def code_image_compare_script() -> Path:
 
 
 def _latest_app_screenshot(artifact: Path, state: dict[str, Any]) -> Path:
-    """取得最近一次由 screenshot-k80 登记的 App 截图，并限制在证据目录内。"""
-    candidates: list[Path] = []
-    if state.get("lastScreenshot"):
-        candidates.append(Path(str(state["lastScreenshot"])))
-    for history in reversed(state.get("history", [])):
-        detail = history.get("detail", {}) if isinstance(history, dict) else {}
-        image = detail.get("image") if isinstance(detail, dict) else None
-        if image:
-            candidates.append(Path(str(image)))
+    """只接受最近一次截图及其内容 Hash，不回退到上一轮证据。"""
     runs = (artifact / "runs").resolve()
-    for candidate in candidates:
-        resolved = candidate.expanduser().resolve()
-        if runs in resolved.parents and resolved.is_file():
+    candidate = state.get("lastScreenshot")
+    expected_md5 = state.get("lastScreenshotMd5")
+    if isinstance(candidate, str) and isinstance(expected_md5, str):
+        resolved = Path(candidate).expanduser().resolve()
+        if runs in resolved.parents and resolved.is_file() and md5_file(resolved) == expected_md5:
             return resolved
     raise PipelineError("找不到最近一次 App 截图，请先执行 screenshot-k80")
 
@@ -1241,14 +2180,43 @@ def compare_screenshots(archive: Path, project_root: Path, app_override: Path | 
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] != "screenshot":
         raise PipelineError(f"当前阶段不能 compare-screenshots：{state['phase']}")
+    if "screenshotCompileInputFingerprint" in state:
+        install_snapshot = require_current_install_evidence(artifact, project_root, state)
+        if (
+            state.get("screenshotCompileInputFingerprint") != install_snapshot["fingerprint"]
+            or state.get("screenshotInstalledApkMd5") != state.get("installedApkMd5")
+        ):
+            raise PipelineError("截图对应的源码或已安装 APK 已变化，请重新截图")
     runs = artifact / "runs"
     design = runs / "设计截图.png"
     if not design.is_file():
         raise PipelineError(f"设计截图不存在：{design}")
-    app = _latest_app_screenshot(artifact, state) if app_override is None else app_override.expanduser().resolve()
+    cached_design = _load_cached_design(artifact, source)
+    if cached_design is None or cached_design[1].resolve() != design.resolve():
+        raise PipelineError("设计截图与设计解析证据不一致，请重新采集设计")
+    raw_app = _latest_app_screenshot(artifact, state)
+    app = raw_app if app_override is None else app_override.expanduser().resolve()
     runs = (artifact / "runs").resolve()
     if runs not in app.parents or not app.is_file():
         raise PipelineError(f"对比截图不存在或不在当前 artifact/runs 内：{app}")
+    normalization: dict[str, Any] | None = None
+    if app != raw_app:
+        provenance = app.with_suffix(app.suffix + ".normalization.json")
+        try:
+            normalization = json.loads(provenance.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as error:
+            raise PipelineError(f"归一化截图缺少有效来源证明：{provenance}") from error
+        if not isinstance(normalization, dict):
+            raise PipelineError(f"归一化来源证明必须是 JSON 对象：{provenance}")
+        if (
+            Path(str(normalization.get("design", ""))).expanduser().resolve() != design.resolve()
+            or Path(str(normalization.get("app", ""))).expanduser().resolve() != raw_app.resolve()
+            or Path(str(normalization.get("output", ""))).expanduser().resolve() != app
+            or normalization.get("designMd5") != md5_file(design)
+            or normalization.get("appMd5") != md5_file(raw_app)
+            or normalization.get("outputMd5") != md5_file(app)
+        ):
+            raise PipelineError("归一化截图的输入/输出路径或 Hash 与当前流程不一致")
     output_dir = runs
     log_path = artifact / "logs" / "compare-images.log"
     command = [
@@ -1276,13 +2244,20 @@ def compare_screenshots(archive: Path, project_root: Path, app_override: Path | 
     report_data["sourceMd5"] = source["sourceMd5"]
     report_data["designScreenshot"] = str(design)
     report_data["appScreenshot"] = str(app)
+    report_data["designScreenshotMd5"] = md5_file(design)
+    report_data["appScreenshotMd5"] = md5_file(app)
     atomic_json(report, report_data)
     state["comparison"] = {
         "report": str(report),
+        "reportMd5": md5_file(report),
         "designScreenshot": str(design),
         "appScreenshot": str(app),
+        "designScreenshotMd5": report_data["designScreenshotMd5"],
+        "appScreenshotMd5": report_data["appScreenshotMd5"],
         "metrics": report_data.get("metrics", {}),
     }
+    if normalization is not None:
+        state["comparison"]["normalization"] = normalization
     state.setdefault("history", []).append(
         {"phase": "compared", "at": utc_now(), "detail": state["comparison"]}
     )
@@ -1296,6 +2271,10 @@ def mark_diff(archive: Path, project_root: Path, report: Path | None, outcome: s
     artifact, source, state = load_source(archive, project_root)
     if state["phase"] != "screenshot":
         raise PipelineError(f"当前阶段不能 mark-diff：{state['phase']}")
+    if "screenshotCompileInputFingerprint" in state:
+        install_snapshot = require_current_install_evidence(artifact, project_root, state)
+        if state.get("screenshotCompileInputFingerprint") != install_snapshot["fingerprint"]:
+            raise PipelineError("截图之后源码/编译输入已变化，不能登记视觉结论")
     if report is None:
         report = Path(compare_screenshots(archive, project_root)["report"])
         artifact, source, state = load_source(archive, project_root)
@@ -1308,8 +2287,37 @@ def mark_diff(archive: Path, project_root: Path, report: Path | None, outcome: s
         raise PipelineError(f"差异报告不是有效 JSON：{report}") from error
     if not isinstance(report_data, dict):
         raise PipelineError(f"差异报告必须是 JSON 对象：{report}")
-    if report_data.get("sourceMd5") not in (None, source["sourceMd5"]):
+    comparison = state.get("comparison")
+    if not isinstance(comparison, dict) or Path(str(comparison.get("report", ""))).expanduser().resolve() != report:
+        raise PipelineError("差异报告未由当前流程的 compare-screenshots 登记")
+    if not isinstance(comparison.get("reportMd5"), str) or md5_file(report) != comparison["reportMd5"]:
+        raise PipelineError("差异报告内容在 compare 后已发生变化")
+    if report_data.get("sourceMd5") != source["sourceMd5"]:
         raise PipelineError("差异报告 sourceMd5 与当前 ZIP 不一致")
+    if report_data.get("designScreenshot") != comparison.get("designScreenshot") or report_data.get("appScreenshot") != comparison.get("appScreenshot"):
+        raise PipelineError("差异报告绑定的设计图或 App 截图与当前流程不一致")
+    if (
+        report_data.get("designScreenshotMd5") != comparison.get("designScreenshotMd5")
+        or report_data.get("appScreenshotMd5") != comparison.get("appScreenshotMd5")
+    ):
+        raise PipelineError("差异报告中的截图 Hash 与当前流程登记不一致")
+    design_image = Path(str(comparison["designScreenshot"])).expanduser().resolve()
+    app_image = Path(str(comparison["appScreenshot"])).expanduser().resolve()
+    registered_design_md5 = comparison.get("designScreenshotMd5")
+    registered_app_md5 = comparison.get("appScreenshotMd5")
+    if not isinstance(registered_design_md5, str) or not isinstance(registered_app_md5, str):
+        raise PipelineError("当前流程未登记差异截图 Hash")
+    if (
+        not design_image.is_file()
+        or not app_image.is_file()
+        or md5_file(design_image) != registered_design_md5
+        or md5_file(app_image) != registered_app_md5
+    ):
+        raise PipelineError("差异报告绑定的截图内容在 compare 后已发生变化")
+    if not isinstance(report_data.get("metrics"), dict) or not report_data["metrics"]:
+        raise PipelineError("差异报告缺少结构化 metrics，不能决定 pass/repair/stop")
+    if report_data["metrics"] != comparison.get("metrics"):
+        raise PipelineError("差异报告 metrics 与当前流程登记不一致")
     state["lastDiffOutcome"] = outcome
     if outcome == "repair":
         state["attempts"]["repair"] = state["attempts"].get("repair", 0) + 1
@@ -1327,6 +2335,25 @@ def complete_pipeline(archive: Path, project_root: Path) -> dict[str, Any]:
     artifact, _, state = load_source(archive, project_root)
     if state["phase"] != "diffed" or state.get("lastDiffOutcome") != "pass":
         raise PipelineError("只有差异报告 outcome=pass 时才能完成流程")
+    if "screenshotCompileInputFingerprint" in state:
+        install_snapshot = require_current_install_evidence(artifact, project_root, state)
+        if state.get("screenshotCompileInputFingerprint") != install_snapshot["fingerprint"]:
+            raise PipelineError("视觉通过后源码/编译输入已变化，不能完成流程")
+    comparison = state.get("comparison")
+    if not isinstance(comparison, dict):
+        raise PipelineError("完成流程前缺少已登记差异证据")
+    report = Path(str(comparison.get("report", ""))).expanduser().resolve()
+    design = Path(str(comparison.get("designScreenshot", ""))).expanduser().resolve()
+    app = Path(str(comparison.get("appScreenshot", ""))).expanduser().resolve()
+    if (
+        not report.is_file()
+        or md5_file(report) != comparison.get("reportMd5")
+        or not design.is_file()
+        or md5_file(design) != comparison.get("designScreenshotMd5")
+        or not app.is_file()
+        or md5_file(app) != comparison.get("appScreenshotMd5")
+    ):
+        raise PipelineError("差异报告或绑定截图在 mark-diff 后已变化，不能完成流程")
     transition(state, "completed", {"reason": "visual-diff-pass"})
     _write_state(artifact, state)
     return {"artifactPath": str(artifact), "phase": state["phase"]}
@@ -1339,6 +2366,10 @@ def build_parser() -> argparse.ArgumentParser:
     inspect.add_argument("--zip", required=True, type=Path)
     inspect.add_argument("--project-root", required=True, type=Path)
     inspect.add_argument("--compose", type=Path)
+    select_entry = subparsers.add_parser("select-entry-html", help="登记多 HTML ZIP 的入口选择")
+    select_entry.add_argument("--zip", required=True, type=Path)
+    select_entry.add_argument("--project-root", required=True, type=Path)
+    select_entry.add_argument("--html", required=True)
     validate = subparsers.add_parser("validate")
     validate.add_argument("--zip", required=True, type=Path)
     validate.add_argument("--project-root", required=True, type=Path)
@@ -1359,17 +2390,20 @@ def build_parser() -> argparse.ArgumentParser:
     fixed.add_argument("--zip", required=True, type=Path)
     fixed.add_argument("--project-root", required=True, type=Path)
     fixed.add_argument("--compose", required=True, type=Path)
+    fixed.add_argument("--viewport-width", type=int, default=1600)
+    fixed.add_argument("--viewport-height", type=int, default=900)
+    fixed.add_argument("--dpr", type=float, default=1.0)
     restart = subparsers.add_parser("restart-generation", help="在用户纠正实现方向后重开已停止的代码生成周期")
     restart.add_argument("--zip", required=True, type=Path)
     restart.add_argument("--project-root", required=True, type=Path)
     restart.add_argument("--reason", required=True)
-    generated = subparsers.add_parser("mark-generated")
-    generated.add_argument("--zip", required=True, type=Path)
-    generated.add_argument("--project-root", required=True, type=Path)
-    generated.add_argument("--compose", required=True, type=Path)
     preflight = subparsers.add_parser("preflight")
     preflight.add_argument("--zip", required=True, type=Path)
     preflight.add_argument("--project-root", required=True, type=Path)
+    select_task = subparsers.add_parser("select-compile-task", help="从 Gradle 实际候选中登记用户选择的编译任务")
+    select_task.add_argument("--zip", required=True, type=Path)
+    select_task.add_argument("--project-root", required=True, type=Path)
+    select_task.add_argument("--task", required=True)
     compile_command = subparsers.add_parser("compile")
     compile_command.add_argument("--zip", required=True, type=Path)
     compile_command.add_argument("--project-root", required=True, type=Path)
@@ -1392,9 +2426,15 @@ def build_parser() -> argparse.ArgumentParser:
     start_design_server_command.add_argument("--zip", required=True, type=Path)
     start_design_server_command.add_argument("--project-root", required=True, type=Path)
     start_design_server_command.add_argument("--port", type=int, default=0)
+    start_design_server_command.add_argument("--viewport-width", type=int, default=1600)
+    start_design_server_command.add_argument("--viewport-height", type=int, default=900)
+    start_design_server_command.add_argument("--dpr", type=float, default=1.0)
     capture_design = subparsers.add_parser("采集设计", help="采集浏览器最终布局并写入设计解析文件")
     capture_design.add_argument("--zip", required=True, type=Path)
     capture_design.add_argument("--project-root", required=True, type=Path)
+    capture_design.add_argument("--viewport-width", type=int, default=1600)
+    capture_design.add_argument("--viewport-height", type=int, default=900)
+    capture_design.add_argument("--dpr", type=float, default=1.0)
     screenshot_design = subparsers.add_parser("screenshot-design")
     screenshot_design.add_argument("--zip", required=True, type=Path)
     screenshot_design.add_argument("--project-root", required=True, type=Path)
@@ -1424,11 +2464,40 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def persist_user_input_request(args: argparse.Namespace, question: str) -> Path | None:
+    """尽力把退出码 2 的问题固化到本次 ZIP artifact，避免只存在于终端滚屏。"""
+    archive = getattr(args, "zip", None)
+    project_root = getattr(args, "project_root", None)
+    if not isinstance(archive, Path) or not isinstance(project_root, Path):
+        return None
+    try:
+        archive = archive.expanduser().resolve()
+        project_root = project_root.expanduser().resolve()
+        source_sha = md5_file(archive)
+        request = artifact_dir(archive, project_root, source_sha) / "needs-user-input.json"
+        atomic_json(
+            request,
+            {
+                "status": "needs_user_input",
+                "command": str(getattr(args, "command", "unknown")),
+                "question": question,
+                "sourcePath": str(archive),
+                "sourceMd5": source_sha,
+                "requestedAt": utc_now(),
+            },
+        )
+        return request
+    except (OSError, ValueError, zipfile.BadZipFile):
+        return None
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         if args.command == "inspect":
             result = inspect_archive(args.zip, args.project_root, args.compose)
+        elif args.command == "select-entry-html":
+            result = select_entry_html(args.zip, args.project_root, args.html)
         elif args.command == "validate":
             result = validate_project(args.zip, args.project_root, args.compose)
         elif args.command == "assets":
@@ -1438,24 +2507,20 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "generate-compose":
             result = generate_compose_from_dom(args.zip, args.project_root, args.compose)
         elif args.command == "run-fixed":
-            result = run_fixed_pipeline(args.zip, args.project_root, args.compose)
+            result = run_fixed_pipeline(
+                args.zip,
+                args.project_root,
+                args.compose,
+                args.viewport_width,
+                args.viewport_height,
+                args.dpr,
+            )
         elif args.command == "restart-generation":
             result = restart_generation_cycle(args.zip, args.project_root, args.reason)
-        elif args.command == "mark-generated":
-            artifact, _, state = load_source(args.zip, args.project_root)
-            if state["phase"] not in {"assets_imported", "generated"}:
-                raise PipelineError(f"当前阶段不能 mark-generated：{state['phase']}")
-            target = args.compose.resolve()
-            if not target.is_file() or args.project_root.resolve() not in target.parents:
-                raise PipelineError(f"Compose 目标不存在或不在项目内：{target}")
-            validate_compose_source(target)
-            state["composeFile"] = str(target)
-            if state["phase"] != "generated":
-                transition(state, "generated", {"composeFile": str(target)})
-            _write_state(artifact, state)
-            result = {"artifactPath": str(artifact), "phase": state["phase"], "composeFile": str(target)}
         elif args.command == "preflight":
             result = preflight_project(args.zip, args.project_root)
+        elif args.command == "select-compile-task":
+            result = select_compile_task(args.zip, args.project_root, args.task)
         elif args.command == "compile":
             result = compile_project(args.zip, args.project_root)
         elif args.command == "package-debug":
@@ -1465,9 +2530,22 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "screenshot-k80":
             result = screenshot_k80(args.zip, args.project_root, args.serial, args.expected_avd)
         elif args.command == "start-design-server":
-            result = start_design_server(args.zip, args.project_root, args.port)
+            result = start_design_server(
+                args.zip,
+                args.project_root,
+                args.port,
+                args.viewport_width,
+                args.viewport_height,
+                args.dpr,
+            )
         elif args.command == "采集设计":
-            result = capture_rendered_design(args.zip, args.project_root)
+            result = capture_rendered_design(
+                args.zip,
+                args.project_root,
+                args.viewport_width,
+                args.viewport_height,
+                args.dpr,
+            )
         elif args.command == "screenshot-design":
             result = complete_design_screenshot(args.zip, args.project_root, args.image)
         elif args.command == "stop-design-server":
@@ -1488,7 +2566,11 @@ def main(argv: list[str] | None = None) -> int:
         print(json.dumps(result, ensure_ascii=False, indent=2))
         return 0
     except UserInputRequired as error:
-        print(json.dumps({"status": "needs_user_input", "question": str(error)}, ensure_ascii=False), file=sys.stderr)
+        payload = {"status": "needs_user_input", "question": str(error)}
+        request = persist_user_input_request(args, str(error))
+        if request is not None:
+            payload["requestPath"] = str(request)
+        print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
         return 2
     except PipelineError as error:
         print(json.dumps({"status": "blocked", "error": str(error)}, ensure_ascii=False), file=sys.stderr)

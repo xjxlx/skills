@@ -1,124 +1,101 @@
 ---
 name: code-lanhu-compose
-description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，需要在 Android 项目中生成或还原 Jetpack Compose 页面，并进行图片资源处理、编译运行或设计稿截图对比。
+description: Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，需要在 Android 项目中高保真生成或还原 Jetpack Compose 页面，并进行图片资源处理、编译运行或设计稿截图对比。
 ---
 
 # code-lanhu-compose
 
-把蓝湖导出的 HTML/CSS ZIP 转换为符合当前 Android 项目规范的 Compose 页面，并用设计稿与 App 截图完成可追溯的视觉修正。HTML DOM、资源引用、浏览器最终计算结果和 Compose 初稿均由 Python 固定脚本处理；模型只负责项目适配、异常决策和有证据的视觉修正。
+把蓝湖 HTML/CSS ZIP 转换为可编译的 Jetpack Compose 视觉基线，并用可追溯截图完成修正。固定脚本负责证据身份、DOM/浏览器采集、资源映射、首稿生成和构建阶段；模型只做项目适配、语义决策和有差异证据支持的补丁。
 
-## 职责与例外
+## 启动约束
 
-- 遵循 `$skill-common` 基础规范。每次调用本 Skill 时，先执行 `"${CODEX_HOME:-$HOME/.codex}/skills/github-manager/scripts/check_and_publish.sh"`；检测或发布成功后再继续，失败时立即停止。
-- 只负责蓝湖 ZIP 的设计解析、Compose 生成、图片接入和视觉验证闭环。
+- 遵循 `$skill-common`。每次调用先执行 `"${CODEX_HOME:-$HOME/.codex}/skills/github-manager/scripts/check_and_publish.sh"`；失败立即停止。
 - 不调用、不继承旧 `$code-compose`，也不读取它的规则或缓存。
-- 图片接入、内容 Hash、资源清单、完整 DOM 解析、浏览器最终布局采集和 Compose 初稿生成均由 Python 固定脚本全权执行；图片接入时再调用 `$code-image` 这个确定性子工具。大模型不得参与 Hash、路径解析、资源命名、DOM/class 层级推断或 Compose 首稿生成，也不得修改原始 JSON 证据。
-- 模拟器验证能力可用时调用 `test-android-apps:android-emulator-qa`；不可用时才执行本 Skill 规定的显式 ADB 流程。
-- 以 `scripts/lanhu_pipeline.py run-fixed` 作为默认固定入口；它自动完成完整 DOM 存储、设计服务/浏览器采集、资源 Hash/导入、Compose 生成、Gradle 任务发现和编译。浏览器、资源、代码生成和 Gradle 命令均由 Python 决定并执行；大模型不得逐项调用或替换这些步骤。
-- 无法从设计、编译或截图证据确定语义时，写入 `needs-user-input.json` 并暂停，交由用户确认，不用猜测推进。
+- 图片导入由固定脚本按内容 Hash 调用 `$code-image`；模拟器验证优先调用 `test-android-apps:android-emulator-qa`，不可用时才使用本文的显式 ADB 契约。
+- 默认入口只有 `scripts/lanhu_pipeline.py run-fixed`。不要让模型逐项替换浏览器、资源、生成器或 Gradle 命令。
 
 ## 必需输入
 
-首次处理一个设计时，只确认：
+首次处理只确认：
 
-1. 蓝湖 ZIP 本地路径。用户未提供时必须先索取。
-2. 目标 Compose 文件；如果文件尚不存在，确认页面名、模块和包路径。
+1. 蓝湖 ZIP 的本地路径；未提供时先索取。
+2. 目标 Compose 文件；文件尚不存在时确认页面名、模块和包路径。
 
-将调用时的当前工作目录视为目标 Android 项目根目录，禁止向用户单独索取根目录地址。当前工作目录缺少 `settings.gradle`、`settings.gradle.kts` 或 Gradle Wrapper 等 Android 项目标识时，停止并要求用户从正确的项目根目录重新调用，不改为索取目录地址。
+当前工作目录就是 Android 项目根目录，不单独索取根目录。缺少 `settings.gradle(.kts)` 或可用 Gradle 入口时停止，并要求用户从正确目录重新调用。目标文件不存在时，确认包名后先创建只含 package/最小 Composable 的项目内占位文件，再进入固定链路。复用用户已提供的信息，不重复询问。
 
-复用用户已经提供的信息，不重复询问。无法确定目标文件时，不生成代码。
+## 三项固定原则
 
-## 执行流程
+1. **证据身份稳定且失败关闭**：ZIP 完整 MD5 是来源身份；原始 HTML 起始标签注入稳定 `nodeId`，浏览器不能靠位置下标回配。可见伪元素、CSS 渐变/多重背景、缺失图片映射或证据冲突必须暂停，禁止静默丢失。
+2. **先生成高保真视觉基线**：浏览器最终 bounds 是位置和尺寸事实；`BoxWithConstraints` 虚拟画布按横纵比例映射 bounds，文本、图片、背景、边框、圆角、透明度和层叠使用最终计算样式。语义化 Row/Column 重构只能在视觉基线验证后进行，不能替代首稿取证。
+3. **内容寻址增量执行**：同一来源复用 DOM、浏览器解析、设计截图、解压和图片清单；同一进程缓存文件 MD5；生成内容未变时不重写 Compose，也不重复 Gradle 编译。相同 ZIP 改变目标 Compose 时保留来源证据，但重置目标绑定的资源、生成和构建阶段。
 
-### 1. 预检项目和设计包
+## 默认执行
 
-- 首次处理 ZIP 先执行 `python3 scripts/lanhu_pipeline.py run-fixed --zip <zip> --project-root <project> --compose <Compose.kt>`；同一完整 `sourceMd5` 命中完整缓存时直接复用当前阶段，不得重新解析 ZIP 或重置 `pipeline.json`。固定阶段和参数见 [固定编排链路契约](references/pipeline-contract.md)。
-- 确认 ZIP、当前工作目录中的 Android 项目、目标模块和构建入口可访问；在项目根目录优先执行 `./gradlew`，仅当 Wrapper 缺失且系统存在 `gradle` 时才回退到 `gradle`。
-- 在解析 ZIP、导入图片或生成 Compose 前，从项目任务列表确定唯一最小相关编译任务并执行一次 Gradle 编译。编译失败时立即停止本次 Skill：只报告该次命令和首个可行动的失败原因，不再运行其他 Gradle 任务，也不继续检查、解析或修改任何设计与资源文件。
-- 首轮取证完成后一次性读取 `dom.json`、`设计解析.json`、`images.json` 和目标页面的项目模式；后续实现阶段复用这些结果，不为同一 ZIP 重复启动浏览器、重复解析或逐项探索相同证据。
-- 计算 ZIP 完整 MD5；禁止根据文件名判断是否为同一设计。
-- 以规范化的 ZIP 文件名和完整 MD5 前六位确定本次专属工作目录：`.code-lanhu-compose/<zip-stem>-<md5前6位>/`。目录内保存 `设计解析.json`、`images.json` 与 `runs/`；完整 MD5 必须写入 JSON 供身份校验。
-- 安全解压到当前用户下载目录的 `<zip-stem>-<md5前6位>/`，解压前拒绝绝对路径、`..` 路径穿越和指向目录外的符号链接。
-- 找到唯一有效的 `index.html`，并找到它实际引用的 `index.css`。存在多个候选页面根目录时，列出候选并让用户选择。
-- 缺少入口、CSS 无法加载或资源路径越界时停止，不生成猜测代码。
-- 创建或复用 `runs/` 公共证据目录前，必须先执行 `start-design-server` 与 `采集设计`，并确认本次专属工作目录中的 `设计解析.json` 存在、可解析且其 `sourceMd5` 与当前 ZIP 一致；缺失时不得只创建 `runs/` 并把截图当作完整缓存。
+```bash
+python3 /Users/XJX/.codex/skills/code-lanhu-compose/scripts/lanhu_pipeline.py run-fixed \
+  --zip <zip> \
+  --project-root <project> \
+  --compose <Compose.kt> \
+  --viewport-width 1600 --viewport-height 900 --dpr 1
+```
 
-缓存目录和设计产物遵循 [缓存与设计解析](references/cache-and-parsing.md)。缓存只复用设计解析结果，不复用最终 Compose 代码。
+固定顺序是：
 
-### 2. 固化 DOM 和最终设计信息
+```text
+inspect/parse-dom → validate → preflight → design evidence → assets → generate-compose → compile
+```
 
-- 先运行 `parse-dom` 或让 `inspect` 自动运行 `scripts/parse_html_dom.py`，解析整个 `index.html`（包括 `head`、`body`、元素属性、文本、注释、父子关系和本地资源引用），原子写入 `dom.json`。`class` 只作为原始属性保存，不作为模型推断页面结构的输入。
-- 浏览器采集只负责把 `getComputedStyle()`、`getBoundingClientRect()`、可见性、字体、层叠、变换和最终资源 URL 按 `nodeId` 写入 `设计解析.json`；不得以 class 选择器重新建立结构树。
-- 仅当完整设计缓存未命中时，才通过 `start-design-server` 启动本机服务并执行 `采集设计`；该命令使用本机 Chrome 等待字体和图片完成，读取 `getComputedStyle()`、`getBoundingClientRect()`、可见性、层叠顺序、变换和最终资源 URL。
-- 同时处理继承、层叠覆盖、行内样式、flex 计算、绝对定位、伪元素、字体加载、遮挡和 `z-index`。
-- 保留“声明来源”和“最终计算结果”：前者用于判断间距归属，后者用于确认最终边界和视觉验证。
-- 将标准化设计 JSON 原子写入本次专属工作目录的 `设计解析.json`。相同完整 MD5 的 ZIP 可以更新覆盖该目录内的当前产物；不同完整 MD5 禁止写入同一目录。
+先验证目标并发现唯一 Gradle 模块/variant，再启动浏览器或导入资源；首稿生成后只执行一次实际 Kotlin 编译。预检失败时报告首个可行动原因并停止，不继续改变设计或项目文件。详细状态机见 [固定编排链路契约](references/pipeline-contract.md)。
 
-详细字段和缓存命中条件见 [缓存与设计解析](references/cache-and-parsing.md)；DOM IR 到 Compose 的固定映射见 [DOM 到 Compose 代码生成](references/dom-to-compose.md)。
+### 1. 固化 DOM 与浏览器事实
 
-### 3. 由 DOM IR 生成 Compose
+- `inspect` 保存完整 `dom.json`：元素、属性、直接文本、父子关系和本地资源引用都保留；class token 只是原始证据，不能让模型据此猜结构。
+- 仅在设计缓存未命中时安全解压并启动 `127.0.0.1` 静态服务。浏览器禁用动画，等待字体、图片解码和稳定节点 bounds/style/currentSrc，随后在同一个页面实例里采集 computed style、bounds、有效透明度、文本 Range、`currentSrc`、Chrome 实际 paint order 和设计截图。
+- DOM 到浏览器的映射使用注入的 `data-code-lanhu-node-id`，可抵抗浏览器自动插入 `tbody` 等 DOM 规范化；`body` 多个视觉根节点时保留完整 body 画布。
+- `设计解析.json` 版本、完整 `sourceMd5`、viewport/DPR、根节点和绑定 MD5 的有效 `runs/设计截图.png` 全部匹配才算缓存命中。响应式设计通过 `run-fixed --viewport-width/--viewport-height/--dpr` 明确采集环境。字段见 [缓存与设计解析](references/cache-and-parsing.md)。
 
-- `run-fixed` 自动调用 `scripts/generate_compose.py`，输入固定为 `dom.json`、`设计解析.json`、`images.json` 和目标文件的 package 声明；生成结果原子写入目标 Compose 文件，再由 Python 执行 `padding` 安全检查。
-- 生成器只按存储的 DOM 父子关系、标签、文本、资源映射和浏览器计算样式选择 `Column`、`Row`、`Box`、`Text`、`Image`；不得让模型重写首稿或根据 class 名猜测组件。
-- 生成失败、资源未映射、包名缺失或输入证据冲突时立即暂停并写入用户输入状态；模型只可处理项目已有组件/交互的适配决策，不可绕过 IR 直接手写结构。
-- 需要重新生成时运行 `python3 scripts/lanhu_pipeline.py generate-compose --zip <zip> --project-root <project> --compose <Compose.kt>`；不要再使用“等待模型修改 Compose”的旧流程。
-- 已因视觉差异 `stop` 后，只有用户明确纠正实现方向时才先运行 `restart-generation --reason <用户原因>`，再重新生成；复用同一 MD5 的 DOM、设计解析和图片映射，不手工重置 `pipeline.json`。
-- 只修改目标页面及其必需的同作用域文件，保留用户已有修改，不做无关清理。
+### 2. 导入图片
 
-实现细节约束：
+- 逐项解析 HTML/CSS 的真实资源路径，校验 ZIP 路径、压缩规模、重复条目、压缩比和符号链接边界；无位图设计允许生成空清单。相同内容先去重，再在同一 Python 进程中批量规划并一次写入 `$code-image` 清单。
+- 仅复用项目中仍真实存在的 `$code-image` 输出。`images.json` 记录源路径、内容 MD5、真实 `outputPath` 与 `outputName`；Android 资源引用会去掉文件扩展名。
+- 不把整个蓝湖 ZIP 传给 `$code-image --zip`，不按文件名模糊猜图，不用文字或临时 Canvas 替代已有切图。
 
-- 生成器根据 `images.json` 的真实映射生成 `Image`；若项目适配器已声明使用 `ImageItem`，只能把同一 `nodeId` 的资源调用替换为项目封装，并保持 `ContentScale.FillBounds` 和全屏 modifier 的证据语义，不得另行猜测背景资源。
-- 禁止定义或调用 `Modifier.offsetPx`、`Modifier.sizePx` 等自定义像素换算 Modifier；普通间距使用布局层级、`padding`/`Arrangement`，确有负位移语义时使用标准 `Modifier.offset`，尺寸使用 `width`、`height`、`size` 或 `fillMax*` 表达。
-- 使用 `BoxWithConstraints` 的 Composable 必须导入 `android.annotation.SuppressLint`，并直接标注 `@SuppressLint("UnusedBoxWithConstraintsScope")`；根布局使用时标注根 Composable，局部使用时标注对应私有 Composable。
-- 标题、标签、数值、单位和右侧图标组成的复合内容必须使用 `Row`/`Column` 的对齐关系或项目已有标签组件表达；禁止用互不关联的固定 `offset` 拼接，完成后检查文字是否裁剪、标签文字是否真实存在、数值和单位是否同一基线。
-- 重复视觉单元必须依据完整 DOM IR 中的真实兄弟节点生成数据列表；共享父节点的最终方向决定 `Row`/`Column`，仅在 item 超出可视范围、页面支持滑动或用户要求滑动时使用对应 `Lazy*` 组件。禁止逐个硬编码同类 Composable 或用固定 `Row`/`Column` 堆叠可能超出视口的 item。复合卡片必须逐项保留设计中可见的图片、左右装饰、标签和操作入口，不得只保留中心文字或主数值。
-布局映射和间距归属必须遵循 [Compose 映射规则](references/compose-mapping.md)。
+### 3. 生成 Compose
 
-### 4. 接入图片资源
+- `generate_compose.py` 只读取 `dom.json`、`设计解析.json`、`images.json`、目标 Kotlin package 和目标模块 namespace/Manifest；不得修改 JSON 证据来让生成通过。
+- 使用浏览器相对根画布的最终 bounds 生成 `offset + size`，并按 Chrome `DOMSnapshot.paintOrder` 排序背景、图片和文本；映射背景色、单一资源背景图、solid 边框/统一圆角、有效透明度、文本颜色/字号/字重/斜体/装饰线/行高/字距/对齐，以及 `<img>` 的浏览器最终资源、`objectFit` 和 `objectPosition`。扁平 Compose 不再重放局部 CSS `z-index`，避免子 stacking context 逃逸。
+- 混合 inline 文本使用浏览器 Range 片段，不把父子文本打乱；Kotlin 字符串必须转义 `$`。图片存在时才导入正确模块的 `R` 包。
+- 输出采用原子、无变化不写入策略，并返回 `composeMd5`、`changed`、样式节点、文本、`img` 和 CSS 背景图覆盖数量。再次生成得到相同 Hash 时跳过编译。
+- 首稿是 bounds-first 的视觉还原，不承诺业务交互或语义组件。模型可在记录证据后适配项目主题、回调和已有组件，但不能绕过生成器手写第一版结构。
 
-- 从解析结果取得图片的真实相对路径和内容 Hash，禁止使用模糊文件名猜测资源。
-- 运行 `python3 scripts/lanhu_pipeline.py assets --zip <zip> --compose <target-compose> --project-root <project> --apply`。编排器安全解压 ZIP、解析主节点类名或 ID、计算内容 Hash，并按 Hash 查询同一 ZIP 的 `.code-image` 清单；未命中时才调用 `$code-image --image --asset-name <节点名>`，命中时直接复用记录，不重复复制或比较目标文件。大模型只能读取最终 `images.json`，不能决定资源文件名或路径。
-- 将每个 ZIP 源路径的结果（Hash、真实 `outputPath`、`outputName`）原子写入 `.code-lanhu-compose/<zip-stem>-<md5前6位>/images.json`；多个源路径可映射到同一资源。Compose 只能引用其中真实存在的 `outputName`；禁止根据 ZIP 文件名或旧 staging 文件猜测资源名。
-- 蓝湖 HTML/CSS ZIP 通常不是 `mipmap*` 资源包，禁止把整个 ZIP 传给 `$code-image --zip`；必须先解压并逐图调用 `$code-image --image`。
-- 只使用实际存在且映射成功的资源；禁止用文字、猜测圆角或临时 `Canvas` 替代已有设计切图。
-- 图片匹配失败时列出设计节点、源路径、Hash 和候选文件，停止处理该资源并请求确认。
+映射细节见 [DOM 到 Compose 代码生成](references/dom-to-compose.md) 和 [Compose 映射规则](references/compose-mapping.md)。
 
-### 5. 编译、安装并打开目标页面
+### 4. 编译、安装与截图
 
-- 预检、资源导入、DOM 解析、Compose 生成检查、编译、K80 安装和截图必须通过 `scripts/lanhu_pipeline.py` 的固定子命令执行；默认由 `run-fixed` 自动串联设计采集、资源导入、代码生成和编译，模型决策只能通过契约化 JSON 记录。
-- `preflight` 根据目标 Compose 路径和 Gradle 任务列表由 Python 自动确定模块的 Debug Kotlin 编译任务并写入状态；`compile` 只能复用该任务，不接受模型临时指定的 task。若存在多个 Debug variant 或无法识别，脚本立即暂停并请求用户明确选择。
-- `compile` 只编译 Kotlin，不保证生成可安装 APK；每次编译成功后必须执行 `package-debug --apk <apk>`。该命令从同一个 `preflightTask` 自动推导对应的 `assemble<Variant>`，并记录 Compose Hash 与 APK 路径；`install-k80` 会拒绝旧 APK、路径不一致或未登记的产物，避免安装 stale APK 后重复截图。
-- 每轮修正只重新运行同一个由 Python 确定的最小相关编译任务，禁止把模糊的 `compileDebugKotlin` 当成所有项目的固定命令。
-- 生成后的编译失败先定位首个可行动原因：若错误只涉及固定生成模板或新导入资源，且可由诊断直接确定最小修复（如作用域接收者、导入、类型、资源 ID），由脚本修正模板或重新生成并重跑同一编译任务，最多三轮。预检失败、用户既有文件错误、ZIP/资源映射错误、构建环境错误或需业务决策的错误仍须立即停止并报告；模型不得直接猜测布局来绕过生成器。
-- 编译成功后安装到明确的模拟器或设备，固定分辨率、density、字体缩放、语言、主题和测试数据。
-- 按 deeplink、目标 Activity、debug 路由、稳定导航步骤的顺序打开页面。
-- 截图前通过当前 Activity、UI 结构或页面标识确认目标页面已经显示，并确认启动页、启动图标、空白加载态和过渡动画已经消失；只启动首页或截取启动画面不算完成。
-- 编译、安装、页面打开或测试数据准备失败时保留日志并停止视觉修正。
+- `preflight` 根据目标文件和 `gradlew tasks --all` 发现唯一模块/variant 的最小 Debug Kotlin 任务；`compile` 只能复用该任务。多个候选时写入 `needs-user-input.json` 并以退出码 2 暂停；用户明确选择后用 `select-compile-task` 登记，脚本会再次验证它确实属于当前模块候选。
+- `package-debug` 从同一编译任务推导 `assemble<Variant>`，只接受目标模块 `build/outputs/apk/` 下的 APK，并登记内容 Hash；`install-k80` 只接受路径、APK Hash、Compose Hash 和时间均未变化的产物。
+- 所有 ADB 命令必须带 `-s <serial>`；项目约束指定 K80 时同时核验 AVD 名。截图只有在 ADB 返回成功且文件是可解码、尺寸有效的 PNG 后才推进状态；坏截图会删除，原阶段保持不变。
+- 截图前仍须通过 Activity、UI 树或稳定页面标识确认目标页已显示并停止动画；脚本的 PNG 校验不能替代页面就绪检查。
 
-### 6. 截图、对比和最多三轮修正
+### 5. 归一化、对比和修正
 
-- `采集设计` 的完整缓存以 ZIP 完整 MD5、设计解析版本和 `runs/设计截图.png` 共同校验；命中时不得启动服务或浏览器。未命中时才执行 `start-design-server → 采集设计 → screenshot-design`，并在首次采集后固定复用 `runs/设计截图.png`。`screenshot-design` 无论登记成功或失败都会回收本次静态服务。去掉蓝湖预览外壳的缩小变换，但保留设计元素自身的变换。
-- `runs/` 禁止创建时间戳子目录。App 截图固定按顺序保存为 `应用截图.png`、`应用截图_1.png`、`应用截图_2.png`……，不得覆盖已有证据。
-- 截图对比前保留原始 App 截图，先按 [视觉验证闭环](references/visual-validation.md) 归一化有效内容区域、系统栏、颜色空间和画布尺寸；宽高比不一致时禁止直接调用 `compare_images.py` 或用 `--aspect-tolerance` 强行放行。
-- K80 截图完成并生成归一化截图后，必须执行 `python3 scripts/lanhu_pipeline.py compare-screenshots --zip <zip> --project-root <project> --app <归一化截图>`；省略 `--app` 仅适用于原始截图与设计稿宽高比一致的情况。该阶段只调用 `$code-image` 的独立 `compare_images.py`，在 `runs/` 生成 `diff.json`、`diff-mask.png`、`diff-heatmap.png` 和 `diff-overlay.png`，并把本次 ZIP 的 `sourceMd5` 写入报告。也可以省略 `mark-diff` 的 `--report`，由它自动触发同一对比阶段。
-- 模型必须读取 `diff.json` 的指标、区域和证据图后，才决定 `repair`、`pass` 或 `stop`；Python 只生成对比证据，不自动修改 Compose，修复仍通过模型的契约化补丁完成。
-- 逐项比较整体布局、元素边界、文本基线、字号、行高、字距、间距、颜色、圆角、阴影、图片裁剪和遮挡关系。
-- 初次生成后最多执行三轮“修正 → 编译 → 打包 → 安装/运行 → 截图 → 对比”。如果连续一次修正的关键指标和证据图没有改善，立即 `stop`，不要消耗剩余轮次；达到目标或遇到外部阻塞时同样提前停止。
-- 每轮只修复有截图或布局数据支持的差异；禁止为了追求像素一致破坏项目公共组件或扩大修改范围。
+- `runs/设计截图.png` 是公共基准；App 截图按 `应用截图.png`、`应用截图_1.png` 递增，不覆盖历史证据。
+- 保留原图，再运行 `normalize_compare_screenshot.py`。输出不能覆盖任一输入；`fit` 必须显式裁剪且裁剪宽高比与设计一致，禁止偷偷拉伸；`fill` 才允许横纵独立缩放。
+- `compare-screenshots` 固定调用 `$code-image` 的独立对比脚本，并把来源 MD5、两张截图和完整 metrics 注册到状态。`mark-diff` 拒绝 `{}`、外部报告或未绑定当前截图的伪造结果。
+- 模型读取指标和遮罩/热力/叠加图后才选择 `repair`、`pass` 或 `stop`。最多三轮修正；任意一轮关键指标没有改善就立即停止，不消耗剩余轮次。
 
-截图命令、证据目录和停止条件见 [视觉验证闭环](references/visual-validation.md)。
+完整命令和对齐标准见 [视觉验证闭环](references/visual-validation.md)。
+
+## 模型边界
+
+- 允许：目标页最小项目适配、已有组件/交互接线、由编译错误或截图差异直接支持的补丁。
+- 禁止：任意 shell 决策、class 名推断业务结构、猜资源名、伪造对比报告、改 JSON 证据、扩大到无关文件。
+- 无法确定入口、包名、variant、资源或业务语义时，脚本将问题和来源身份写入 `needs-user-input.json`；没有用户确认不得继续。
+- 多个 HTML 入口可用 `select-entry-html --html <ZIP 内路径>` 登记后恢复；多个 Gradle 候选用 `select-compile-task` 恢复。
+- 视觉 `stop` 后只有用户明确纠正方向，才运行 `restart-generation --reason <用户原因>`，复用来源证据并重开生成周期。
 
 ## 完成标准
 
-完成时报告：
+完成时报告：ZIP MD5/缓存命中、DOM 与生成覆盖数量、变更文件和资源、实际 Gradle/安装/打开命令、每轮截图指标、最终停止原因及剩余差异。未执行安装或视觉回放时必须明确说明，不能用单元测试冒充端到端还原成功。
 
-- ZIP MD5、缓存命中状态和解析产物路径。
-- `dom.json` 的节点/资源数量、`设计解析.json` 和生成器输出记录；明确首稿由 Python 根据 IR 生成。
-- 生成或修改的 Compose 文件、资源文件和关键项目适配决策。
-- 实际执行的编译、安装和页面打开方式。
-- 每轮截图、差异结论、已修正项和剩余差异。
-- 最终停止原因；如果未完成，明确区分代码问题、设计信息不足和环境阻塞。
-
-## 经验沉淀
-
-业务执行并验证后调用 `$skill-common` 复盘原始证据。只有稳定复现、能被编译/截图/布局数据验证，或用户明确要求固化的通用经验，才允许最小化更新本 Skill 或一层 reference。项目专属数值、单次偶发错误和未经验证的猜测不得写入规则；禁止追加按日期增长的事故日志。
+变更本 Skill 后运行全部脚本测试、官方 `quick_validate.py`、凭据扫描，再按 `$skill-common` 执行 `check_and_publish.sh`。只有可稳定复现并被测试、编译或视觉证据验证的规则才写入 Skill；项目专属数值和单次事故不沉淀。

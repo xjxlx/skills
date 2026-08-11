@@ -1,92 +1,69 @@
 # 缓存与设计解析
 
-## 目录结构
-
-在调用 Skill 时的当前工作目录（即 Android 项目根目录）维护：
+## Artifact 结构
 
 ```text
-.code-lanhu-compose/
-└── <zip-stem>-<md5前6位>/
-    ├── 设计解析.json
-    ├── dom.json
-    ├── images.json
-    └── runs/
-        ├── 设计截图.png
-        ├── 应用截图.png
-        └── 应用截图_1.png
+<project>/.code-lanhu-compose/<zip-stem>-<md5前6位>/
+├── source.json
+├── pipeline.json
+├── dom.json
+├── 设计解析.json
+├── images.json
+├── entry-selection.json        # 仅多 HTML 已明确选择时存在
+├── needs-user-input.json       # 仅暂停等待确认时存在
+├── design-server-source/       # 安全解压的本地设计页缓存
+├── logs/
+└── runs/
+    ├── 设计截图.png
+    ├── 应用截图.png
+    └── 应用截图_1.png
 ```
 
-`<zip-stem>` 必须经过安全文件名规范化；目录名由 ZIP 文件名和完整 MD5 前六位组成。`dom.json`、`设计解析.json`、`images.json` 和每次运行证据均只属于这个 ZIP，不保存最终 Compose 代码缓存。目标 Compose 首稿由 `generate_compose.py` 每次根据这些输入重新生成。
+目录名便于人读，完整 `sourceMd5` 才是身份。`source.json`、`pipeline.json`、`dom.json`、`设计解析.json` 和 `images.json` 都要绑定同一个完整 MD5；不同完整 MD5 即使前六位碰撞也不得复用内容。
 
-两个 JSON 都必须记录完整 `sourceMd5`。首次创建和后续写入前先校验已有完整 Hash：相同 MD5 可以原子更新当前产物，不同 MD5 必须拒绝覆盖，即使前六位恰好相同。旧版根目录下的 `designs/`、`images/`、`runs/` 不得当作新布局的缓存命中，也不得自动移动或删除。
+## 缓存命中矩阵
 
-## 图片导入清单
+| 产物 | 复用条件 | 失效后的动作 |
+|---|---|---|
+| `source.json` / `dom.json` | ZIP 完整 MD5 一致，DOM 文件可解析 | 重新 inspect/parse-dom |
+| 静态服务解压目录 | MD5 标记一致；每个文件存在、尺寸一致且无符号链接 | 重新安全解压 |
+| `设计解析.json` | MD5、版本 5、viewport/DPR、paint order、根节点和设计 PNG 内容 Hash 全部匹配 | 同一浏览器页重新采集与截图 |
+| 图片导入记录 | 源图 MD5 一致，记录的项目资源仍真实存在 | 仅重新调用缺失项的 `$code-image` |
+| Compose 生成 | 输入一致且新源码 Hash 与目标文件一致 | 不写文件，返回 `changed:false` |
+| 编译 | 当前 Compose、目标模块源码、图片资源、图片清单、Gradle 配置和 task 的完整指纹等于最近成功编译指纹 | 返回 `unchanged`，不调用 Gradle |
 
-蓝湖 HTML/CSS ZIP 不是 `$code-image --zip` 所需的 `mipmap*` 资源包。图片解压、路径解析、Hash、资源命名和清单写入都由 Python 完成；先运行本 Skill 的逐图协调脚本：
+同一进程内的文件 MD5 以绝对路径、inode、size、mtime 和 ctime 为缓存键；文件任一身份字段变化都重新计算。缓存最多保留 64 项，避免长进程无界增长。
 
-```bash
-python3 scripts/import_zip_images.py \
-  --zip <zip-path> \
-  --compose <target-compose> \
-  --project-root <project-root> \
-  --apply
-```
+相同 ZIP 改变目标 Compose 文件时，DOM、浏览器解析和设计截图仍是来源证据，可以复用；`pipeline.json` 必须回到 `inspected`，清除旧目标的 preflight、资源生成和编译绑定，并在 `targetHistory` 记录旧目标。
 
-脚本安全解压 ZIP 到 `~/Downloads/<zip-stem>-<md5前6位>/`，按 ZIP 内图片逐个调用 `$code-image --image <extracted-image> --compose <target-compose> --project-root <project-root> --apply`。输出位于 `$code-image` 规定的 `mipmap-xxhdpi`；同一 ZIP 的全部图片复用 `.code-image/<zip-stem>-<zip-md5前6位>.resources.json` 与已有输出，不得使用共享 `resources.json`。
+## DOM IR
 
-随后将本 ZIP 的来源和实际导入结果写入 `<zip-stem>-<md5前6位>/images.json`。每项至少记录 ZIP 内 `sourcePath`、解压后路径、原始文件名、解析出的 `assetName`、内容 Hash、真实 `outputPath`、`outputName` 和 `resourceManifest`。该文件仅用于本 ZIP 的设计资源与 Compose 引用对应，不再作为 `$code-image` 的输入。
+`parse_html_dom.py` 使用 HTML 解析器保存整个文档，不只抽取 class：
 
-设计来源、缓存、解析证据和图片内容 Hash 统一使用 MD5；`images.json` 使用 `md5` 字段记录图片内容身份。`$code-image` 也已切换到同一 MD5 规则，避免两个 Skill 的资源清单无法命中。
+- `nodeId`、`parentId`、`childrenIds`；
+- 标签、完整属性、原始 class token；
+- 直接文本、注释和 doctype；
+- `img/src/srcset`、CSS URL 等经过 ZIP 边界校验的本地资源引用。
 
-## 设计产物格式
+浏览器采集前，固定脚本按原始起始标签顺序注入 `data-code-lanhu-node-id`。该属性只写入服务缓存中的隐藏入口文件，不修改 ZIP 或 `dom.json`。浏览器自动插入 `tbody`、规范化缺失标签或调整 DOM 层级时，仍按该属性与 DOM IR 对齐；重复、缺失或标签冲突立即失败。
 
-```json
-{
-  "sourceName": "report-home.zip",
-  "sourcePath": "/Users/name/Downloads/report-home.zip",
-  "sourceSize": 123456,
-  "sourceMd5": "a1b2c3d4完整MD5",
-  "canvasWidthPx": 1920,
-  "canvasHeightPx": 720
-}
-```
+## `设计解析.json` 版本 5
 
-首次处理时先由 `inspect`/`parse-dom` 把完整入口 HTML 固定写入 `dom.json`，再用 `start-design-server` 启动仅本机可访问的设计服务并执行 `采集设计`。浏览器结果固定写入专属目录内的 `设计解析.json`。同一完整 MD5 只保留一个当前解析结果和一份公共设计截图 `runs/设计截图.png`；后续调用会校验完整 Hash、DOM/设计解析版本、根节点和公共截图，全部匹配时直接复用，不再启动服务、解压 ZIP、启动浏览器或重复截图。资源导入也复用同一 Hash 对应且文件完整的下载解压目录。所有运行证据直接保留在同一目录的 `runs/` 根目录，禁止创建时间戳子目录；App 截图按 `应用截图.png`、`应用截图_1.png`、`应用截图_2.png`……递增保存。
+版本 5 至少记录：
 
-## 缓存命中
+- 来源名称、路径、完整 MD5、入口 HTML 与 CSS；
+- 根选择器、根 `nodeId`、根边界和设计画布；
+- 浏览器 user agent、viewport 与 DPR；
+- 每个稳定 `nodeId` 的最终 bounds、可见性、有效祖先透明度和 computed style；
+- 每个节点和直接文本 Range 的 Chrome 实际 `paintOrder`、bounds 与最终文字样式；
+- `<img>` 的 `currentSrc`、天然尺寸、最终 bounds 和 `objectFit`；
+- 可见伪元素元数据；
+- 同一页面实例生成的 `runs/设计截图.png` 及其 MD5。
 
-只有以下条件全部成立才复用：
+浏览器禁用 CSS 动画/transition，等待 `document.fonts.ready` 和全部图片完成/解码，再比较稳定 nodeId 的 bounds、关键样式与 `currentSrc`，连续三帧一致才采集。布局采集与截图必须复用同一 browser/page，避免二次启动产生字体、DPR、响应式资源或时序差异。viewport/DPR 是缓存键的一部分。
 
-1. 当前 ZIP 对应的专属目录存在。
-2. `dom.json` 和 `设计解析.json` 真实存在且可解析。
-3. 两个解析文件记录的源 MD5 与当前 ZIP 一致。
-4. DOM IR 版本、设计解析版本和当前读取逻辑兼容。
+## 图片清单与解压安全
 
-任一条件失败时重新执行 `parse-dom → start-design-server → 采集设计` 并原子更新两个 JSON；只有截图证据而没有 DOM/设计解析文件时，不得判定为缓存命中。写入 JSON 时先写临时文件，再原子替换，避免中断造成半文件。
+`import_zip_images.py` 拒绝绝对路径、`..`、重复规范化路径、异常单文件/总解压大小、异常压缩比、预先存在的符号链接父目录或目标。每张图片按内容 MD5 去重；无位图设计合法写入 `images: []`。
 
-## 标准化设计产物
-
-解析产物至少包含：
-
-- 源 ZIP 名称、完整 MD5、HTML/CSS 相对路径。
-- 设计画布宽高、设计根节点和浏览器渲染环境。
-- `dom.json` 中完整 DOM 父子层级、元素标签、原始属性、class token、id、文本和资源引用；class 只保存原文，不承担结构推断。
-- `设计解析.json` 中按 `nodeId` 对齐的最终计算样式，不用 class 选择器重新建立结构。
-- 每个节点的最终边界、可见性、层叠顺序和变换矩阵。
-- 布局模式、方向、对齐、`gap`、padding、margin、宽高约束和 overflow。
-- 最终颜色、字体族、字号、字重、行高、字距、文本对齐和最大行数。
-- 背景、边框、圆角、阴影、透明度和资源 URL。
-- 图片相对路径、内容 Hash、原始像素尺寸和展示裁剪方式。
-- 重复视觉单元直接由 `dom.json` 的真实兄弟节点和 `设计解析.json` 的最终布局事实确定；不再运行 class/选择器层级候选扫描。
-
-## 解析要求
-
-- 用 DOM 关系确定结构，不只扫描 `.paragraph_4` 一类选择器。
-- 节点身份固定使用 DOM 顺序生成的 `nodeId`；不能用 class 名替换节点身份或资源映射键。
-- 用 `getComputedStyle()` 解析继承、层叠、行内样式和 CSS 变量。
-- 用 `getBoundingClientRect()` 记录浏览器完成 flex、transform 和定位计算后的边界。
-- 分别读取 `::before`、`::after`；有可见内容时作为设计节点记录。
-- 等待 `document.fonts.ready`、图片完成和布局稳定后再采集。
-- 同时保留父级和子级的 padding、gap、margin 声明，避免只看最终坐标后丢失间距归属。
-- 记录遮挡与 `z-index`，但不可据此把正常流布局改写成全页面绝对定位。
-- `inspect` 不再运行 class/选择器层级重复卡片检测；固定流程只保存 `dom.json` 和按 `nodeId` 对齐的浏览器事实。
+每项 `images.json` 至少保存 `sourcePath`、内容 `md5`、真实 `outputPath`、`outputName` 和资源清单路径。生成器只接受目标 Compose 模块中仍存在的输出文件，不根据旧记录或文件名猜资源。固定链路复用 artifact 私有解压目录，并在一个 Python 进程内批量调用 `$code-image` 的规划/落盘 API。

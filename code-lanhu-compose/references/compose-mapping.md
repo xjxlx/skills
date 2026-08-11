@@ -1,77 +1,61 @@
 # Compose 映射规则
 
-## 容器映射
+## 两阶段策略
 
-| 设计结构 | Compose 优先表达 |
-|---|---|
-| 纵向 flex 或普通纵向流 | `Column` |
-| 横向 flex | `Row` |
-| 重叠层、角标、局部绝对定位 | `Box` |
-| 多锚点复杂定位 | 项目已有依赖时使用 `ConstraintLayout` |
-| 纵向重复滚动内容 | `LazyColumn` |
-| 横向重复滚动内容 | `LazyRow` |
-| 单个绘制型装饰 | 优先真实资源；设计本身为图形时才使用 `Canvas` |
+蓝湖 HTML 的第一目标是还原视觉事实，不是立即产出理想业务组件：
 
-先根据 HTML 层级和布局语义选择容器，再用浏览器最终边界校验。不要机械复制无视觉意义的 DOM 包装层。
+1. **视觉基线阶段**：以浏览器根画布和最终 bounds 生成扁平 `Box` 叠放，确保位置、尺寸、层叠和文本基线可测。
+2. **项目适配阶段**：视觉对比证明一致后，才按真实语义和交互把局部分组替换为项目已有 `Row`、`Column`、列表或组件；替换后必须重新截图验证。
 
-完整 DOM IR 中真实的重复兄弟节点先归并为同一数据列表；共享父节点最终为横向流时使用 `Row`/`LazyRow`，纵向流时使用 `Column`/`LazyColumn`。只有 DOM 结构和浏览器最终布局同时支持时，才生成列表。
+这不是按截图猜绝对坐标。坐标来自稳定 `nodeId` 对应的 `getBoundingClientRect()`，结构范围仍由 DOM 父子树限定。
 
-## 间距归属
+## 虚拟画布
 
-1. 父容器 `padding` 只转换一次，负责父边界到所有子项的内部距离。
-2. 父容器 `gap` 转换为 `Arrangement.spacedBy`；只有无法表达时才使用父布局中的 `Spacer`。
-3. 子节点 `margin` 表示该子节点的特殊外部距离，由父布局在对应位置表达。
-4. 子节点 `padding` 属于组件内部空间，即使父级已有 padding 或 gap 也不能删除。
-5. 同一段视觉距离不得同时由父级 gap 和子级额外 padding 重复表达。
-6. CSS 同时存在 gap 和 margin 时，根据最终元素边界确认二者是否叠加。
-7. 普通块布局的 margin collapse 根据最终边界判断，禁止机械相加。
+根 Composable 使用 `BoxWithConstraints`：
 
-示例：
-
-```css
-.parent {
-  display: flex;
-  flex-direction: column;
-  padding: 24px;
-  gap: 12px;
-}
+```text
+scaleX = maxWidth.value  / designWidthPx
+scaleY = maxHeight.value / designHeightPx
+fontScale = min(scaleX, scaleY)
 ```
 
-```kotlin
-Column(
-    modifier = Modifier.padding(24.dp),
-    verticalArrangement = Arrangement.spacedBy(12.dp),
-) {
-    Item()
-    Item()
-}
-```
+节点相对位置为 `bounds.x/y - rootBounds.x/y`，通过标准 `Modifier.offset` 和 `Modifier.size` 映射。位置与尺寸分别使用横纵缩放；文字使用较小比例，避免非等比画布把字体拉扁。禁止自定义 `offsetPx`/`sizePx` Modifier，也禁止用动态平移补偿父布局居中。
 
-子项不得再次添加用于表达兄弟间距的 `12.dp`。
+全屏填充允许 `scaleX != scaleY`；保持设计比例时必须由调用方明确留白或裁剪策略，不能偷偷拉伸。
 
-## 样式映射
+## 固定视觉映射
 
-| CSS/视觉属性 | Compose 表达 |
+| 浏览器事实 | Compose 表达 |
 |---|---|
-| background/color | `background`、`Color`、主题 Token |
-| border-radius | `RoundedCornerShape`、`clip` |
-| border | `border` |
-| box-shadow | `shadow` 或项目已有阴影封装 |
-| object-fit: cover/contain | `ContentScale.Crop/Fit` |
-| overflow: hidden | 在正确顺序执行 `clip` |
-| font-size/line-height | `fontSize`、`lineHeight`，单位使用 `sp` |
-| letter-spacing | `letterSpacing` |
-| opacity | 颜色 alpha 或 `graphicsLayer`，依据影响范围选择 |
-| transform | `graphicsLayer`、`offset` 或局部布局重构 |
+| bounds | `offset + size` |
+| `backgroundColor` | `background(Color)` |
+| 单一 `url(...)` 背景 | `Image` + 对应 Android 资源 |
+| `backgroundSize: cover/contain` | `ContentScale.Crop/Fit` |
+| `borderWidth/color` | `border` |
+| 统一 `borderRadius` | `RoundedCornerShape + clip` |
+| 有效祖先透明度 | `alpha` |
+| Chrome 实际 paint order | 同一扁平画布的发出顺序 |
+| `<img currentSrc>` | `painterResource` |
+| `objectFit/objectPosition` | `Crop/Fit/Inside/None/FillBounds + Alignment` |
+| 文本 Range bounds | 独立 `Text` 视觉片段 |
+| color/fontSize/fontWeight/fontStyle/lineHeight/letterSpacing/textAlign/textDecoration | 对应 `Text` 参数 |
 
-检查 Modifier 顺序。阴影、裁剪、背景、边框和 padding 的调用顺序不同会产生不同视觉结果。
+同一节点的背景、背景图、边框、图片和文本与其他节点一起使用 Chrome CDP 捕获的实际 paint order；DOM DFS 只用于确定生成范围，不能冒充 CSS 绘制顺序。扁平层禁止再次应用原 CSS `z-index`，否则嵌套 stacking context 会逃逸。Android 资源 ID 使用 `outputName` 去扩展名后的合法名称；Kotlin 关键字使用反引号，R 包来自显式 import、目标模块 `namespace` 或 Manifest，不能从 Kotlin package 猜。
 
-## 尺寸和代码结构
+## 失败关闭与后续修正
 
-- 用设计画布宽度、目标设备宽度和 density 建立换算基准；线宽、字体和图片像素可单独校准。
-- 最底层背景图统一使用 `ImageItem(parameter = ImageParameter(data = resId, modifier = modifier, contentScale = ContentScale.FillBounds))`，并由全屏 `modifier` 承载。
-- 不创建 `offsetPx`、`sizePx` 等自定义像素 Modifier；位置用父子布局和 `padding`，尺寸用 `width`、`height`、`size` 或 `fillMax*`。
-- 内容可伸缩时优先使用 `fillMaxWidth`、`weight`、`aspectRatio` 和项目已有适配方案，不把所有最终边界固化为尺寸常量。
-- 颜色和间距只有重复使用或具有语义时才提取常量，避免为每个单次值制造 Token。
-- 每个私有 Composable 对应清晰的视觉或语义分组，不按每个 HTML 标签机械拆函数。
-- 绝对定位只表达父容器内确实存在的叠放关系；普通内容流保持 `Row`、`Column` 或列表结构。
+下列事实当前不能可靠一对一映射，首稿必须暂停或把差异显式留给证据驱动修正：
+
+- 可见 `::before/::after` 没有可验证 bounds；
+- CSS 渐变、多重 background-image；
+- `background-repeat`、`background-size:auto` 等无法由单张 Compose Image 等价表达的背景；
+- 非 solid 或四边不统一的边框、非统一四角半径；
+- 圆角/越界子树裁剪、0 到 1 之间的分组透明度、旋转/缩放等非平移 transform；
+- 无法解析到 sRGB 的 CSS Color 4 值、未映射的文本变换/装饰；
+- 图片 URL 无唯一清单映射；
+- DOM 与浏览器稳定 ID 不一致；
+- 无可见根或画布尺寸无效。
+
+`box-shadow`、复杂滤镜和非资源字体应保留在设计解析证据中；若影响截图，依据差异做最小项目适配。不要用未经验证的近似值写进固定生成器。
+
+语义化重构时，只有真实共享父节点和最终布局方向可支持 `Row`/`Column`；滚动、点击、数据列表和状态行为必须来自项目需求或用户确认，不能从 class 名推断。
