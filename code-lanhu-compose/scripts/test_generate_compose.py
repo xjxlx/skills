@@ -3,6 +3,7 @@
 
 import importlib.util
 import json
+import struct
 import tempfile
 import unittest
 from pathlib import Path
@@ -43,6 +44,35 @@ class ComposeGeneratorTest(unittest.TestCase):
             "link", None, {"textDecorationLine": "underline line-through"}, ""
         ))
         self.assertIn("TextDecoration.combine", decorated)
+
+    def test_allows_repeat_auto_when_bitmap_matches_background_bounds(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            image = Path(temporary) / "tile.png"
+            image.write_bytes(
+                b"\x89PNG\r\n\x1a\n" + struct.pack(">I", 13) + b"IHDR" + struct.pack(">II", 100, 110) + b"\x00" * 8
+            )
+
+            record = {"sourcePath": "images/tile.png", "extractedPath": str(image)}
+            result = GENERATOR._background_record(
+                {
+                    "backgroundImage": "url(images/tile.png)",
+                    "backgroundRepeat": "repeat",
+                    "backgroundSize": "auto",
+                },
+                [record],
+                {"x": 0, "y": 0, "width": 100, "height": 110},
+            )
+
+            self.assertIs(result, record)
+
+    def test_maps_numeric_background_size_and_position(self) -> None:
+        self.assertEqual(
+            GENERATOR._numeric_background({
+                "backgroundSize": "246px 156px",
+                "backgroundPosition": "-10px -8px",
+            }),
+            (246.0, 156.0, -10.0, -8.0),
+        )
 
     def test_kotlin_identifiers_escape_keywords_and_non_ascii_stems(self) -> None:
         self.assertEqual(GENERATOR._safe_identifier("when"), "Page_when")
@@ -500,13 +530,40 @@ class ComposeGeneratorTest(unittest.TestCase):
             design_path.write_text(json.dumps({
                 "设计根节点": {"nodeId": "n1", "边界": {"x": 0, "y": 0, "width": 50, "height": 50}},
                 "节点": [
-                    {"nodeId": "n1", "visible": True, "bounds": {"x": 0, "y": 0, "width": 50, "height": 50}, "style": {"overflow": "hidden"}},
+                    {"nodeId": "n1", "visible": True, "bounds": {"x": 0, "y": 0, "width": 50, "height": 50}, "style": {"overflow": "hidden", "backgroundColor": "rgb(0, 0, 255)"}},
                     {"nodeId": "n2", "visible": True, "bounds": {"x": 25, "y": 0, "width": 75, "height": 50}, "style": {"backgroundColor": "red"}},
                 ],
             }), encoding="utf-8")
 
             with self.assertRaisesRegex(GENERATOR.GenerationError, "overflow"):
                 GENERATOR.generate_compose(dom_path, design_path, root / "Page.kt", "com.example")
+
+    def test_omits_descendant_fully_outside_parent_overflow_clip(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dom_path = root / "dom.json"
+            design_path = root / "设计解析.json"
+            output = root / "Page.kt"
+            dom_path.write_text(json.dumps({
+                "version": 1,
+                "nodes": [
+                    {"nodeId": "n0", "parentId": None, "tag": "document", "childrenIds": ["n1"]},
+                    {"nodeId": "n1", "parentId": "n0", "tag": "main", "childrenIds": ["n2"]},
+                    {"nodeId": "n2", "parentId": "n1", "tag": "div", "childrenIds": []},
+                ],
+                "resources": [],
+            }), encoding="utf-8")
+            design_path.write_text(json.dumps({
+                "设计根节点": {"nodeId": "n1", "边界": {"x": 0, "y": 0, "width": 50, "height": 50}},
+                "节点": [
+                    {"nodeId": "n1", "visible": True, "bounds": {"x": 0, "y": 0, "width": 50, "height": 50}, "style": {"overflow": "hidden", "backgroundColor": "rgb(0, 0, 255)"}},
+                    {"nodeId": "n2", "visible": True, "bounds": {"x": 0, "y": 60, "width": 20, "height": 10}, "style": {"backgroundColor": "red"}},
+                ],
+            }), encoding="utf-8")
+
+            GENERATOR.generate_compose(dom_path, design_path, output, "com.example")
+
+            self.assertNotIn("n2", output.read_text(encoding="utf-8"))
 
     def test_rejects_visible_pseudo_element_without_measured_bounds(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

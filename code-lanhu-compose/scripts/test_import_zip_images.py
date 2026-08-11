@@ -72,6 +72,19 @@ class ImportZipImagesContractTest(unittest.TestCase):
             self.assertEqual(second_root, extraction_root)
             self.assertEqual(second_images[0][1].read_bytes(), b"cached-content")
 
+    def test_extract_zip_ignores_explicit_root_directory_entry(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            archive = root / "design.zip"
+            with zipfile.ZipFile(archive, "w") as zipped:
+                zipped.writestr("./", b"")
+                zipped.writestr("images/a.png", b"image")
+
+            source_hash = IMPORT_IMAGES.md5_file(archive)
+            _, images = IMPORT_IMAGES.extract_zip(archive, source_hash, root / "project")
+
+            self.assertEqual([path.name for _, path in images], ["a.png"])
+
     def test_extract_zip_rejects_preexisting_symlink_parent(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

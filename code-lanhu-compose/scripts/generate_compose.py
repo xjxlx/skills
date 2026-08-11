@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 import re
+import struct
 from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 from urllib.parse import unquote, urlparse
@@ -277,16 +278,35 @@ def _image_records(
     return result
 
 
-def _background_record(style: dict[str, Any], records: list[dict[str, Any]]) -> dict[str, Any] | None:
+def _image_dimensions(path: Path) -> tuple[int, int] | None:
+    """读取 PNG 的固有尺寸，供等尺寸 repeat 背景的无损判定使用。"""
+    try:
+        with path.open("rb") as stream:
+            header = stream.read(24)
+    except OSError:
+        return None
+    if len(header) < 24 or header[:8] != b"\x89PNG\r\n\x1a\n" or header[12:16] != b"IHDR":
+        return None
+    width, height = struct.unpack(">II", header[16:24])
+    return (width, height) if width > 0 and height > 0 else None
+
+
+def _background_record(
+    style: dict[str, Any],
+    records: list[dict[str, Any]],
+    bounds: dict[str, float] | None = None,
+) -> dict[str, Any] | None:
     value = style.get("backgroundImage")
     if not isinstance(value, str) or value in {"", "none"}:
         return None
     repeat = str(style.get("backgroundRepeat", "")).strip().lower()
-    if repeat and repeat != "no-repeat":
+    if repeat and repeat not in {"no-repeat", "repeat"}:
         raise GenerationError(f"CSS background-repeat 暂无无损 Compose 映射：{repeat}")
     size = str(style.get("backgroundSize", "")).strip().lower()
-    if size and size not in {"cover", "contain", "100% 100%"}:
+    if size and size not in {"cover", "contain", "100% 100%"} and not (repeat == "repeat" and size == "auto") and _numeric_background(style) is None:
         raise GenerationError(f"CSS background-size 暂无无损 Compose 映射：{size}")
+    if repeat == "repeat" and (size != "auto" or bounds is None):
+        raise GenerationError("CSS background-repeat 只有等尺寸 auto 背景可无损映射")
     urls = [match.group(2) for match in _URL_PATTERN.finditer(value)]
     unparsed = _URL_PATTERN.sub("", value).strip(" ,\t\r\n")
     if len(urls) != 1 or unparsed:
@@ -294,6 +314,16 @@ def _background_record(style: dict[str, Any], records: list[dict[str, Any]]) -> 
     record = _record_for_source(urls[0], records)
     if record is None:
         raise GenerationError(f"CSS 背景图没有确定的 images.json 映射：{urls[0]}")
+    if repeat == "repeat":
+        extracted = record.get("extractedPath")
+        dimensions = _image_dimensions(Path(str(extracted))) if extracted else None
+        if size != "auto" or bounds is None or dimensions is None or any(
+            abs(actual - expected) > 0.5
+            for actual, expected in zip(dimensions, (bounds["width"], bounds["height"]), strict=True)
+        ):
+            raise GenerationError(
+                "CSS repeat 背景只有在固有位图尺寸与浏览器边界完全一致时才可无损映射"
+            )
     return record
 
 
@@ -455,6 +485,15 @@ def _content_scale(value: Any) -> str:
     return "ContentScale.FillBounds"
 
 
+def _numeric_background(style: dict[str, Any]) -> tuple[float, float, float, float] | None:
+    """解析可在裁剪容器中精确表达的数值背景尺寸与偏移。"""
+    size_match = re.fullmatch(r"\s*(-?(?:\d+(?:\.\d+)?|\.\d+))px\s+(-?(?:\d+(?:\.\d+)?|\.\d+))px\s*", str(style.get("backgroundSize", "")))
+    position_match = re.fullmatch(r"\s*(-?(?:\d+(?:\.\d+)?|\.\d+))px\s+(-?(?:\d+(?:\.\d+)?|\.\d+))px\s*", str(style.get("backgroundPosition", "")))
+    if size_match is None or position_match is None:
+        return None
+    return tuple(float(value) for value in (*size_match.groups(), *position_match.groups()))
+
+
 def _image_alignment(value: Any) -> str:
     """映射 CSS object/background-position；无法确定的长度值必须显式失败。"""
     raw = str(value or "50% 50%").strip().lower()
@@ -572,6 +611,42 @@ def _walk_dom(root: dict[str, Any], by_id: dict[str, dict[str, Any]]) -> Iterabl
             yield from _walk_dom(child, by_id)
 
 
+def _rect_fully_outside(rect: dict[str, float], clip: dict[str, float]) -> bool:
+    """判断矩形是否完全落在裁剪矩形之外。"""
+    tolerance = 0.5
+    return (
+        rect["x"] + rect["width"] <= clip["x"] + tolerance
+        or rect["x"] >= clip["x"] + clip["width"] - tolerance
+        or rect["y"] + rect["height"] <= clip["y"] + tolerance
+        or rect["y"] >= clip["y"] + clip["height"] - tolerance
+    )
+
+
+def _is_fully_clipped(
+    node_id: str,
+    rect: dict[str, float],
+    by_id: dict[str, dict[str, Any]],
+    layouts: dict[str, dict[str, Any]],
+    *,
+    include_node: bool = False,
+) -> bool:
+    """判断节点或文本片段是否完全位于任一 overflow 裁剪祖先之外。"""
+    current = by_id.get(node_id) if include_node else by_id.get(str(by_id.get(node_id, {}).get("parentId")))
+    while current is not None:
+        ancestor_id = current.get("nodeId")
+        layout = layouts.get(str(ancestor_id))
+        if layout is not None and layout.get("visible") is not False:
+            style = _style(layout)
+            overflow_x = str(style.get("overflowX", style.get("overflow", "visible"))).lower()
+            overflow_y = str(style.get("overflowY", style.get("overflow", "visible"))).lower()
+            if overflow_x in {"hidden", "clip"} or overflow_y in {"hidden", "clip"}:
+                ancestor_bounds = _bounds(layout)
+                if ancestor_bounds is not None and _rect_fully_outside(rect, ancestor_bounds):
+                    return True
+        current = by_id.get(str(current.get("parentId")))
+    return False
+
+
 def _validate_flattening_safety(
     root: dict[str, Any],
     by_id: dict[str, dict[str, Any]],
@@ -647,7 +722,8 @@ def _validate_flattening_safety(
             outside_y = child_bounds["y"] < ancestor_bounds["y"] - 0.5 or (
                 child_bounds["y"] + child_bounds["height"] > ancestor_bounds["y"] + ancestor_bounds["height"] + 0.5
             )
-            if (clips_x and outside_x) or (clips_y and outside_y):
+            fully_outside = _rect_fully_outside(child_bounds, ancestor_bounds)
+            if ((clips_x and outside_x) or (clips_y and outside_y)) and not fully_outside:
                 raise GenerationError(
                     f"父节点 {ancestor_id} 的 overflow 裁剪会截断子节点 {descendant_id}；"
                     "当前扁平 Compose 基线无法无损表达"
@@ -662,7 +738,8 @@ def _validate_flattening_safety(
             outside_y = run_bounds["y"] < ancestor_bounds["y"] - 0.5 or (
                 run_bounds["y"] + run_bounds["height"] > ancestor_bounds["y"] + ancestor_bounds["height"] + 0.5
             )
-            if (clips_x and outside_x) or (clips_y and outside_y):
+            fully_outside = _rect_fully_outside(run_bounds, ancestor_bounds)
+            if ((clips_x and outside_x) or (clips_y and outside_y)) and not fully_outside:
                 raise GenerationError(f"父节点 {ancestor_id} 的 overflow 裁剪会截断文本片段 {run.get('nodeId')}")
 
 
@@ -686,6 +763,37 @@ def _render_image(
         f"{indent}    contentScale = {scale},",
         f"{indent}    alignment = {alignment},",
         f"{indent})",
+    ]
+
+
+def _render_numeric_background(
+    record: dict[str, Any],
+    bounds: dict[str, float] | None,
+    style: dict[str, Any],
+    background: tuple[float, float, float, float],
+) -> list[str]:
+    """在节点边界裁剪容器中重放数值背景尺寸与偏移。"""
+    if bounds is None:
+        raise GenerationError("数值 CSS 背景缺少浏览器边界")
+    width, height, offset_x, offset_y = background
+    outer = _modifier(bounds, style, clip_shape="RoundedCornerShape(0.dp)")
+    inner = (
+        "Modifier"
+        f".offset(designDp({_format_float(offset_x)}, scaleX), designDp({_format_float(offset_y)}, scaleY))"
+        f".size(designDp({_format_float(width)}, scaleX), designDp({_format_float(height)}, scaleY))"
+    )
+    return [
+        "        Box(",
+        f"            modifier = {outer},",
+        "        ) {",
+        "            Image(",
+        f"                painter = painterResource(id = R.{_resource_namespace(record)}.{_android_resource_name(record)}),",
+        "                contentDescription = null,",
+        f"                modifier = {inner},",
+        "                contentScale = ContentScale.FillBounds,",
+        "                alignment = Alignment.TopStart,",
+        "            )",
+        "        }",
     ]
 
 
@@ -775,12 +883,16 @@ def _render_visual_tree(
             raise GenerationError(f"视觉 DOM 节点缺少浏览器布局证据：{node_id} ({tag})")
         if layout.get("visible") is False:
             continue
+        absolute_bounds = _bounds(layout)
+        if absolute_bounds is not None and _is_fully_clipped(node_id, absolute_bounds, by_id, layouts):
+            continue
         style = _style(layout)
         bounds = _relative_bounds(layout, root_bounds)
         shape = _shape(style)
         background = _strict_color(style.get("backgroundColor"), "background")
         border = _border(style)
-        background_image = _background_record(style, manifest_records)
+        background_image = _background_record(style, manifest_records, absolute_bounds)
+        numeric_background = _numeric_background(style)
         node_lines: list[str] = []
         standalone_border = border if background_image is None and tag != "img" else None
         if background or standalone_border:
@@ -793,19 +905,22 @@ def _render_visual_tree(
             counters["styledNodeCount"] += 1
         if background_image is not None:
             node_lines.append(f"        // {node_id}: CSS background-image")
-            node_lines.extend(
-                _render_image(
-                    background_image,
-                    bounds,
-                    style,
-                    None,
-                    _content_scale(style.get("backgroundSize")),
-                    shape,
-                    "        ",
-                    border=border if tag != "img" else None,
-                    alignment=_image_alignment(style.get("backgroundPosition")),
+            if numeric_background is not None:
+                node_lines.extend(_render_numeric_background(background_image, bounds, style, numeric_background))
+            else:
+                node_lines.extend(
+                    _render_image(
+                        background_image,
+                        bounds,
+                        style,
+                        None,
+                        _content_scale(style.get("backgroundSize")),
+                        shape,
+                        "        ",
+                        border=border if tag != "img" else None,
+                        alignment=_image_alignment(style.get("backgroundPosition")),
+                    )
                 )
-            )
             counters["backgroundImageCount"] += 1
             counters["styledNodeCount"] += 1
         if tag == "img":
@@ -841,6 +956,11 @@ def _render_visual_tree(
             sequence += 1
     for index, run in enumerate(text_runs):
         if run["hostNodeId"] not in allowed_node_ids:
+            continue
+        run_bounds = _bounds(run)
+        if run_bounds is not None and _is_fully_clipped(
+            run["hostNodeId"], run_bounds, by_id, layouts, include_node=True
+        ):
             continue
         style = _style(run)
         raw_text = str(run["text"])

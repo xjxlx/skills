@@ -103,6 +103,10 @@ def safe_entries(archive: ZipFile):
     seen: set[str] = set()
     total_size = 0
     for entry in archive.infolist():
+        raw_path = PurePosixPath(unicodedata.normalize("NFC", entry.filename.replace("\\", "/")))
+        if entry.is_dir() and raw_path == PurePosixPath("."):
+            # ZIP 导出工具常会显式写入根目录条目（例如 `./`），它不代表可解压文件。
+            continue
         path = normalized_zip_path(entry.filename)
         mode = (entry.external_attr >> 16) & 0o170000
         if path.is_absolute() or ".." in path.parts or mode == 0o120000:
