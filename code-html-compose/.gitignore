@@ -1,0 +1,6 @@
+.DS_Store
+scripts/node_modules/
+scripts/out/
+scripts/experience.md
+scripts/experience-rules.json
+*.log

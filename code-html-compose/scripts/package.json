@@ -1,0 +1,18 @@
+{
+  "name": "code-html-compose-tools",
+  "version": "1.0.0",
+  "private": true,
+  "description": "HTML 设计包到 Jetpack Compose 高保真基线的可复用工具脚本",
+  "scripts": {
+    "run": "node run.js",
+    "unzip": "node unzip-to-downloads.js",
+    "normalize": "node normalize.js",
+    "compare": "node compare.js",
+    "iterate": "node iterate.js",
+    "test": "node --test test/*.test.js"
+  },
+  "dependencies": {
+    "pngjs": "^7.0.0",
+    "puppeteer-core": "^25.8.0"
+  }
+}

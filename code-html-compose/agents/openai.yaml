@@ -1,0 +1,7 @@
+interface:
+  display_name: "HTML 转 Compose"
+  short_description: "把 HTML 设计包转为可量化验收的 Compose 基线"
+  default_prompt: "使用 $code-html-compose 将我提供的 HTML 设计包转换为可验证的 Jetpack Compose 基线。"
+
+policy:
+  allow_implicit_invocation: true
