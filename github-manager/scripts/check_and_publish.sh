@@ -78,6 +78,27 @@ for skill_dir in "$SKILLS_ROOT"/*/; do
   esac
 done
 
+# 目录被删除时不会进入上面的遍历；检查 hash 状态，确保删除也能触发统一仓库清理。
+if [[ -f "$HASHES_FILE" ]]; then
+  while IFS= read -r skill_name; do
+    [[ -n "$skill_name" ]] || continue
+    is_excluded "$skill_name" && continue
+    if [[ ! -d "$SKILLS_ROOT/$skill_name" ]]; then
+      CHANGED+=("$skill_name")
+      echo "检测到 skill 已删除: $skill_name"
+    fi
+  done < <(env -u PYTHONINSPECT python3 - "$HASHES_FILE" <<'PYEOF'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as handle:
+    state = json.load(handle)
+for name in sorted(state):
+    print(name)
+PYEOF
+  )
+fi
+
 if [[ ${#CHANGED[@]} -eq 0 ]]; then
   echo "全部个人 skill 均无变化，无需发布。"
   exit 0

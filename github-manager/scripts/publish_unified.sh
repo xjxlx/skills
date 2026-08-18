@@ -201,9 +201,25 @@ data.update({
 path.write_text(json.dumps(data, indent=2, ensure_ascii=False) + "\n", encoding="utf-8")
 PYEOF
 done
-for skill_name in "${UPDATED[@]}"; do
-  "$SCRIPT_DIR/save_hashes.sh" "$SKILLS_ROOT/$skill_name" "$HASHES_FILE"
-done
+if [[ ${#UPDATED[@]} -gt 0 ]]; then
+  for skill_name in "${UPDATED[@]}"; do
+    "$SCRIPT_DIR/save_hashes.sh" "$SKILLS_ROOT/$skill_name" "$HASHES_FILE"
+  done
+fi
+env -u PYTHONINSPECT python3 - "$HASHES_FILE" "${MANAGED[@]}" <<'PYEOF'
+import json
+import sys
+from pathlib import Path
+
+path = Path(sys.argv[1])
+try:
+    state = json.loads(path.read_text(encoding="utf-8"))
+except (FileNotFoundError, json.JSONDecodeError):
+    state = {}
+managed = set(sys.argv[2:])
+state = {name: values for name, values in state.items() if name in managed}
+path.write_text(json.dumps(state, indent=2, ensure_ascii=False, sort_keys=True) + "\n", encoding="utf-8")
+PYEOF
 
 echo "发布完成: https://github.com/$REPO_FULL"
 echo "提交: $COMMIT_SHA"
