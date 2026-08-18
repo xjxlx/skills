@@ -5,3 +5,4 @@ __pycache__/
 .github-published
 .allowlist
 .idea/
+android-cli/
