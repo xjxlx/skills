@@ -8,9 +8,9 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/github_network.sh"
 source "$SCRIPT_DIR/build_commit_message.sh"
 SKILLS_ROOT="$HOME/.codex/skills"
-UNIFIED_DIR="$SCRIPT_DIR/../codex-skills"
+UNIFIED_DIR="$SKILLS_ROOT"
 HASHES_FILE="$SCRIPT_DIR/../.hashes.json"
-REPO_NAME="codex-skills"
+REPO_NAME="skills"
 EXCLUDE=(".system" "android-cli")
 
 while [[ $# -gt 0 ]]; do
@@ -34,7 +34,12 @@ echo "目标目录: $UNIFIED_DIR"
 "$SCRIPT_DIR/scan_all.sh" "$SKILLS_ROOT"
 
 mkdir -p "$UNIFIED_DIR"
-if [[ ! -d "$UNIFIED_DIR/.git" ]]; then
+SOURCE_IS_REPO=0
+if [[ "$(cd "$SKILLS_ROOT" && pwd)" == "$(cd "$UNIFIED_DIR" && pwd)" ]]; then
+  SOURCE_IS_REPO=1
+fi
+
+if ! git -C "$UNIFIED_DIR" rev-parse --git-dir >/dev/null 2>&1; then
   git -C "$UNIFIED_DIR" init
   git -C "$UNIFIED_DIR" checkout -b main
 fi
@@ -76,20 +81,24 @@ for skill_dir in "$SKILLS_ROOT"/*/; do
   fi
 
   echo "同步: $skill_name"
-  mkdir -p "$UNIFIED_DIR/$skill_name"
-  RSYNC_EXCLUDES=(
-    --exclude='.git'
-    --exclude='.github-published'
-    --exclude='.hashes.json'
-    --exclude='.allowlist'
-    --exclude='.check-and-publish.lock'
-    --exclude='.DS_Store'
-    --exclude='__pycache__'
-  )
-  if [[ "$skill_name" == "github-manager" ]]; then
-    RSYNC_EXCLUDES+=(--exclude='codex-skills' --exclude='SKILLS_CATALOG.md')
+  if [[ "$SOURCE_IS_REPO" -eq 1 ]]; then
+    echo "使用外层 Git 仓库，不重复同步: $skill_name"
+  else
+    mkdir -p "$UNIFIED_DIR/$skill_name"
+    RSYNC_EXCLUDES=(
+      --exclude='.git'
+      --exclude='.github-published'
+      --exclude='.hashes.json'
+      --exclude='.allowlist'
+      --exclude='.check-and-publish.lock'
+      --exclude='.DS_Store'
+      --exclude='__pycache__'
+    )
+    if [[ "$skill_name" == "github-manager" ]]; then
+      RSYNC_EXCLUDES+=(--exclude='codex-skills' --exclude='SKILLS_CATALOG.md')
+    fi
+    rsync -a --delete "${RSYNC_EXCLUDES[@]}" "$skill_dir" "$UNIFIED_DIR/$skill_name/"
   fi
-  rsync -a --delete "${RSYNC_EXCLUDES[@]}" "$skill_dir" "$UNIFIED_DIR/$skill_name/"
   UPDATED+=("$skill_name")
 done
 
@@ -106,7 +115,9 @@ for target_dir in "$UNIFIED_DIR"/*/; do
     rm -rf "$target_dir"
   fi
 done
-rm -rf "$UNIFIED_DIR/android-cli"
+if [[ "$SOURCE_IS_REPO" -eq 0 ]]; then
+  rm -rf "$UNIFIED_DIR/android-cli"
+fi
 
 GITHUB_MANAGER_UNIFIED_REPO="$REPO_FULL" \
   "$SCRIPT_DIR/generate_catalog.sh" "$SKILLS_ROOT" "$UNIFIED_DIR/SKILLS_CATALOG.md"

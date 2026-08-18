@@ -6,8 +6,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 SKILLS_ROOT="$HOME/.codex/skills"
-REPO_DIR="$SCRIPT_DIR/../codex-skills"
-REPO_NAME="codex-skills"
+REPO_DIR="$SKILLS_ROOT"
+REPO_NAME="skills"
 HASHES_FILE="$SCRIPT_DIR/../.hashes.json"
 LOCK_DIR="$SCRIPT_DIR/../.check-and-publish.lock"
 EXCLUDE=(".system" "android-cli")

@@ -180,7 +180,7 @@ scripts/restore_skills.sh --all
 scripts/restore_skills.sh --all --force
 ```
 
-默认仓库为 `xjxlx/codex-skills`，默认目标为 `${CODEX_HOME:-$HOME/.codex}/skills`。
+默认仓库为 `xjxlx/skills`，默认目标为 `${CODEX_HOME:-$HOME/.codex}/skills`。
 已有目录默认拒绝覆盖；只有用户明确要求时才使用 `--force`。`android-cli` 和 `.system`
 不属于个人恢复集合。
 
@@ -190,10 +190,11 @@ scripts/restore_skills.sh --all --force
 
 ### 统一仓库模式（推荐）
 
-所有 skill 存放在一个 GitHub 仓库 `codex-skills` 中，每个 skill 为一个子目录。
+所有 skill 直接存放在 GitHub 仓库 `skills` 中，每个 skill 为一个子目录；本地外层
+`${CODEX_HOME:-$HOME/.codex}/skills` 同时作为安装目录和发布仓库，不再维护嵌套 Git 副本。
 
 ```
-codex-skills/
+skills/
 ├── README.md              # 总览文档
 ├── SKILLS_CATALOG.md      # 自动生成的目录文档
 ├── code-analyzer/

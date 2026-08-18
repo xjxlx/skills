@@ -9,7 +9,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 source "$SCRIPT_DIR/github_network.sh"
 
-REPO="xjxlx/codex-skills"
+REPO="xjxlx/skills"
 DEST="${CODEX_HOME:-$HOME/.codex}/skills"
 SKILL_NAME=""
 RESTORE_ALL=0
@@ -25,7 +25,7 @@ usage() {
 选项:
   --skill <name>  恢复单个 skill
   --all           恢复仓库中的全部个人 skill
-  --repo <repo>   GitHub 仓库，默认 xjxlx/codex-skills
+  --repo <repo>   GitHub 仓库，默认 xjxlx/skills
   --dest <dir>    目标 skills 目录，默认 ${CODEX_HOME:-$HOME/.codex}/skills
   --force         覆盖已存在的同名 skill
 EOF
