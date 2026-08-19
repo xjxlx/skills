@@ -1,0 +1,4 @@
+interface:
+  display_name: "code-lanhu-compose"
+  short_description: "用稳定 DOM 与浏览器 bounds 高保真生成蓝湖 Compose"
+  default_prompt: "使用 $code-lanhu-compose 解析蓝湖 ZIP，以稳定 nodeId、浏览器最终 bounds 和资源清单生成当前 Android 项目的 Compose 视觉基线，并完成编译与截图差异校验。"
