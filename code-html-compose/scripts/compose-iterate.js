@@ -16,7 +16,7 @@
  *   - 局部抽查：对若干关键元素区块裁剪设计稿与 Compose 截图做像素对比，通过率默认 80%
  *     （VALIDATE_SPOT_PASS），区块平均色差阈值 0.18（VALIDATE_SPOT_DIST）。
  *
- * 前置：AVD 名 K80、adb 序列 emulator-5554（物理 1334x750 @320dpi，与设计稿 @2x 一致）、模拟器已启动。
+ * 前置：目标模拟器已启动；ADB 目标由 ADB_SERIAL 配置，验收尺寸从当前 semantic.json 动态读取。
  * 用法：node compose-iterate.js [DESIGN_DIR]
  */
 const { execSync } = require('child_process');

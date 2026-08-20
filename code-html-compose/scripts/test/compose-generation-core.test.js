@@ -2,6 +2,8 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
+  buildResponsivePageRoot,
+  calculateFitDensity,
   convertSemanticToDp,
   buildBoxDecorationModifier,
   buildCroppedBackgroundModifier,
@@ -13,6 +15,30 @@ const {
   orderVisualElements,
   shouldFillRootBackground,
 } = require('../compose-generation-core');
+
+test('运行时适配必须使用当前设计尺寸并按较小比例完整显示', () => {
+  assert.equal(calculateFitDensity({
+    containerWidthPx: 2880,
+    containerHeightPx: 1680,
+    designWidthDp: 800,
+    designHeightDp: 360,
+  }), 3.6);
+
+  const source = buildResponsivePageRoot({
+    pageName: 'SamplePage',
+    designWidthDp: 800,
+    designHeightDp: 360,
+    rootBackgroundColor: 'Color.White',
+    backgroundCode: '        SampleBackground()',
+    contentCode: '        SampleContent()',
+  });
+
+  assert.match(source, /windowWidthPx \/ 800f/);
+  assert.match(source, /windowHeightPx \/ 360f/);
+  assert.match(source, /contentAlignment = Alignment\.Center/);
+  assert.match(source, /requiredSize\(width = 800\.dp, height = 360\.dp\)/);
+  assert.doesNotMatch(source, /Density\(density = 2f/);
+});
 
 test('px 转 dp 必须保留半像素逻辑精度', () => {
   const semantic = {

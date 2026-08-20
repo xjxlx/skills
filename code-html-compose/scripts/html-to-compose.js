@@ -12,14 +12,14 @@
  *   - 设计图 png 复制到 app res 目录（mipmap-xhdpi），并引用为 R.mipmap.*
  *
  * 布局策略（准确性优先）：
- *   - 设计稿逻辑 667x375（dp），蓝湖导出 HTML 实际像素为 1334x750（@2x）。
- *     元素坐标在 main() 中用 DP_PER_PX 换算为逻辑 dp 后生成。
- *   - 根容器为 Box(fillMaxSize)，直铺 667x375dp，不再用 graphicsLayer 等比缩放
- *     （目标模拟器物理 1334x750 @320dpi → 逻辑 667x375dp，与设计稿一一对应，渲染 px = 设计 px）。
+ *   - 当前设计稿的实际像素尺寸动态取自 semantic.json，元素坐标在 main() 中用 DP_PER_PX
+ *     换算为逻辑 dp 后生成，禁止套用历史设计稿尺寸。
+ *   - 根容器以当前设计稿逻辑宽高作为固定画布；运行时按窗口宽高的较小比例动态设置局部 Density，
+ *     居中完整显示，不拉伸、不裁切，也不使用 graphicsLayer 掩盖基线几何误差。
  *   - 每个视觉元素直接相对根 Box 用 padding(start, top) 定位，保留 0.5dp 精度。
  *   - 每个视觉元素打 Modifier.testTag("e<domIndex>")，并记录被后层完整覆盖的不可观测节点。
- *   - 全屏根背景图用 ImageItem(ImageParameter(data=R.mipmap.*, modifier=Modifier.fillMaxSize(),
- *     contentScale=ContentScale.FillBounds))，铺满全屏。
+ *   - 设计画布根背景图用 ImageItem(ImageParameter(data=R.mipmap.*, modifier=Modifier.fillMaxSize(),
+ *     contentScale=ContentScale.FillBounds))，只铺满固定逻辑画布。
  *
  * Major 约束（方法过大）：元素过多时把每个顶层 root 拆成独立 private fun Test1PageSection<k>()
  * Composable，根函数按序调用，避免单个方法字节码超 64KB（MethodTooLargeException）。
@@ -29,6 +29,7 @@ const path = require('path');
 const {
   buildBoxDecorationModifier,
   buildCroppedBackgroundModifier,
+  buildResponsivePageRoot,
   convertSemanticToDp,
   deriveBackgroundImageGeometry,
   deriveTextRenderMetrics,
@@ -1397,7 +1398,7 @@ function genTest1Page(semantic, imgMap, ruleState) {
     const res = resolveResName(bg, imgMap);
     if (res) {
       bgCode =
-        `        // 根布局背景图：铺满全屏\n` +
+        `        // 根布局背景图：仅铺满当前设计画布\n` +
         `        ImageItem(\n` +
         `            parameter = ImageParameter(\n` +
         `                data = R.mipmap.${res},\n` +
@@ -1475,12 +1476,22 @@ function genTest1Page(semantic, imgMap, ruleState) {
   const calls = roots.map((r) => genNode(r, ROOT_RECT, ctx)).filter(Boolean);
   const callsStr = calls.join('\n');
   const sectionsCode = comps.join('\n');
+  const responsivePageRoot = buildResponsivePageRoot({
+    pageName: PAGE_NAME,
+    designWidthDp: DESIGN_W,
+    designHeightDp: DESIGN_H,
+    rootBackgroundColor: rootBgColor,
+    backgroundCode: bgCode,
+    contentCode: callsStr,
+  });
 
   return `package ${KOTLIN_PACKAGE}
 
+import android.annotation.SuppressLint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -1507,6 +1518,7 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1531,28 +1543,22 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
+import kotlin.math.min
 ${IMAGE_IMPORTS}
 ${R_IMPORT}
 
 /**
- * 由设计稿（${DESIGN_W}x${DESIGN_H}）经 code-html-compose 高保真基线生成的 Compose 布局。
+ * 由当前设计稿（逻辑画布 ${DESIGN_W}x${DESIGN_H}dp）经 code-html-compose 高保真基线生成的 Compose 布局。
  * 布局策略：
  *  - 以语义树为真源，先逐元素生成可验证基线；基线通过后才允许单独做语义化重构。
- *  - 目标模拟器物理 1334x750 @320dpi（逻辑 667x375dp），渲染 px 与设计稿 px 一一对应。
+ *  - 像素级验收尺寸取自当前 semantic.json；运行时按窗口宽高较小比例居中适配，不拉伸、不裁切。
  *  - 元素定位不使用 offset；所有视觉元素直接相对根 Box 使用 padding 定位并保留 0.5dp 精度。
  *  - 每个视觉元素带 Modifier.testTag("e<domIndex>")，供 compose-validate.js 完整边界校验。
- *  - 根背景图用 fillMaxSize 铺满全屏。
+ *  - 根背景图只铺满设计画布；不同宽高比窗口允许出现居中留白。
  */
-@OptIn(ExperimentalComposeUiApi::class, ExperimentalTextApi::class)
-@Preview(widthDp = ${DESIGN_W}, heightDp = ${DESIGN_H}, showBackground = true)
-@Composable
-fun ${PAGE_NAME}() {
-    Box(modifier = Modifier.fillMaxSize()${rootBgColor ? `.background(${rootBgColor})` : ''}.semantics { testTagsAsResourceId = true }) {
-${bgCode}
-${callsStr}
-    }
-}
+${responsivePageRoot}
 
 /**
  * FittedSingleLineText：单行文本按设计稿宽度等比缩放（nowrap 数字/短标签用）。

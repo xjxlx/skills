@@ -12,7 +12,9 @@
 
 ## Compose 基线
 
-- 根布局使用 `Box(fillMaxSize())`，元素按语义树坐标使用 `padding(start, top)` 定位，禁止用 `offset` 或整页缩放掩盖误差。
+- 像素级验收宽高必须取当前 `semantic.json` 的 `designW/designH`；不得固定为某一版设计稿尺寸。识别失败时显式设置 `DESIGN_WIDTH` 与 `DESIGN_HEIGHT`，不能静默回退。
+- 元素位于由当前设计尺寸和 `DP_PER_PX` 推导出的固定逻辑画布内，按语义树坐标使用 `padding(start, top)` 定位；禁止用 `offset`、修改源坐标或 `graphicsLayer` 整页缩放掩盖基线误差。
+- 页面入口使用 `BoxWithConstraints` 获取窗口物理宽高，以 `min(窗口宽/设计逻辑宽, 窗口高/设计逻辑高)` 生成局部 `Density`，再居中承载固定逻辑画布。不同宽高比允许留白，不能分别缩放宽高，也不能裁切画布。
 - 坐标、尺寸、字号、行高和圆角按 `DP_PER_PX` 换算，保留半 dp/sp 精度。
 - 背景图、裁切背景、圆角阴影、文字基线和单行文字缩放由生成器统一处理。
 - 元素较多时拆分私有 Composable，避免单方法字节码超过 64KB。

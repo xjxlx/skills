@@ -9,6 +9,7 @@ const puppeteer = require('puppeteer-core');
 const fs = require('fs');
 const path = require('path');
 const { CHROME_BIN, DESIGN_DIR, TOOL_OUTPUT_DIR, requiredSetting } = require('./config');
+const { detectDesignSize } = require('./design-size');
 
 const CHROME = CHROME_BIN;
 const BASE = requiredSetting('DESIGN_DIR', DESIGN_DIR);
@@ -20,31 +21,16 @@ const SRC_HTML = (() => {
 const NORMALIZED_HTML = path.join(BASE, 'normalized.html');
 const OUT_DIR = TOOL_OUTPUT_DIR;
 
-// 动态检测设计稿尺寸：优先解析 css 中 .page 块的 width/height（排除 rem/response 变体），
-// 其次解析目录名 lanhu_WxH，最后回退 1334x750。避免硬编码视口与设计稿不匹配导致坐标偏移。
-function detectDesignSize(dir) {
-  const cssFiles = [];
-  try {
-    for (const f of fs.readdirSync(dir)) {
-      if (f.endsWith('.css') && !/(\.rem|\.response)\.css$/.test(f)) cssFiles.push(f);
-    }
-  } catch (e) {}
-  for (const f of cssFiles) {
-    let css;
-    try { css = fs.readFileSync(path.join(dir, f), 'utf8'); } catch (e) { continue; }
-    const block = css.match(/\.page\s*\{[^}]*\}/);
-    if (block) {
-      const wm = block[0].match(/width:\s*([\d.]+)px/);
-      const hm = block[0].match(/height:\s*([\d.]+)px/);
-      if (wm && hm) return { w: Math.round(+wm[1]), h: Math.round(+hm[1]) };
-    }
-  }
-  const dm = path.basename(dir).match(/(\d+)x(\d+)/);
-  if (dm) return { w: +dm[1], h: +dm[2] };
-  return { w: 1334, h: 750 };
-}
-const { w: VIEW_W, h: VIEW_H } = detectDesignSize(BASE);
-console.log(`设计稿尺寸：${VIEW_W}x${VIEW_H}`);
+// 尺寸必须来自当前设计包；无法自动识别时允许调用方成对显式指定，禁止静默套用历史尺寸。
+const {
+  w: VIEW_W,
+  h: VIEW_H,
+  source: DESIGN_SIZE_SOURCE,
+} = detectDesignSize(BASE, {
+  width: process.env.DESIGN_WIDTH,
+  height: process.env.DESIGN_HEIGHT,
+});
+console.log(`设计稿尺寸：${VIEW_W}x${VIEW_H}（${DESIGN_SIZE_SOURCE}）`);
 
 // z-index 策略：默认 DOM 顺序（文本最高层）。可选 'legacy' 恢复“背景图整体抬升”的旧策略。
 const Z_STRATEGY = process.env.Z_STRATEGY || 'dom';

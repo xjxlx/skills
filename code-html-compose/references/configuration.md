@@ -33,6 +33,7 @@ export COMPOSE_ACTIVITY="com.example.app/.MainActivity"
 | 变量 | 默认值 | 用途 |
 |---|---|---|
 | `DESIGN_DIR` | 一键流程自动传入 | 直接包含 `index.html` 的解压设计目录 |
+| `DESIGN_WIDTH` / `DESIGN_HEIGHT` | 自动识别 | 仅在 CSS 与目录名均无法识别尺寸时成对指定当前设计稿像素宽高；禁止只设一个 |
 | `CODE_HTML_COMPOSE_WORK_DIR` | `<PROJECT_ROOT>/.code-html-compose` | 自定义运行产物目录 |
 | `PAGE_NAME` | `Test1Page` | 生成的 Kotlin 文件和 Composable 名 |
 | `DP_PER_PX` | `0.5` | 设计 px 转 dp；@1x 设计图设为 `1` |
@@ -41,6 +42,8 @@ export COMPOSE_ACTIVITY="com.example.app/.MainActivity"
 | `CHROME_BIN` | macOS Chrome 路径 | Puppeteer 使用的 Chrome 可执行文件 |
 | `VALIDATE_STRUCT_PASS` | `0.95` | 结构通过率阈值 |
 | `VALIDATE_SPOT_PASS` | `0.8` | 局部抽查通过率阈值 |
+
+设计稿尺寸优先从当前设计目录普通 CSS 的 `.page` 像素宽高读取，其次读取目录名中的 `宽x高`。无法识别时流程直接失败，不会回退到某个历史设计稿尺寸。
 
 ## 常用命令
 

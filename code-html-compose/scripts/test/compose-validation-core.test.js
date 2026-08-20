@@ -85,8 +85,8 @@ test('设计基准与原始截图差异过大时必须判为无效', () => {
 });
 
 test('原始设计截图尺寸必须与语义树一致', () => {
-  assert.equal(evaluateReferenceDimensions({ width: 1334, height: 750 }, 1334, 750).valid, true);
-  assert.equal(evaluateReferenceDimensions({ width: 750, height: 1334 }, 1334, 750).valid, false);
+  assert.equal(evaluateReferenceDimensions({ width: 1600, height: 720 }, 1600, 720).valid, true);
+  assert.equal(evaluateReferenceDimensions({ width: 720, height: 1600 }, 1600, 720).valid, false);
 });
 
 test('结构或抽查失败时总验收不能通过', () => {

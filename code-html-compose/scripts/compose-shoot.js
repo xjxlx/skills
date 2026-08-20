@@ -4,14 +4,11 @@
  * 流程：
  *   1. 用 adb 启动目标 Activity（默认 ReportHomeV3Activity，承载 Test1Page）
  *   2. 等待渲染完成后 adb 截图（横屏，无状态栏/导航栏）
- *   3. 把截图双线性缩放到设计稿尺寸（默认 1334x750，与 normalized.png 对齐）
+ *   3. 把截图双线性缩放到当前 semantic.json 的设计稿尺寸，与 normalized.png 对齐
  *   4. 复用 compare.js 的像素对比逻辑，逐像素计算相似度
  *   5. 生成 diff 图（左=设计稿 中=Compose 右=差异高亮）与报告，输出到 run-<时间戳>/
  *
- * 前置：
- *   - AVD 名称 375，adb 序列 emulator-5554（物理 1334x750 @320dpi，与设计稿 @2x 完全一致）
- *   - 模拟器已横屏（adb shell settings put system user_rotation 1）
- *   - app 已安装并编译
+ * 前置：目标模拟器已启动，app 已安装并编译；ADB 目标由 ADB_SERIAL 配置。
  *
  * 用法：node compose-shoot.js [activityComponent]
  */
@@ -28,13 +25,19 @@ const {
 } = require('./config');
 
 const INPUT_DIR = TOOL_OUTPUT_DIR;
+const SEMANTIC = path.join(INPUT_DIR, 'semantic.json');
 const DESIGN_PNG = path.join(INPUT_DIR, 'normalized.png'); // 设计稿截图（new.html）
 const SHOT = path.join(INPUT_DIR, 'compose-shot.png'); // Compose 截图
 const ACTIVITY = process.argv[2] || requiredSetting('COMPOSE_ACTIVITY', COMPOSE_ACTIVITY);
 
-// 设计稿尺寸（Compose 截图缩放对齐到该尺寸再对比）
-const DESIGN_W = 1334;
-const DESIGN_H = 750;
+if (!fs.existsSync(SEMANTIC)) {
+  throw new Error(`语义树不存在：${SEMANTIC}。请先运行 normalize.js。`);
+}
+const semantic = JSON.parse(fs.readFileSync(SEMANTIC, 'utf8'));
+const DESIGN_W = semantic.designW;
+const DESIGN_H = semantic.designH;
+const DP_PER_PX = parseFloat(process.env.DP_PER_PX || '0.5');
+const PX_SCALE = DP_PER_PX * 2;
 
 // Compose 阶段 PASS 阈值（跨渲染器对比，默认 0.95，可用 COMPOSE_PASS 覆盖）。
 // 与 HTML 阶段（同渲染器 99.95%）不同：Chrome 设计稿 vs 模拟器截图带字体/抗锯齿/密度噪声。
@@ -124,10 +127,9 @@ function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
 
   console.log(`步骤 10.1：启动 Activity ${ACTIVITY}`);
-  // 恢复自然分辨率（清除 1334x750 的 override，避免横屏被错误按竖屏渲染导致缩放错乱）
-  execSync(`${ADB} shell wm size reset`, { shell: true });
-  // 375 模拟器为原生横屏（1334x750），旋转 0 即横屏，与设计稿方向一致。
-  // 注意：不能设 user_rotation=1（会把原生横屏设备转成竖屏 750x1334，导致布局压缩变形）。
+  // 验收窗口动态取当前设计稿尺寸；@1x 设计稿在 320dpi 下使用 2 倍物理像素。
+  execSync(`${ADB} shell wm size ${Math.round(DESIGN_W * PX_SCALE)}x${Math.round(DESIGN_H * PX_SCALE)}`, { shell: true });
+  execSync(`${ADB} shell wm density 320`, { shell: true });
   execSync(`${ADB} shell settings put system accelerometer_rotation 0`, { shell: true });
   execSync(`${ADB} shell settings put system user_rotation 0`, { shell: true });
   // 沉浸全屏：隐藏系统状态栏/导航栏，保证截图 = 纯内容区域（避免系统 UI 挤入导致整体偏移）

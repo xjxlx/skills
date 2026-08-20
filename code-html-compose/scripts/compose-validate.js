@@ -7,7 +7,7 @@
  *   2. 局部抽查：对文本和关键元素区域，裁剪原始 HTML 截图(original.png)与 Compose 截图做像素对比，
  *      用平均色差判定该区块是否渲染正确（容忍跨渲染器噪声）。
  *
- * 前置：目标模拟器物理 1334x750 @320dpi（逻辑 667x375dp），渲染 px == 设计稿 px，无需缩放。
+ * 前置：目标模拟器已启动；脚本会按当前 semantic.json 和 DP_PER_PX 设置验收窗口与密度。
  * 用法：node compose-validate.js [activityComponent]
  * 输出：tools/out/compose-structure-report.json + .code-html-compose/compose-run-<ts>/ 对比图
  */
@@ -98,8 +98,7 @@ function rotate90(img) {
 }
 
 function launch(designW, designH) {
-  // 把物理分辨率设成 designW×designH 的物理尺寸（semantic css px × PX_SCALE），density 固定 320，
-  // 使逻辑 dp = 物理 / 2 = designW×designH（与 Compose 生成的空间一致，@1x 时 PX_SCALE=2）。
+  // 物理分辨率始终从当前 semantic 尺寸推导，density 固定 320；禁止套用历史设计稿宽高。
   execSync(`${ADB} shell wm size ${Math.round(designW * PX_SCALE)}x${Math.round(designH * PX_SCALE)}`, { shell: true });
   execSync(`${ADB} shell wm density 320`, { shell: true });
   execSync(`${ADB} shell settings put system accelerometer_rotation 0`, { shell: true });
