@@ -12,10 +12,10 @@
 
 ## Compose 基线
 
-- 像素级验收宽高必须取当前 `semantic.json` 的 `designW/designH`；不得固定为某一版设计稿尺寸。识别失败时显式设置 `DESIGN_WIDTH` 与 `DESIGN_HEIGHT`，不能静默回退。
-- 元素位于由当前设计尺寸和 `DP_PER_PX` 推导出的固定逻辑画布内，按语义树坐标使用 `padding(start, top)` 定位；禁止用 `offset`、修改源坐标或 `graphicsLayer` 整页缩放掩盖基线误差。
+- 像素级验收宽高固定为 `semantic.designW=1334`、`semantic.designH=750`；设计包尺寸不一致时直接失败，禁止通过 `DESIGN_WIDTH` 与 `DESIGN_HEIGHT` 覆盖。
+- 元素位于由固定设计尺寸和 `DP_PER_PX=0.5` 推导出的逻辑画布内，按语义树坐标使用 `padding(start, top)` 定位；禁止用 `offset`、修改源坐标或 `graphicsLayer` 整页缩放掩盖基线误差。
 - 页面入口使用 `BoxWithConstraints` 获取窗口物理宽高，以 `min(窗口宽/设计逻辑宽, 窗口高/设计逻辑高)` 生成局部 `Density`，再居中承载固定逻辑画布。不同宽高比允许留白，不能分别缩放宽高，也不能裁切画布。
-- 坐标、尺寸、字号、行高和圆角按 `DP_PER_PX` 换算，保留半 dp/sp 精度。
+- 坐标、尺寸、字号、行高和圆角固定按 `DP_PER_PX=0.5` 换算，保留半 dp/sp 精度；HTML `1334×750` 与 Android `375×667dp` 的轴向对应关系为 `1334↔667`、`750↔375`。
 - 背景图、裁切背景、圆角阴影、文字基线和单行文字缩放由生成器统一处理。
 - 元素较多时拆分私有 Composable，避免单方法字节码超过 64KB。
 - 重复且几何一致的卡片或文本项识别为列表；卡片专属内容必须留在 item 内，宿主视口必须裁切。

@@ -33,17 +33,17 @@ export COMPOSE_ACTIVITY="com.example.app/.MainActivity"
 | 变量 | 默认值 | 用途 |
 |---|---|---|
 | `DESIGN_DIR` | 一键流程自动传入 | 直接包含 `index.html` 的解压设计目录 |
-| `DESIGN_WIDTH` / `DESIGN_HEIGHT` | 自动识别 | 仅在 CSS 与目录名均无法识别尺寸时成对指定当前设计稿像素宽高；禁止只设一个 |
+| `DESIGN_WIDTH` / `DESIGN_HEIGHT` | 禁止设置 | 本技能固定使用 `1334 × 750`；尺寸不匹配时应停止并报告，不得覆盖基准 |
 | `CODE_HTML_COMPOSE_WORK_DIR` | `<PROJECT_ROOT>/.code-html-compose` | 自定义运行产物目录 |
 | `PAGE_NAME` | `Test1Page` | 生成的 Kotlin 文件和 Composable 名 |
-| `DP_PER_PX` | `0.5` | 设计 px 转 dp；@1x 设计图设为 `1` |
+| `DP_PER_PX` | `0.5` | 固定按 2 倍 HTML 设计稿换算 Android dp；不得改为其他倍率 |
 | `APK_PATH` | `app/build/outputs/apk/debug/app-debug.apk` | 待安装 APK 路径 |
 | `ADB_SERIAL` | `emulator-5554` | 模拟器序列号 |
 | `CHROME_BIN` | macOS Chrome 路径 | Puppeteer 使用的 Chrome 可执行文件 |
 | `VALIDATE_STRUCT_PASS` | `0.95` | 结构通过率阈值 |
 | `VALIDATE_SPOT_PASS` | `0.8` | 局部抽查通过率阈值 |
 
-设计稿尺寸优先从当前设计目录普通 CSS 的 `.page` 像素宽高读取，其次读取目录名中的 `宽x高`。无法识别时流程直接失败，不会回退到某个历史设计稿尺寸。
+设计稿必须校验为 `1334px × 750px`。不得从 CSS、目录名或其他来源推断并替换尺寸；校验不一致时流程直接失败。
 
 ## 常用命令
 
