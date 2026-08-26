@@ -49,6 +49,7 @@ const {
   findTitleForGroup,
   inferComponentName,
   matchSlot,
+  summarizeListGeometry,
 } = require('./compose-list-core');
 const {
   collectExclusiveSlots,
@@ -788,14 +789,11 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
     return null;
   }
 
-  // 高度一致性守卫：相似卡片要求各卡同高（≤2dp 即 4px）。若卡片高度参差
-  // （如"今日已读"两行卡高 169/156px、且槽位文本宽度也不同），强行归一并嵌套进
-  // 分区会被分区 clipToBounds 裁剪底部、并损失逐卡几何精度。此时回退为逐元素基线渲染，
-  // 每张卡按其精确 rect 定位，既不裁切也不失真。
-  const hMin = Math.min(...group.map((c) => c.rect.h));
-  const hMax = Math.max(...group.map((c) => c.rect.h));
-  if (hMax - hMin > 4) {
-    console.log(`  跳过列表组「${baseName || '未命名'}」：卡片高度不统一（${hMin}-${hMax}px），回退为基线渲染`);
+  // 列表几何守卫只比较完整卡片的外框。最后一个条目若落在设计稿右边界之外，
+  // 其可见宽度会变小，但这属于宿主视口裁切，不应否定前面完整条目的列表语义。
+  const listGeometry = summarizeListGeometry(group);
+  if (group.length >= 3 && !listGeometry.isList) {
+    console.log(`  跳过列表组「${baseName || '未命名'}」：完整卡片外框尺寸差异超过容差，回退为基线渲染`);
     return null;
   }
 

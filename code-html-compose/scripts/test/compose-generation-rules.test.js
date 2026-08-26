@@ -3,6 +3,7 @@ const {
   normalizeListGeometry,
 } = require('../compose-generation-rules');
 const {
+  summarizeListGeometry,
   detectRepeatedTextGroups,
 } = require('../compose-list-core');
 
@@ -45,6 +46,19 @@ function testRepeatedTextItemsBecomeListCandidate() {
   assert.deepStrictEqual(result[0].items.map((item) => item.text), ['01', '02', '03']);
 }
 
+function testUniformCardGeometryIgnoresClippedTail() {
+  const fullItems = [0, 1, 2, 3].map((index) => ({
+    rect: { x: 10 + index * 132, y: 52, w: 124 + (index === 1 ? 1 : 0), h: 240 },
+  }));
+  const clippedTail = { rect: { x: 538, y: 52, w: 19, h: 240 } };
+  const result = summarizeListGeometry([...fullItems, clippedTail]);
+  assert.strictEqual(result.isList, true);
+  assert.strictEqual(result.axis, 'horizontal');
+  assert.strictEqual(result.fullItems.length, 4);
+  assert.strictEqual(result.clippedTailItems.length, 1);
+}
+
 testUniformGeometry();
 testRepeatedTextItemsBecomeListCandidate();
+testUniformCardGeometryIgnoresClippedTail();
 console.log('compose-generation-rules smoke test: PASS');

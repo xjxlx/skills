@@ -9,9 +9,55 @@
  * 而不是逐卡生成 N 份几乎相同的硬编码 Composable。
  */
 
-// 两个卡片尺寸是否相似（差值 ≤2dp）
+// 两个卡片尺寸是否相似（语义树单位为设计稿 px；允许 1dp/2px 内的栅格误差）
 function sizeSimilar(a, b) {
   return Math.abs(a.rect.w - b.rect.w) <= 2 && Math.abs(a.rect.h - b.rect.h) <= 2;
+}
+
+/**
+ * 按卡片外框判断列表几何，不把尾部被视口裁切的卡片当成尺寸异常。
+ *
+ * fullItems 是有足够可见宽度的完整卡片；clippedTailItems 是高度、轴向和位置
+ * 连续，但宽度被右侧视口裁掉的尾项。列表判定只要求至少 3 个完整卡片的外框
+ * 宽高在容差内，卡片内部的标题、按钮、锁定图标等状态差异不参与几何判定。
+ */
+function summarizeListGeometry(group, tolerancePx = 2) {
+  if (!Array.isArray(group) || group.length < 3) {
+    return { isList: false, fullItems: [], clippedTailItems: [] };
+  }
+  const fullItems = group.filter((item) => item?.rect && item.rect.w >= 60 && item.rect.h >= 60);
+  if (fullItems.length < 3) {
+    return { isList: false, fullItems, clippedTailItems: [] };
+  }
+
+  const widths = fullItems.map((item) => item.rect.w);
+  const heights = fullItems.map((item) => item.rect.h);
+  const widthRange = Math.max(...widths) - Math.min(...widths);
+  const heightRange = Math.max(...heights) - Math.min(...heights);
+  const yRange = Math.max(...fullItems.map((item) => item.rect.y)) - Math.min(...fullItems.map((item) => item.rect.y));
+  const xRange = Math.max(...fullItems.map((item) => item.rect.x)) - Math.min(...fullItems.map((item) => item.rect.x));
+  const axis = xRange >= yRange ? 'horizontal' : 'vertical';
+  const ordered = [...fullItems].sort((a, b) => (
+    axis === 'horizontal' ? a.rect.x - b.rect.x : a.rect.y - b.rect.y
+  ));
+  const base = ordered[ordered.length - 1];
+  const clippedTailItems = group.filter((item) => {
+    if (fullItems.includes(item) || !item?.rect) return false;
+    const sameHeight = Math.abs(item.rect.h - base.rect.h) <= tolerancePx;
+    const afterBase = axis === 'horizontal'
+      ? item.rect.x >= base.rect.x + base.rect.w - tolerancePx
+      : item.rect.y >= base.rect.y + base.rect.h - tolerancePx;
+    return sameHeight && afterBase;
+  });
+
+  return {
+    isList: widthRange <= tolerancePx && heightRange <= tolerancePx,
+    axis,
+    fullItems,
+    clippedTailItems,
+    widthRange,
+    heightRange,
+  };
 }
 
 // 是否"卡片级"元素：面积足够大、带背景图/图片
@@ -551,5 +597,6 @@ module.exports = {
   isCardLike,
   isSimilarCard,
   matchSlot,
+  summarizeListGeometry,
   sizeSimilar,
 };
