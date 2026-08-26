@@ -1132,6 +1132,7 @@ ${itemInit},
 private fun ${itemName}(item: ${itemDataType}) {
     Box(
         modifier = Modifier
+            .testTag("e" + item.tag)
             .size(item.w.dp, item.h.dp)
             .clip(RoundedCornerShape(item.radius.dp))
             .background(Color(item.backgroundColorArgb), RoundedCornerShape(item.radius.dp)),
