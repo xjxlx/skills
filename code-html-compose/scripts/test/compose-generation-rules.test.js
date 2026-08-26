@@ -5,6 +5,7 @@ const {
 const {
   summarizeListGeometry,
   detectRepeatedTextGroups,
+  includeClippedTailItems,
 } = require('../compose-list-core');
 
 function testUniformGeometry() {
@@ -58,7 +59,29 @@ function testUniformCardGeometryIgnoresClippedTail() {
   assert.strictEqual(result.clippedTailItems.length, 1);
 }
 
+function testClippedTailBecomesFullListItem() {
+  const surface = { bgColor: 'rgb(245, 247, 250)', borderRadius: '32px' };
+  const fullItems = [0, 1, 2, 3].map((index) => ({
+    domIndex: 32 + index,
+    role: 'box',
+    rect: { x: 219 + index * 264, y: 256, w: 248, h: 480 },
+    style: surface,
+  }));
+  const clippedTail = {
+    domIndex: 56,
+    role: 'box',
+    rect: { x: 1275, y: 256, w: 38, h: 480 },
+    style: surface,
+  };
+  const result = includeClippedTailItems(fullItems, [...fullItems, clippedTail]);
+  assert.strictEqual(result.length, 5);
+  assert.strictEqual(result[4].domIndex, 56);
+  assert.strictEqual(result[4].rect.w, 248);
+  assert.strictEqual(result[4].visibleRect.w, 38);
+}
+
 testUniformGeometry();
 testRepeatedTextItemsBecomeListCandidate();
 testUniformCardGeometryIgnoresClippedTail();
+testClippedTailBecomesFullListItem();
 console.log('compose-generation-rules smoke test: PASS');

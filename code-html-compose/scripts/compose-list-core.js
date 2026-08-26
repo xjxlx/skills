@@ -162,6 +162,59 @@ function detectCardGroups(elements) {
   return groups.filter((_, i) => !dropped.has(i));
 }
 
+// 将视口右侧只露出一部分的同类卡片提升为“完整 item 数据”。
+// 设计稿通常只导出可见矩形，但 Compose 列表需要完整 item 的尺寸和槽位；
+// 因此保留 visibleRect 作为视口裁切依据，同时把 rect 补齐为前面完整卡片的尺寸。
+function includeClippedTailItems(group, elements, tolerancePx = 2) {
+  if (!Array.isArray(group) || !Array.isArray(elements) || group.length < 3) return group;
+  const fullItems = group.filter((item) => item?.rect && item.rect.w >= 60 && item.rect.h >= 60);
+  if (fullItems.length < 3) return group;
+
+  const xRange = Math.max(...fullItems.map((item) => item.rect.x)) - Math.min(...fullItems.map((item) => item.rect.x));
+  const yRange = Math.max(...fullItems.map((item) => item.rect.y)) - Math.min(...fullItems.map((item) => item.rect.y));
+  const axis = xRange >= yRange ? 'horizontal' : 'vertical';
+  const ordered = [...fullItems].sort((a, b) => (
+    axis === 'horizontal' ? a.rect.x - b.rect.x : a.rect.y - b.rect.y
+  ));
+  const last = ordered[ordered.length - 1];
+  const previous = ordered[ordered.length - 2];
+  const expectedSize = axis === 'horizontal' ? last.rect.w : last.rect.h;
+  const gap = axis === 'horizontal'
+    ? last.rect.x - (previous.rect.x + previous.rect.w)
+    : last.rect.y - (previous.rect.y + previous.rect.h);
+  const expectedStart = axis === 'horizontal'
+    ? last.rect.x + last.rect.w + gap
+    : last.rect.y + last.rect.h + gap;
+  const groupIndices = new Set(group.map((item) => item.domIndex));
+  const candidates = elements.filter((item) => {
+    if (!item?.rect || groupIndices.has(item.domIndex) || item.role !== last.role) return false;
+    const style = item.style || {};
+    const lastStyle = last.style || {};
+    const sameSurface = style.bgColor === lastStyle.bgColor && style.borderRadius === lastStyle.borderRadius;
+    if (!sameSurface) return false;
+    const sizeAlongAxis = axis === 'horizontal' ? item.rect.w : item.rect.h;
+    const crossAxisSize = axis === 'horizontal' ? item.rect.h : item.rect.w;
+    const lastCrossAxisSize = axis === 'horizontal' ? last.rect.h : last.rect.w;
+    const start = axis === 'horizontal' ? item.rect.x : item.rect.y;
+    return sizeAlongAxis > 0 && sizeAlongAxis < expectedSize - tolerancePx &&
+      Math.abs(crossAxisSize - lastCrossAxisSize) <= tolerancePx &&
+      start >= expectedStart - tolerancePx * 2;
+  });
+  if (candidates.length === 0) return group;
+
+  const tail = candidates.sort((a, b) => {
+    const aStart = axis === 'horizontal' ? a.rect.x : a.rect.y;
+    const bStart = axis === 'horizontal' ? b.rect.x : b.rect.y;
+    return Math.abs(aStart - expectedStart) - Math.abs(bStart - expectedStart);
+  })[0];
+  const visibleRect = { ...tail.rect };
+  const fullRect = {
+    ...tail.rect,
+    ...(axis === 'horizontal' ? { w: expectedSize } : { h: expectedSize }),
+  };
+  return [...group, { ...tail, rect: fullRect, visibleRect, clippedTail: true }];
+}
+
 // 判定列表布局类型与行列数：
 //   - 多个行 + 多个列 → LazyVerticalGrid(列数 = cols)
 //   - 多行单列 → LazyColumn
@@ -610,4 +663,5 @@ module.exports = {
   matchSlot,
   summarizeListGeometry,
   sizeSimilar,
+  includeClippedTailItems,
 };

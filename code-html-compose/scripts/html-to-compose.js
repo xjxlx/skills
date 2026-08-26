@@ -49,6 +49,7 @@ const {
   findTitleForGroup,
   inferComponentName,
   matchSlot,
+  includeClippedTailItems,
   summarizeListGeometry,
 } = require('./compose-list-core');
 const {
@@ -727,6 +728,9 @@ function buildSlotDescriptors(card, templateSlots, ctx, imgMap) {
 function genListGroupCode(group, ctx, imgMap, opts = {}) {
   console.log('[DEBUG] group =', group.map((c) => `${c.domIndex}:${c.rect.x},${c.rect.y},${c.rect.w},${c.rect.h} text="${(c.text||'').slice(0,12)}"`));
   const baseGeometry = computeListGeometry(group);
+  const viewportGeometry = computeListGeometry(group.map((item) => (
+    item.visibleRect ? { ...item, rect: item.visibleRect } : item
+  )));
   const grid = detectGridInfo(group);
   const normalizedGeometry = isRuleEnabled(ctx.ruleState, 'uniform-list-card-geometry')
     ? normalizeListGeometry(group, baseGeometry, grid)
@@ -737,7 +741,11 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
         rowGap: baseGeometry.rowGap,
         containerRect: baseGeometry.containerRect,
       };
-  const { containerRect, rowGap, colGap, itemW, itemH } = normalizedGeometry;
+  const { rowGap, colGap, itemW, itemH } = normalizedGeometry;
+  // 列表 item 使用完整几何；视口使用设计稿中实际可见的宿主宽度。
+  // 这样第 5 个 item 仍是完整数据对象，但只会被 LazyRow 的边界自然裁切，
+  // 不再生成一个独立的半截页面组件。
+  const containerRect = opts.viewportRect || viewportGeometry.containerRect;
   const designW = DESIGN_W;
   const designH = DESIGN_H;
   // 相对父容器的定位（嵌套渲染用）：传入 parentRect 时，Lazy 容器调用以父容器为原点，
@@ -1457,17 +1465,32 @@ function genTest1Page(semantic, imgMap, ruleState) {
   // 3) 检测相似卡片组 → 找宿主容器 → 生成数据驱动 Lazy 列表（脚本确定性生成，避免大模型跑偏）。
   //    判定标准：同区域若干卡片图片/文字结构相同、宽高差 ≤2dp → 聚成一组，
   //    用 LazyColumn/LazyRow/LazyVerticalGrid 懒加载，并嵌套进所在分区（宿主）容器。
-  const cardGroups = detectCardGroups(restElements);
+  const detectedCardGroups = detectCardGroups(restElements);
+  const cardGroups = detectedCardGroups.map((group) => includeClippedTailItems(group, restElements));
   console.log(`检测到 ${cardGroups.length} 个相似卡片组`);
   const excludedDomIndices = new Set();
   const hostListCall = new Map(); // 宿主 domIndex → Lazy 容器调用代码
   const hostSemanticTags = new Map(); // 宿主 domIndex → 结构回归测试标签
   let childValueEmitted = false;
-  for (const group of cardGroups) {
-    const host = findListHost(group, roots);
+  for (let groupIndex = 0; groupIndex < cardGroups.length; groupIndex++) {
+    const detectedGroup = detectedCardGroups[groupIndex];
+    const group = cardGroups[groupIndex];
+    // 宿主查找必须基于完整设计稿中的卡片组，不能用补齐后的隐藏区域中心点，
+    // 否则最后一个裁切 item 的完整几何会被误判为不属于宿主。
+    const host = findListHost(detectedGroup, roots);
+    const firstItem = group[0];
+    const viewportRect = host
+      ? {
+          x: firstItem.rect.x,
+          y: firstItem.rect.y,
+          w: host.e.rect.x + host.e.rect.w - firstItem.rect.x,
+          h: host.e.rect.y + host.e.rect.h - firstItem.rect.y,
+        }
+      : null;
     const result = genListGroupCode(group, ctx, imgMap, {
       emitChildValue: !childValueEmitted,
       parentRect: host ? host.e.rect : null,
+      viewportRect,
     });
     if (!result) continue; // 结构不一致的组回退为逐元素渲染（保留在树中）
     childValueEmitted = true;
