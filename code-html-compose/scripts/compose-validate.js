@@ -30,6 +30,7 @@ const {
   WORK_DIR,
 } = require('./config');
 const { ensureConfiguredActivity } = require('./launcher-activity');
+const { rotateEmulatorToLandscape } = require('./emulator-orientation');
 
 // 设计稿倍率：默认 @2x（DP_PER_PX=0.5，semantic css px 为物理像素），@1x 设计稿（如 812，css px 即 dp 值）传 DP_PER_PX=1。
 // 与 html-to-compose.js 保持一致，经环境变量 DP_PER_PX 传递。
@@ -84,25 +85,11 @@ function composite(img) {
   return { width, height, data: out };
 }
 
-function rotate90(img) {
-  const { width, height, data } = img;
-  const out = new PNG({ width: height, height: width });
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const si = (y * width + x) * 4;
-      const di = (x * out.width + (out.height - 1 - y)) * 4;
-      for (let c = 0; c < 4; c++) out.data[di + c] = data[si + c];
-    }
-  }
-  return out;
-}
-
 function launch(designW, designH) {
   // 物理分辨率始终从当前 semantic 尺寸推导，density 固定 320；禁止套用历史设计稿宽高。
   execSync(`${ADB} shell wm size ${Math.round(designW * PX_SCALE)}x${Math.round(designH * PX_SCALE)}`, { shell: true });
   execSync(`${ADB} shell wm density 320`, { shell: true });
-  execSync(`${ADB} shell settings put system accelerometer_rotation 0`, { shell: true });
-  execSync(`${ADB} shell settings put system user_rotation 0`, { shell: true });
+  rotateEmulatorToLandscape(ADB);
   execSync(`${ADB} shell settings put global policy_control immersive.full=*`, { shell: true });
   execSync(`${ADB} shell am force-stop ${ACTIVITY.split('/')[0]}`, { shell: true });
   execSync(`${ADB} shell am start -n ${ACTIVITY}`, { shell: true });
@@ -237,12 +224,12 @@ function main() {
   console.log('步骤 10.3：uiautomator dump 提取元素边界');
   const bounds = dumpBounds();
 
-  // 方向校正（横屏）
-  let shotImg = load(SHOT);
-  if (shotImg.width < shotImg.height) {
-    console.log('  截图竖屏，旋转 90° 校正');
-    shotImg = rotate90(shotImg);
+  // 设计稿固定为横向；必须由模拟器真实旋转，禁止旋转截图数据补偿。
+  const shotImg = load(SHOT);
+  if (shotImg.width <= shotImg.height) {
+    throw new Error(`模拟器截图仍为竖屏 ${shotImg.width}x${shotImg.height}，请确认模拟器已进入横屏后重试。`);
   }
+  console.log(`  截图横屏 ${shotImg.width}x${shotImg.height}，方向正确`);
   let shot = composite(shotImg);
   // 物理截图缩回 semantic 空间（@1x 设计稿 PX_SCALE=2 时 ÷2），与 original.png 同尺寸对齐抽查。
   if (shot.width !== semantic.designW || shot.height !== semantic.designH) {

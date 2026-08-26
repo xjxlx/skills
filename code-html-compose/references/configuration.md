@@ -58,6 +58,8 @@ export COMPOSE_ACTIVITY="com.example.app/.MainActivity"
 
 设计稿必须校验为 `1334px × 750px`。不得从 CSS、目录名或其他来源推断并替换尺寸；校验不一致时流程直接失败。
 
+横向设计稿的 Compose 验收会通过 ADB 执行 `cmd window user-rotation lock 1` 让标准 Android 模拟器真实进入横屏；脚本不旋转截图数据。若截图仍为竖屏，验收直接失败，请先确认模拟器方向。
+
 ## 常用命令
 
 ```bash

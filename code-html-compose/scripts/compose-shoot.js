@@ -24,6 +24,7 @@ const {
   WORK_DIR,
 } = require('./config');
 const { ensureConfiguredActivity } = require('./launcher-activity');
+const { rotateEmulatorToLandscape } = require('./emulator-orientation');
 
 const INPUT_DIR = TOOL_OUTPUT_DIR;
 const SEMANTIC = path.join(INPUT_DIR, 'semantic.json');
@@ -90,23 +91,6 @@ function resize(img, tw, th) {
   return out;
 }
 
-// 顺时针旋转 90°（用于把竖屏截图转成横屏，与设计稿方向对齐）
-function rotate90(img) {
-  const { width, height, data } = img;
-  const out = new PNG({ width: height, height: width });
-  for (let y = 0; y < height; y++) {
-    for (let x = 0; x < width; x++) {
-      const si = (y * width + x) * 4;
-      const di = (x * out.width + (out.height - 1 - y)) * 4;
-      out.data[di] = data[si];
-      out.data[di + 1] = data[si + 1];
-      out.data[di + 2] = data[si + 2];
-      out.data[di + 3] = data[si + 3];
-    }
-  }
-  return out;
-}
-
 // 带 alpha 合成到白底
 function composite(img) {
   const { width, height, data } = img;
@@ -139,8 +123,7 @@ function main() {
   // 验收窗口动态取当前设计稿尺寸；@1x 设计稿在 320dpi 下使用 2 倍物理像素。
   execSync(`${ADB} shell wm size ${Math.round(DESIGN_W * PX_SCALE)}x${Math.round(DESIGN_H * PX_SCALE)}`, { shell: true });
   execSync(`${ADB} shell wm density 320`, { shell: true });
-  execSync(`${ADB} shell settings put system accelerometer_rotation 0`, { shell: true });
-  execSync(`${ADB} shell settings put system user_rotation 0`, { shell: true });
+  rotateEmulatorToLandscape(ADB);
   // 沉浸全屏：隐藏系统状态栏/导航栏，保证截图 = 纯内容区域（避免系统 UI 挤入导致整体偏移）
   execSync(`${ADB} shell settings put global policy_control immersive.full=*`, { shell: true });
   // 强制重启 Activity，确保以横屏重新渲染
@@ -159,16 +142,12 @@ function main() {
     process.exit(1);
   }
 
-  // 方向校正：设计稿为横屏，若截图是竖屏则旋转成横屏，避免变形
-  let shotImg = load(SHOT);
-  if (shotImg.width > shotImg.height) {
-    console.log(`  截图横屏 ${shotImg.width}x${shotImg.height}，方向正确`);
-  } else {
-    console.log(`  截图竖屏 ${shotImg.width}x${shotImg.height}，旋转 90° 校正为横屏`);
-    shotImg = rotate90(shotImg);
+  // 设计稿固定为横向；必须由模拟器真实旋转，禁止旋转截图数据补偿。
+  const shotImg = load(SHOT);
+  if (shotImg.width <= shotImg.height) {
+    throw new Error(`模拟器截图仍为竖屏 ${shotImg.width}x${shotImg.height}，请确认模拟器已进入横屏后重试。`);
   }
-  // 保存校正后的横屏截图，便于人工核对
-  fs.writeFileSync(path.join(INPUT_DIR, 'compose-shot-landscape.png'), PNG.sync.write(shotImg));
+  console.log(`  截图横屏 ${shotImg.width}x${shotImg.height}，方向正确`);
 
   const shot = composite(resize(shotImg, DESIGN_W, DESIGN_H));
   const design = composite(load(DESIGN_PNG));
