@@ -79,9 +79,10 @@ test('目标 Activity 不是 Launcher 时不修改 Manifest', () => {
   assert.equal(inspectConfiguredActivity(projectRoot, 'com.example.app/.PreviewActivity').found, false);
 });
 
-test('生成与验收脚本不直接旋转模拟器或旋转截图', () => {
+test('生成与验收脚本不修改模拟器窗口、系统栏或旋转状态', () => {
   for (const script of ['run.js', 'html-to-compose.js', 'compose-iterate.js', 'compose-shoot.js', 'compose-validate.js']) {
     const source = fs.readFileSync(path.join(__dirname, '..', script), 'utf8');
     assert.doesNotMatch(source, /user-rotation|user_rotation|rotate90|rotateEmulatorToLandscape/);
+    assert.doesNotMatch(source, /\$\{ADB\} shell wm\s+(?:size|density)|\$\{ADB\} shell settings put global policy_control|\$\{ADB\} shell settings put system accelerometer_rotation|\$\{ADB\} shell settings put system user_rotation/);
   }
 });

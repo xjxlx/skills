@@ -35,7 +35,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 - 这里检查的是 Launcher 的 `intent-filter` 标签，不是 `android:launchMode` 属性。
 - 总入口和直接的 Compose 生成/验收入口都会读取 `COMPOSE_ACTIVITY`（验收命令行参数优先）并定位该 Activity；只认它自己的同一个 `intent-filter` 中同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。
 - 目标 Activity 未配置、未找到或缺少任一标签时，输出明确提示，停止后续 HTML/Compose 生成、编译、安装和验收，并以失败状态退出；不得用项目中其他 Launcher Activity 替代，也不得自动创建 Activity 或补写 `MAIN`/`LAUNCHER` 标签。
-- 横向设计稿在生成、编译、安装或启动前，更新该目标 Activity 的源 `AndroidManifest.xml` 声明，确保存在 `android:screenOrientation="landscape"`；如果已有其他方向值，替换该值。不得修改其他 Activity，不得通过 ADB 直接旋转模拟器。
+- 横向设计稿在生成、编译、安装或启动前，更新该目标 Activity 的源 `AndroidManifest.xml` 声明，确保存在 `android:screenOrientation="landscape"`；如果已有其他方向值，替换该值。不得修改其他 Activity。技能不得通过 ADB 修改模拟器的 `wm size`、`wm density`、`policy_control`、`accelerometer_rotation` 或 `user_rotation`；需要横屏时只提示用户将模拟器旋转为横向。
 - `build/`、`.gradle/` 和其他生成目录不参与发现，避免用过期合并 Manifest 掩盖项目源配置缺失。
 
 ## 必须遵守的判断
@@ -48,7 +48,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 - 像素级验收固定使用 `semantic.designW=1334`、`semantic.designH=750`；尺寸校验失败时立即停止，禁止通过 `DESIGN_WIDTH`、`DESIGN_HEIGHT` 或其他方式静默适配。
 - 生成器固定按 `DP_PER_PX=0.5` 把 HTML 坐标和尺寸换算为 Android dp；不得修改源坐标或用 `graphicsLayer` 整页缩放掩盖基线误差。
 - 运行时页面按窗口宽高的较小比例设置局部 `Density`，居中完整显示固定逻辑画布；不同宽高比允许留白，禁止横纵分别拉伸或裁切。
-- 横向设计稿验收前必须确保目标 Activity 的静态方向配置为 `landscape`；由 Android 在启动 Activity 时完成方向切换。截图必须保持设备原始方向，禁止通过 ADB 直接旋转模拟器、使用 `rotate90` 或其他图像变换补偿方向。截图仍为竖屏时直接报错并停止验收。
+- 横向设计稿验收前必须确保目标 Activity 的静态方向配置为 `landscape`，并要求模拟器当前已经横向显示；截图必须保持设备原始方向，禁止通过 ADB 修改窗口分辨率/density、锁定或设置旋转、使用 `rotate90` 或其他图像变换补偿方向。截图仍为竖屏时直接报错并停止验收；不得为了适配设计稿而覆盖模拟器分辨率，边界换算应使用当前横屏截图的实际尺寸。
 - 每个可观测视觉元素须有 `testTag("e<domIndex>")`；完整被覆盖的层须写入可观测性报告，不能静默跳过。
 - 只生成设计图中可见且有视觉证据的节点，不能凭名称补造箭头、指示器或装饰图。
 

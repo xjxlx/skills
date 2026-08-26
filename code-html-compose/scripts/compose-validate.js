@@ -7,7 +7,7 @@
  *   2. 局部抽查：对文本和关键元素区域，裁剪原始 HTML 截图(original.png)与 Compose 截图做像素对比，
  *      用平均色差判定该区块是否渲染正确（容忍跨渲染器噪声）。
  *
- * 前置：目标模拟器已启动；脚本会按当前 semantic.json 和 DP_PER_PX 设置验收窗口与密度。
+ * 前置：目标模拟器已启动并由用户旋转为横屏；脚本只读取当前窗口截图，不覆盖模拟器窗口与密度。
  * 用法：node compose-validate.js [activityComponent]
  * 输出：tools/out/compose-structure-report.json + .code-html-compose/compose-run-<ts>/ 对比图
  */
@@ -31,14 +31,9 @@ const {
 } = require('./config');
 const { ensureLandscapeActivity } = require('./launcher-activity');
 
-// 设计稿倍率：默认 @2x（DP_PER_PX=0.5，semantic css px 为物理像素），@1x 设计稿（如 812，css px 即 dp 值）传 DP_PER_PX=1。
-// 与 html-to-compose.js 保持一致，经环境变量 DP_PER_PX 传递。
+// 模拟器使用现有物理分辨率与 density；截图后根据实际横屏截图尺寸计算坐标缩放，
+// 不再假设或写入固定 wm size / wm density。
 const DP_PER_PX = parseFloat(process.env.DP_PER_PX || '0.5');
-// 模拟器 density 固定 320（@2x），uiautomator/screencap 返回物理 px。
-// 物理 px = semantic css px × PX_SCALE，其中 PX_SCALE = DP_PER_PX × (320 / 160) = DP_PER_PX × 2：
-//   @2x（DP_PER_PX=0.5）→ PX_SCALE=1，物理 == semantic，零缩放（兼容既有 @2x 流程）；
-//   @1x（DP_PER_PX=1.0）→ PX_SCALE=2，物理 = semantic × 2，验收前需把物理观测缩回 semantic 空间比较。
-const PX_SCALE = DP_PER_PX * 2;
 const INPUT_DIR = TOOL_OUTPUT_DIR;
 const SEMANTIC = path.join(INPUT_DIR, 'semantic.json');
 const GENERATION_REPORT = path.join(INPUT_DIR, 'compose-generation-report.json');
@@ -84,11 +79,8 @@ function composite(img) {
   return { width, height, data: out };
 }
 
-function launch(designW, designH) {
-  // 物理分辨率始终从当前 semantic 尺寸推导，density 固定 320；禁止套用历史设计稿宽高。
-  execSync(`${ADB} shell wm size ${Math.round(designW * PX_SCALE)}x${Math.round(designH * PX_SCALE)}`, { shell: true });
-  execSync(`${ADB} shell wm density 320`, { shell: true });
-  execSync(`${ADB} shell settings put global policy_control immersive.full=*`, { shell: true });
+function launch() {
+  // 不修改模拟器分辨率、density、系统栏或旋转锁定；横屏必须由模拟器当前方向提供。
   execSync(`${ADB} shell am force-stop ${ACTIVITY.split('/')[0]}`, { shell: true });
   execSync(`${ADB} shell am start -n ${ACTIVITY}`, { shell: true });
   execSync(`sleep 6`, { shell: true });
@@ -99,9 +91,9 @@ function screencap() {
   execSync(`${ADB} exec-out screencap -p > "${SHOT}"`, { shell: true });
 }
 
-// uiautomator dump → { "<domIndex>": {x,y,w,h} }（testTag 映射为 resource-id），
-// 单位统一缩回 semantic 空间（css px）：物理 px ÷ PX_SCALE，@1x 设计稿时 PX_SCALE=2。
-function dumpBounds() {
+// uiautomator dump → { "<domIndex>": {x,y,w,h} }（testTag 映射为 resource-id）。
+// 坐标按当前横屏截图的实际宽高缩回 semantic 空间，适配用户已有的模拟器分辨率。
+function dumpBounds(scaleX, scaleY) {
   execSync(`${ADB} shell uiautomator dump /sdcard/ui.xml`, { shell: true });
   execSync(`${ADB} pull /sdcard/ui.xml "${UI_XML}"`, { shell: true });
   const xml = fs.readFileSync(UI_XML, 'utf8');
@@ -110,16 +102,16 @@ function dumpBounds() {
   let m;
   while ((m = re.exec(xml))) {
     map[m[1]] = {
-      x: +m[2] / PX_SCALE,
-      y: +m[3] / PX_SCALE,
-      w: (+m[4] - +m[2]) / PX_SCALE,
-      h: (+m[5] - +m[3]) / PX_SCALE,
+      x: +m[2] / scaleX,
+      y: +m[3] / scaleY,
+      w: (+m[4] - +m[2]) / scaleX,
+      h: (+m[5] - +m[3]) / scaleY,
     };
   }
   return map;
 }
 
-// 双线性缩放 composite 结果（RGB 3 通道）到 tw×th，用于把物理截图缩回 semantic 空间（@1x 时 ÷2）。
+// 双线性缩放 composite 结果（RGB 3 通道）到 tw×th，用于把当前窗口截图缩回 semantic 空间。
 function resizeRGB(img, tw, th) {
   if (img.width === tw && img.height === th) return img;
   const sw = img.width, sh = img.height, data = img.data;
@@ -214,22 +206,26 @@ function main() {
   }
 
   console.log('步骤 10.1：启动 Activity 并等待渲染');
-  launch(semantic.designW, semantic.designH);
+  launch();
 
   console.log('步骤 10.2：截取 Compose 画面');
   screencap();
 
-  console.log('步骤 10.3：uiautomator dump 提取元素边界');
-  const bounds = dumpBounds();
-
-  // 设计稿固定为横向；必须由模拟器真实旋转，禁止旋转截图数据补偿。
   const shotImg = load(SHOT);
   if (shotImg.width <= shotImg.height) {
-    throw new Error(`模拟器截图仍为竖屏 ${shotImg.width}x${shotImg.height}，请确认模拟器已进入横屏后重试。`);
+    throw new Error(`模拟器截图仍为竖屏 ${shotImg.width}x${shotImg.height}，请先把模拟器旋转为横屏后重试。`);
   }
-  console.log(`  截图横屏 ${shotImg.width}x${shotImg.height}，方向正确`);
+  const scaleX = shotImg.width / semantic.designW;
+  const scaleY = shotImg.height / semantic.designH;
+  console.log(`  截图横屏 ${shotImg.width}x${shotImg.height}，使用当前窗口缩放 ${scaleX.toFixed(4)}x${scaleY.toFixed(4)}`);
+
+  console.log('步骤 10.3：uiautomator dump 提取元素边界');
+  const bounds = dumpBounds(scaleX, scaleY);
+
+  // 设计稿固定为横向；必须由模拟器真实旋转，禁止旋转截图数据补偿。
+  console.log('  方向正确：未执行模拟器旋转或分辨率覆盖');
   let shot = composite(shotImg);
-  // 物理截图缩回 semantic 空间（@1x 设计稿 PX_SCALE=2 时 ÷2），与 original.png 同尺寸对齐抽查。
+  // 按当前截图尺寸缩回 semantic 空间，与 original.png 同尺寸对齐抽查。
   if (shot.width !== semantic.designW || shot.height !== semantic.designH) {
     shot = resizeRGB(shot, semantic.designW, semantic.designH);
   }

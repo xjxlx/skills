@@ -58,7 +58,7 @@ export COMPOSE_ACTIVITY="com.example.app/.MainActivity"
 
 设计稿必须校验为 `1334px × 750px`。不得从 CSS、目录名或其他来源推断并替换尺寸；校验不一致时流程直接失败。
 
-横向设计稿依赖目标 Activity 的静态 `android:screenOrientation="landscape"` 配置，由 Android 在启动 Activity 时完成方向切换；脚本不直接旋转模拟器，也不旋转截图数据。若截图仍为竖屏，验收直接失败，请检查目标 Activity 的源 Manifest 配置。
+横向设计稿依赖目标 Activity 的静态 `android:screenOrientation="landscape"` 配置，并要求用户先将模拟器旋转到横向。脚本只重启 Activity 和读取截图，不执行 `wm size`、`wm density`、`policy_control`、`accelerometer_rotation` 或 `user_rotation`，也不旋转截图数据；坐标校验按当前横屏截图实际尺寸缩放。若截图仍为竖屏，验收直接失败，请手动旋转模拟器后重试。
 
 ## 常用命令
 
