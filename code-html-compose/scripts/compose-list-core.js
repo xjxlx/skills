@@ -82,14 +82,25 @@ function isStrictlyInside(o, e) {
   return isContainedIn(o, e) && (o.rect.w * o.rect.h) < (e.rect.w * e.rect.h) - 0.01;
 }
 
-// 是否"卡片级"元素：面积足够大、带背景图/图片。
+// 是否"卡片级"元素：面积足够大、带背景图/图片，或是包含封面图的有色卡片容器。
 // 容器守卫：若它包含 ≥2 个其它卡片级元素，则它是区块容器（如整段卡片背景），
 // 不应被当成列表卡片，否则会把标题、子卡片全部吞进列表导致布局错乱。
 function isCardLike(e, elements) {
   if (!e || !e.rect) return false;
   if (e.rect.w < 60 || e.rect.h < 60) return false;
   const hasImage = Boolean(e.imgSrc || (e.style && e.style.bgImage));
-  if (!hasImage) return false;
+  // 蓝湖导出经常把卡片背景、封面和文字导出成同级节点：外框自身没有 imgSrc，
+  // 但它有背景色/圆角，且空间上包住一张封面图。这类外框才是列表 item，
+  // 不能只把内部封面图当成 item，否则公共文本槽位会被误判为缺失并回退成逐卡硬编码。
+  const hasStyledCardSurface = Boolean(
+    e.style && e.style.bgColor && e.style.borderRadius && elements &&
+    elements.some((o) =>
+      o !== e && isStrictlyInside(o, e) &&
+      Boolean(o.imgSrc || (o.style && o.style.bgImage)) &&
+      o.rect.w >= 60 && o.rect.h >= 60,
+    ),
+  );
+  if (!hasImage && !hasStyledCardSurface) return false;
   if (elements) {
     // 容器守卫：统计 e 内含有的卡片级子元素数量，≥2 判为区块容器。
     // 注意：DOM 嵌套会把同一视觉封面生成两份同 rect 的重复元素（如 e18+e21），

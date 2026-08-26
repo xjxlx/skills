@@ -814,7 +814,11 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
   const descriptor = buildSlotDescriptors(templateCard, commonSlots, ctx, imgMap);
 
   function colorArgbLiteral(style) {
-    const match = String(style && style.color || '').match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)/);
+    return colorArgbLiteralValue(style && style.color);
+  }
+
+  function colorArgbLiteralValue(rawColor) {
+    const match = String(rawColor || '').match(/rgba?\(\s*([\d.]+)\s*,\s*([\d.]+)\s*,\s*([\d.]+)(?:\s*,\s*([\d.]+))?\s*\)/);
     if (!match) return '4278190080L';
     const alpha = Math.round((match[4] === undefined ? 1 : Number(match[4])) * 255);
     const value = (BigInt(alpha) << 24n) |
@@ -822,6 +826,10 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
       (BigInt(Math.round(Number(match[2]))) << 8n) |
       BigInt(Math.round(Number(match[3])));
     return `${value.toString()}L`;
+  }
+
+  function backgroundArgbLiteral(style) {
+    return style && style.bgColor ? colorArgbLiteralValue(style.bgColor) : 'null';
   }
 
   function extraValueCode(slot, card) {
@@ -844,6 +852,8 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
       `                allowInkOverflow = ${extraDescriptor.allowInkOverflow},\n` +
       `                colorArgb = ${colorArgbLiteral(slot.style)},\n` +
       `                fontWeight = ${fontWeightNumber(slot.style && slot.style.fontWeight)},\n` +
+      `                backgroundColorArgb = ${backgroundArgbLiteral(slot.style)},\n` +
+      `                radius = ${roundToHalf(parseRadius(slot.style && slot.style.borderRadius) || 0)}f,\n` +
       `                textAlign = ${align},\n` +
       `            )`;
   }
@@ -949,6 +959,8 @@ data class CardExtraValue(
     val allowInkOverflow: Boolean,
     val colorArgb: Long,
     val fontWeight: Int,
+    val backgroundColorArgb: Long?,
+    val radius: Float,
     val textAlign: Int,
 )`;
 
@@ -958,6 +970,8 @@ data class CardExtraValue(
 data class ${itemDataType}(
     val tag: Int,
     val bgRes: Int?,
+    val backgroundColorArgb: Long,
+    val radius: Float,
     val w: Float,
     val h: Float,
     val children: List<ChildValue?>,
@@ -976,6 +990,8 @@ data class ${itemDataType}(
     return `    ${itemDataType}(\n` +
       `        tag = ${card.domIndex},\n` +
       `        bgRes = ${cardRes ? `R.mipmap.${cardRes}` : 'null'},\n` +
+      `        backgroundColorArgb = ${backgroundArgbLiteral(card.style)},\n` +
+      `        radius = ${roundToHalf(parseRadius(card.style && card.style.borderRadius) || cardRadius)}f,\n` +
       `        w = ${r05(card.rect.w)}f,\n` +
       `        h = ${r05(card.rect.h)}f,\n` +
       `        children = listOf(\n            ${children}\n        ),\n` +
@@ -1061,13 +1077,23 @@ ${itemInit},
                     ImageItem(
                         parameter = ImageParameter(
                             data = extra.res,
-                            modifier = Modifier.testTag(extra.tag).size(extra.w.dp, extra.h.dp),
+                            modifier = Modifier
+                                .testTag(extra.tag)
+                                .size(extra.w.dp, extra.h.dp)
+                                .clip(RoundedCornerShape(extra.radius.dp)),
                             contentScale = ContentScale.FillBounds,
                         ),
                     )
                 } else {
                     Box(
-                        modifier = Modifier.testTag(extra.tag).size(extra.w.dp, extra.h.dp),
+                        modifier = Modifier
+                            .testTag(extra.tag)
+                            .size(extra.w.dp, extra.h.dp)
+                            .clip(RoundedCornerShape(extra.radius.dp))
+                            .background(
+                                extra.backgroundColorArgb?.let { Color(it) } ?: Color.Transparent,
+                                RoundedCornerShape(extra.radius.dp),
+                            ),
                         contentAlignment = when (extra.textAlign) {
                             2 -> Alignment.CenterEnd
                             1 -> Alignment.Center
@@ -1105,7 +1131,10 @@ ${itemInit},
 @Composable
 private fun ${itemName}(item: ${itemDataType}) {
     Box(
-        modifier = Modifier.size(item.w.dp, item.h.dp),
+        modifier = Modifier
+            .size(item.w.dp, item.h.dp)
+            .clip(RoundedCornerShape(item.radius.dp))
+            .background(Color(item.backgroundColorArgb), RoundedCornerShape(item.radius.dp)),
     ) {
 ${bgRender}${childRender}
 ${extraRender}
