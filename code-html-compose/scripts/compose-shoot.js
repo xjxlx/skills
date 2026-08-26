@@ -23,8 +23,7 @@ const {
   TOOL_OUTPUT_DIR,
   WORK_DIR,
 } = require('./config');
-const { ensureConfiguredActivity } = require('./launcher-activity');
-const { rotateEmulatorToLandscape } = require('./emulator-orientation');
+const { ensureLandscapeActivity } = require('./launcher-activity');
 
 const INPUT_DIR = TOOL_OUTPUT_DIR;
 const SEMANTIC = path.join(INPUT_DIR, 'semantic.json');
@@ -32,7 +31,7 @@ const DESIGN_PNG = path.join(INPUT_DIR, 'normalized.png'); // 设计稿截图（
 const SHOT = path.join(INPUT_DIR, 'compose-shot.png'); // Compose 截图
 
 try {
-  ensureConfiguredActivity(PROJECT_ROOT, process.argv[2] || COMPOSE_ACTIVITY);
+  ensureLandscapeActivity(PROJECT_ROOT, process.argv[2] || COMPOSE_ACTIVITY);
 } catch (error) {
   console.error(`\n${error.message}`);
   process.exit(1);
@@ -123,7 +122,6 @@ function main() {
   // 验收窗口动态取当前设计稿尺寸；@1x 设计稿在 320dpi 下使用 2 倍物理像素。
   execSync(`${ADB} shell wm size ${Math.round(DESIGN_W * PX_SCALE)}x${Math.round(DESIGN_H * PX_SCALE)}`, { shell: true });
   execSync(`${ADB} shell wm density 320`, { shell: true });
-  rotateEmulatorToLandscape(ADB);
   // 沉浸全屏：隐藏系统状态栏/导航栏，保证截图 = 纯内容区域（避免系统 UI 挤入导致整体偏移）
   execSync(`${ADB} shell settings put global policy_control immersive.full=*`, { shell: true });
   // 强制重启 Activity，确保以横屏重新渲染

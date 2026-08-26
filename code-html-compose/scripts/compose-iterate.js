@@ -34,7 +34,7 @@ const {
   TOOL_OUTPUT_DIR,
   WORK_DIR,
 } = require('./config');
-const { ensureConfiguredActivity } = require('./launcher-activity');
+const { ensureLandscapeActivity } = require('./launcher-activity');
 
 const TOOLS = __dirname;
 const OUT_DIR = TOOL_OUTPUT_DIR;
@@ -141,7 +141,7 @@ function appendExperience(report) {
 
 function main() {
   try {
-    ensureConfiguredActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
+    ensureLandscapeActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);

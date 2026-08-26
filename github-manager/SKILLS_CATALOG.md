@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-26 23:30:53，由 github-manager 维护
+> 自动生成于 2026-08-26 23:36:21，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -48,7 +48,7 @@ graph LR
 - **目录名**：`code-html-compose`
 - **用途**："将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可量化验收的 Jetpack Compose 高保真基线；用于元素缺失、文字裁切、布局偏移或需要模...
 - **依赖**：无
-- **文件数**：2285
+- **文件数**：2284
 - **UI 元数据**：有 agents/openai.yaml
 - **路径**：`~/.codex/skills/code-html-compose/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-html-compose

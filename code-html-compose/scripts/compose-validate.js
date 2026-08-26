@@ -29,8 +29,7 @@ const {
   TOOL_OUTPUT_DIR,
   WORK_DIR,
 } = require('./config');
-const { ensureConfiguredActivity } = require('./launcher-activity');
-const { rotateEmulatorToLandscape } = require('./emulator-orientation');
+const { ensureLandscapeActivity } = require('./launcher-activity');
 
 // 设计稿倍率：默认 @2x（DP_PER_PX=0.5，semantic css px 为物理像素），@1x 设计稿（如 812，css px 即 dp 值）传 DP_PER_PX=1。
 // 与 html-to-compose.js 保持一致，经环境变量 DP_PER_PX 传递。
@@ -89,7 +88,6 @@ function launch(designW, designH) {
   // 物理分辨率始终从当前 semantic 尺寸推导，density 固定 320；禁止套用历史设计稿宽高。
   execSync(`${ADB} shell wm size ${Math.round(designW * PX_SCALE)}x${Math.round(designH * PX_SCALE)}`, { shell: true });
   execSync(`${ADB} shell wm density 320`, { shell: true });
-  rotateEmulatorToLandscape(ADB);
   execSync(`${ADB} shell settings put global policy_control immersive.full=*`, { shell: true });
   execSync(`${ADB} shell am force-stop ${ACTIVITY.split('/')[0]}`, { shell: true });
   execSync(`${ADB} shell am start -n ${ACTIVITY}`, { shell: true });
@@ -181,7 +179,7 @@ function regionAvgDist(a, b) {
 
 function main() {
   try {
-    ensureConfiguredActivity(PROJECT_ROOT, ACTIVITY);
+    ensureLandscapeActivity(PROJECT_ROOT, ACTIVITY);
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);

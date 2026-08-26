@@ -72,7 +72,7 @@ const {
   TOOL_OUTPUT_DIR,
   requiredSetting,
 } = require('./config');
-const { ensureConfiguredActivity } = require('./launcher-activity');
+const { ensureLandscapeActivity } = require('./launcher-activity');
 
 const TOOLS = __dirname;
 const SEMANTIC = path.join(TOOL_OUTPUT_DIR, 'semantic.json');
@@ -1619,7 +1619,7 @@ ${sectionsCode}
 // ---------------- main ----------------
 function main() {
   try {
-    ensureConfiguredActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
+    ensureLandscapeActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);

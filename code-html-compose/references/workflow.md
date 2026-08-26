@@ -2,7 +2,7 @@
 
 ## 输入与中间层
 
-开始任何解压、生成、编译、安装或模拟器操作前，先根据 `COMPOSE_ACTIVITY` 在项目源 Manifest 中定位当前生成布局的承载 Activity，并确认该 Activity 自己的同一个 `<intent-filter>` 同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。检查失败时立即提示并停止，不得改用项目中其他 Launcher Activity，也不得为了验收自行创建 Activity 或写入 Manifest；`build/` 等生成目录中的合并 Manifest 不能替代源配置。
+开始任何解压、生成、编译、安装或模拟器操作前，先根据 `COMPOSE_ACTIVITY` 在项目源 Manifest 中定位当前生成布局的承载 Activity，并确认该 Activity 自己的同一个 `<intent-filter>` 同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。检查失败时立即提示并停止，不得改用项目中其他 Launcher Activity，也不得为了补齐入口自行创建 Activity 或写入 `MAIN`/`LAUNCHER`；横向设计稿仅允许给已确认的目标 Activity 写入 `android:screenOrientation="landscape"`。`build/` 等生成目录中的合并 Manifest 不能替代源配置。
 
 解压目录必须直接包含 `index.html`（或 `.code-lanhu-index.html`）、引用的 CSS 和 `img/`。解析器用 Chrome/Puppeteer 采集可见元素的几何、文本、颜色、背景、圆角、阴影和层级，输出 `semantic.json`。
 
@@ -17,7 +17,7 @@
 - 像素级验收宽高固定为 `semantic.designW=1334`、`semantic.designH=750`；设计包尺寸不一致时直接失败，禁止通过 `DESIGN_WIDTH` 与 `DESIGN_HEIGHT` 覆盖。
 - 元素位于由固定设计尺寸和 `DP_PER_PX=0.5` 推导出的逻辑画布内，按语义树坐标使用 `padding(start, top)` 定位；禁止用 `offset`、修改源坐标或 `graphicsLayer` 整页缩放掩盖基线误差。
 - 页面入口使用 `BoxWithConstraints` 获取窗口物理宽高，以 `min(窗口宽/设计逻辑宽, 窗口高/设计逻辑高)` 生成局部 `Density`，再居中承载固定逻辑画布。不同宽高比允许留白，不能分别缩放宽高，也不能裁切画布。
-- 横向设计稿启动前通过 ADB 让模拟器真实旋转到横屏；截图必须保持原始方向，若截图仍为竖屏则直接失败，禁止在验收脚本中旋转图片或做方向补偿。
+- 横向设计稿启动前依赖目标 Activity 的静态 `android:screenOrientation="landscape"` 配置，由 Android 自动切换窗口方向；截图必须保持原始方向，若截图仍为竖屏则直接失败，禁止脚本直接旋转模拟器、旋转图片或做方向补偿。
 - 坐标、尺寸、字号、行高和圆角固定按 `DP_PER_PX=0.5` 换算，保留半 dp/sp 精度；HTML `1334×750` 与 Android `375×667dp` 的轴向对应关系为 `1334↔667`、`750↔375`。
 - 背景图、裁切背景、圆角阴影、文字基线和单行文字缩放由生成器统一处理。
 - 元素较多时拆分私有 Composable，避免单方法字节码超过 64KB。

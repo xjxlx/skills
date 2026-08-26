@@ -86,10 +86,40 @@ function findActivityDeclarations(manifestPath, fallbackPackage) {
     return [{
       name,
       fullName: normalizeActivityName(name, manifestPackage),
+      type: match[1],
+      targetActivity: readAttribute(block, 'android:targetActivity'),
       manifest: manifestPath,
       launcher: hasLauncherIntentFilter(block),
     }];
   });
+}
+
+function findActivityOpeningTag(manifestPath, fullName, fallbackPackage) {
+  const xml = fs.readFileSync(manifestPath, 'utf8');
+  const manifestPackage = readManifestPackage(stripXmlComments(xml)) || fallbackPackage;
+  const comments = [...xml.matchAll(/<!--[\s\S]*?-->/g)].map((match) => ({
+    start: match.index,
+    end: match.index + match[0].length,
+  }));
+  const activityPattern = /<(activity|activity-alias)\b[^>]*>/gi;
+  for (const match of xml.matchAll(activityPattern)) {
+    if (comments.some((comment) => match.index >= comment.start && match.index < comment.end)) continue;
+    const name = readAttribute(match[0], 'android:name');
+    if (name && normalizeActivityName(name, manifestPackage) === fullName) {
+      return { tag: match[0], start: match.index, end: match.index + match[0].length };
+    }
+  }
+  return null;
+}
+
+function withLandscapeOrientation(tag) {
+  const orientationPattern = /android:screenOrientation\s*=\s*["'][^"']*["']/i;
+  if (orientationPattern.test(tag)) {
+    return tag.replace(orientationPattern, 'android:screenOrientation="landscape"');
+  }
+  return /\/\s*>$/.test(tag)
+    ? tag.replace(/\/\s*>$/, ' android:screenOrientation="landscape" />')
+    : tag.replace(/>$/, ' android:screenOrientation="landscape">');
 }
 
 function parseActivityComponent(activityComponent) {
@@ -120,7 +150,7 @@ function stopMessage(component, reason) {
     '<intent-filter>、<action android:name="android.intent.action.MAIN" />',
     '和 <category android:name="android.intent.category.LAUNCHER" />。',
     '已停止后续 HTML/Compose 生成、编译、安装和验收操作。',
-    '请先确认或提供现有的默认 Activity；禁止自动创建新的 Activity 或修改 Manifest。',
+    '请先确认或提供现有的默认 Activity；禁止自动创建新的 Activity，或补写 MAIN/LAUNCHER 标签。',
   ].join('\n');
 }
 
@@ -169,9 +199,41 @@ function ensureConfiguredActivity(projectRoot, activityComponent) {
   return result;
 }
 
+function ensureLandscapeActivity(projectRoot, activityComponent) {
+  const result = ensureConfiguredActivity(projectRoot, activityComponent);
+  const manifestPath = result.activity.manifest;
+  const parsed = parseActivityComponent(activityComponent);
+  const orientationTarget = result.activity.type === 'activity-alias'
+    ? normalizeActivityName(result.activity.targetActivity, parsed.packageName)
+    : result.activity.fullName;
+  if (!orientationTarget) {
+    throw new Error(`COMPOSE_ACTIVITY=${activityComponent} 是缺少 targetActivity 的 Activity-alias，无法写入横屏配置，已停止后续操作。`);
+  }
+  const openingTag = findActivityOpeningTag(
+    manifestPath,
+    orientationTarget,
+    parsed.packageName,
+  );
+  if (!openingTag) {
+    throw new Error(`无法定位 ${activityComponent} 在源 AndroidManifest.xml 中的 Activity 声明，已停止后续操作。`);
+  }
+
+  const replacement = withLandscapeOrientation(openingTag.tag);
+
+  if (replacement === openingTag.tag) return { ...result, changed: false };
+
+  const xml = fs.readFileSync(manifestPath, 'utf8');
+  const rawOpeningTag = xml.slice(openingTag.start, openingTag.end);
+  const rawReplacement = withLandscapeOrientation(rawOpeningTag);
+  const updated = xml.slice(0, openingTag.start) + rawReplacement + xml.slice(openingTag.end);
+  fs.writeFileSync(manifestPath, updated);
+  return { ...result, changed: true };
+}
+
 module.exports = {
   collectManifestPaths,
   findActivityDeclarations,
   inspectConfiguredActivity,
   ensureConfiguredActivity,
+  ensureLandscapeActivity,
 };

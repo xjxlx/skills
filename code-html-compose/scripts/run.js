@@ -19,7 +19,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { COMPOSE_ACTIVITY, PROJECT_ROOT, WORK_DIR } = require('./config');
-const { ensureConfiguredActivity } = require('./launcher-activity');
+const { ensureLandscapeActivity } = require('./launcher-activity');
 
 const TOOLS = __dirname;
 const BASE_ENV = {
@@ -34,7 +34,7 @@ function run(cmd, env = {}) {
 
 function main() {
   try {
-    ensureConfiguredActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
+    ensureLandscapeActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);

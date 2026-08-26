@@ -19,7 +19,7 @@
 <category android:name="android.intent.category.LAUNCHER" />
 ```
 
-未配置、未找到目标 Activity 或缺少标签时，脚本会提示用户并以失败状态停止，不会用其他 Launcher Activity 替代，也不会创建新的 Activity、修改 Manifest、编译、安装或启动模拟器。请先由用户补齐或确认 `COMPOSE_ACTIVITY` 指向的现有 Activity，再重新执行。
+未配置、未找到目标 Activity 或缺少标签时，脚本会提示用户并以失败状态停止，不会用其他 Launcher Activity 替代，也不会创建新的 Activity、补写 `MAIN`/`LAUNCHER` 标签、编译、安装或启动模拟器。通过前置检查后，横向设计稿只会在已找到的目标 Activity 源声明上写入或更新 `android:screenOrientation="landscape"`。
 
 ## 首次安装依赖
 
@@ -58,7 +58,7 @@ export COMPOSE_ACTIVITY="com.example.app/.MainActivity"
 
 设计稿必须校验为 `1334px × 750px`。不得从 CSS、目录名或其他来源推断并替换尺寸；校验不一致时流程直接失败。
 
-横向设计稿的 Compose 验收会通过 ADB 执行 `cmd window user-rotation lock 1` 让标准 Android 模拟器真实进入横屏；脚本不旋转截图数据。若截图仍为竖屏，验收直接失败，请先确认模拟器方向。
+横向设计稿依赖目标 Activity 的静态 `android:screenOrientation="landscape"` 配置，由 Android 在启动 Activity 时完成方向切换；脚本不直接旋转模拟器，也不旋转截图数据。若截图仍为竖屏，验收直接失败，请检查目标 Activity 的源 Manifest 配置。
 
 ## 常用命令
 
