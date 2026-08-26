@@ -30,6 +30,7 @@ const {
   WORK_DIR,
   requiredSetting,
 } = require('./config');
+const { ensureLauncherActivity } = require('./launcher-activity');
 
 // 设计稿倍率：默认 @2x（DP_PER_PX=0.5，semantic css px 为物理像素），@1x 设计稿（如 812，css px 即 dp 值）传 DP_PER_PX=1。
 // 与 html-to-compose.js 保持一致，经环境变量 DP_PER_PX 传递。
@@ -193,6 +194,13 @@ function regionAvgDist(a, b) {
 }
 
 function main() {
+  try {
+    ensureLauncherActivity(PROJECT_ROOT);
+  } catch (error) {
+    console.error(`\n${error.message}`);
+    process.exit(1);
+  }
+
   if (!fs.existsSync(SEMANTIC)) {
     console.error(`语义树不存在：${SEMANTIC}`);
     process.exit(1);

@@ -19,15 +19,25 @@ const { PNG } = require('pngjs');
 const {
   ADB,
   COMPOSE_ACTIVITY,
+  PROJECT_ROOT,
   TOOL_OUTPUT_DIR,
   WORK_DIR,
   requiredSetting,
 } = require('./config');
+const { ensureLauncherActivity } = require('./launcher-activity');
 
 const INPUT_DIR = TOOL_OUTPUT_DIR;
 const SEMANTIC = path.join(INPUT_DIR, 'semantic.json');
 const DESIGN_PNG = path.join(INPUT_DIR, 'normalized.png'); // 设计稿截图（new.html）
 const SHOT = path.join(INPUT_DIR, 'compose-shot.png'); // Compose 截图
+
+try {
+  ensureLauncherActivity(PROJECT_ROOT);
+} catch (error) {
+  console.error(`\n${error.message}`);
+  process.exit(1);
+}
+
 const ACTIVITY = process.argv[2] || requiredSetting('COMPOSE_ACTIVITY', COMPOSE_ACTIVITY);
 
 if (!fs.existsSync(SEMANTIC)) {

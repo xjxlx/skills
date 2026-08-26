@@ -8,6 +8,17 @@
 
 个人技能目录只保存脚本和文档；不得在其中保存设计包、图片、APK、`node_modules` 或执行产物。
 
+## 执行前置检查
+
+技能会在总入口以及直接 Compose 生成/验收入口扫描项目源 `AndroidManifest.xml`。必须存在已有的 Activity 或 Activity-alias，并在同一个 `<intent-filter>` 中同时包含：
+
+```xml
+<action android:name="android.intent.action.MAIN" />
+<category android:name="android.intent.category.LAUNCHER" />
+```
+
+未检测到时脚本会提示用户并以失败状态停止，不会创建新的 Activity、修改 Manifest、编译、安装或启动模拟器。请先由用户补齐或确认现有默认 Activity，再重新执行。
+
 ## 首次安装依赖
 
 ```bash

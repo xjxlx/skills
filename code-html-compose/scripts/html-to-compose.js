@@ -67,9 +67,11 @@ const {
   COMPOSE_R_IMPORT,
   DESIGN_DIR,
   EXPERIENCE_RULES_PATH,
+  PROJECT_ROOT,
   TOOL_OUTPUT_DIR,
   requiredSetting,
 } = require('./config');
+const { ensureLauncherActivity } = require('./launcher-activity');
 
 const TOOLS = __dirname;
 const SEMANTIC = path.join(TOOL_OUTPUT_DIR, 'semantic.json');
@@ -1615,6 +1617,13 @@ ${sectionsCode}
 
 // ---------------- main ----------------
 function main() {
+  try {
+    ensureLauncherActivity(PROJECT_ROOT);
+  } catch (error) {
+    console.error(`\n${error.message}`);
+    process.exit(1);
+  }
+
   if (!fs.existsSync(SEMANTIC)) {
     console.error(`语义树不存在：${SEMANTIC}。请先运行 normalize.js 生成语义树。`);
     process.exit(1);

@@ -33,6 +33,7 @@ const {
   TOOL_OUTPUT_DIR,
   WORK_DIR,
 } = require('./config');
+const { ensureLauncherActivity } = require('./launcher-activity');
 
 const TOOLS = __dirname;
 const OUT_DIR = TOOL_OUTPUT_DIR;
@@ -138,6 +139,13 @@ function appendExperience(report) {
 }
 
 function main() {
+  try {
+    ensureLauncherActivity(PROJECT_ROOT);
+  } catch (error) {
+    console.error(`\n${error.message}`);
+    process.exit(1);
+  }
+
   fs.mkdirSync(OUT_DIR, { recursive: true });
   if (!fs.existsSync(EXPERIENCE)) {
     fs.writeFileSync(EXPERIENCE, '# code-html-compose 经验库\n\n记录每次失败差异与修正建议，用于持续优化生成逻辑。\n');

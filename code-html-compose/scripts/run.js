@@ -18,6 +18,7 @@ const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const { PROJECT_ROOT, WORK_DIR } = require('./config');
+const { ensureLauncherActivity } = require('./launcher-activity');
 
 const TOOLS = __dirname;
 const BASE_ENV = {
@@ -31,6 +32,13 @@ function run(cmd, env = {}) {
 }
 
 function main() {
+  try {
+    ensureLauncherActivity(PROJECT_ROOT);
+  } catch (error) {
+    console.error(`\n${error.message}`);
+    process.exit(1);
+  }
+
   const zipPath = process.argv[2] || process.env.ZIP_PATH;
   if (!zipPath) {
     console.error('步骤1：缺少 zip 包。请先提供蓝湖导出的 HTML 压缩包，再执行：');
