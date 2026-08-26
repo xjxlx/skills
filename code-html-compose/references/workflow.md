@@ -2,7 +2,7 @@
 
 ## 输入与中间层
 
-开始任何解压、生成、编译、安装或模拟器操作前，先在项目源 Manifest 中确认已有默认 Launcher Activity：同一个 `<intent-filter>` 必须同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。检查失败时立即提示并停止，不得为了验收自行创建 Activity 或写入 Manifest；`build/` 等生成目录中的合并 Manifest 不能替代源配置。
+开始任何解压、生成、编译、安装或模拟器操作前，先根据 `COMPOSE_ACTIVITY` 在项目源 Manifest 中定位当前生成布局的承载 Activity，并确认该 Activity 自己的同一个 `<intent-filter>` 同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。检查失败时立即提示并停止，不得改用项目中其他 Launcher Activity，也不得为了验收自行创建 Activity 或写入 Manifest；`build/` 等生成目录中的合并 Manifest 不能替代源配置。
 
 解压目录必须直接包含 `index.html`（或 `.code-lanhu-index.html`）、引用的 CSS 和 `img/`。解析器用 Chrome/Puppeteer 采集可见元素的几何、文本、颜色、背景、圆角、阴影和层级，输出 `semantic.json`。
 

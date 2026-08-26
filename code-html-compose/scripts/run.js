@@ -4,6 +4,7 @@
  * 用法：node run.js <蓝湖导出zip路径>
  *
  * 流程：
+ *   0. 校验 COMPOSE_ACTIVITY 指向的现有 Activity 自身包含 MAIN + LAUNCHER
  *   1. 接收 zip 包（无则提示提供）
  *   2. 解压到 ~/Downloads（unzip-to-downloads.js），定位含 index.html 的设计源目录 DESIGN_DIR
  *   3. 读取 DESIGN_DIR（含 index.html + css + img 资源）
@@ -17,8 +18,8 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { PROJECT_ROOT, WORK_DIR } = require('./config');
-const { ensureLauncherActivity } = require('./launcher-activity');
+const { COMPOSE_ACTIVITY, PROJECT_ROOT, WORK_DIR } = require('./config');
+const { ensureConfiguredActivity } = require('./launcher-activity');
 
 const TOOLS = __dirname;
 const BASE_ENV = {
@@ -33,7 +34,7 @@ function run(cmd, env = {}) {
 
 function main() {
   try {
-    ensureLauncherActivity(PROJECT_ROOT);
+    ensureConfiguredActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);

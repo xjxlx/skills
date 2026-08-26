@@ -22,9 +22,8 @@ const {
   PROJECT_ROOT,
   TOOL_OUTPUT_DIR,
   WORK_DIR,
-  requiredSetting,
 } = require('./config');
-const { ensureLauncherActivity } = require('./launcher-activity');
+const { ensureConfiguredActivity } = require('./launcher-activity');
 
 const INPUT_DIR = TOOL_OUTPUT_DIR;
 const SEMANTIC = path.join(INPUT_DIR, 'semantic.json');
@@ -32,13 +31,13 @@ const DESIGN_PNG = path.join(INPUT_DIR, 'normalized.png'); // 设计稿截图（
 const SHOT = path.join(INPUT_DIR, 'compose-shot.png'); // Compose 截图
 
 try {
-  ensureLauncherActivity(PROJECT_ROOT);
+  ensureConfiguredActivity(PROJECT_ROOT, process.argv[2] || COMPOSE_ACTIVITY);
 } catch (error) {
   console.error(`\n${error.message}`);
   process.exit(1);
 }
 
-const ACTIVITY = process.argv[2] || requiredSetting('COMPOSE_ACTIVITY', COMPOSE_ACTIVITY);
+const ACTIVITY = process.argv[2] || COMPOSE_ACTIVITY;
 
 if (!fs.existsSync(SEMANTIC)) {
   throw new Error(`语义树不存在：${SEMANTIC}。请先运行 normalize.js。`);

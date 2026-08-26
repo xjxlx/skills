@@ -35,10 +35,26 @@ function collectManifestPaths(projectRoot) {
   return manifests.sort();
 }
 
+function stripXmlComments(xml) {
+  return xml.replace(/<!--[\s\S]*?-->/g, '');
+}
+
 function readAttribute(source, attributeName) {
   const escapedName = attributeName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   const match = source.match(new RegExp(`${escapedName}\\s*=\\s*["']([^"']+)["']`, 'i'));
   return match ? match[1] : null;
+}
+
+function readManifestPackage(xml) {
+  const manifestTag = xml.match(/<manifest\b[^>]*>/i);
+  return manifestTag ? readAttribute(manifestTag[0], 'package') : null;
+}
+
+function normalizeActivityName(name, manifestPackage) {
+  if (!name) return null;
+  if (name.startsWith('.')) return `${manifestPackage || ''}${name}`;
+  if (!name.includes('.')) return manifestPackage ? `${manifestPackage}.${name}` : name;
+  return name;
 }
 
 function hasNamedTag(source, tagName, name) {
@@ -55,46 +71,99 @@ function hasLauncherIntentFilter(activityBlock) {
   });
 }
 
-function findLauncherActivities(manifestPath) {
-  const xml = fs.readFileSync(manifestPath, 'utf8').replace(/<!--[\s\S]*?-->/g, '');
-  const activities = [];
+function findActivityDeclarations(manifestPath, fallbackPackage) {
+  const xml = stripXmlComments(fs.readFileSync(manifestPath, 'utf8'));
+  const manifestPackage = readManifestPackage(xml) || fallbackPackage;
   const activityBlocks = [
     ...xml.matchAll(/<(activity|activity-alias)\b(?![^>]*\/\s*>)[^>]*>[\s\S]*?<\/\1\s*>/gi),
     ...xml.matchAll(/<(activity|activity-alias)\b[^>]*\/\s*>/gi),
   ];
 
-  for (const match of activityBlocks) {
+  return activityBlocks.flatMap((match) => {
     const block = match[0];
-    if (!hasLauncherIntentFilter(block)) continue;
     const name = readAttribute(block, 'android:name');
-    if (name) activities.push({ name, manifest: manifestPath });
-  }
-
-  return activities;
+    if (!name) return [];
+    return [{
+      name,
+      fullName: normalizeActivityName(name, manifestPackage),
+      manifest: manifestPath,
+      launcher: hasLauncherIntentFilter(block),
+    }];
+  });
 }
 
-function inspectLauncherActivities(projectRoot) {
-  const activities = collectManifestPaths(projectRoot).flatMap(findLauncherActivities);
-  if (activities.length > 0) return { found: true, activities };
+function parseActivityComponent(activityComponent) {
+  const component = String(activityComponent || '').trim();
+  const separator = component.lastIndexOf('/');
+  if (!component || separator <= 0 || separator === component.length - 1) return null;
 
+  const packageName = component.slice(0, separator);
+  const className = component.slice(separator + 1);
   return {
-    found: false,
-    activities: [],
-    message: [
-      '未检测到默认 Launcher Activity：AndroidManifest.xml 中没有同时包含',
-      '<intent-filter>、<action android:name="android.intent.action.MAIN" />',
-      '和 <category android:name="android.intent.category.LAUNCHER" /> 的 Activity。',
-      '已停止后续 HTML/Compose 生成、编译、安装和验收操作。',
-      '请先确认或提供项目现有的默认 Activity；禁止自动创建新的 Activity。',
-    ].join('\n'),
+    component,
+    packageName,
+    className: className.startsWith('.') ? `${packageName}${className}` :
+      className.includes('.') ? className : `${packageName}.${className}`,
   };
 }
 
-function ensureLauncherActivity(projectRoot) {
-  const result = inspectLauncherActivities(projectRoot);
+function stopMessage(component, reason) {
+  const detail = reason === 'missing-component'
+    ? '未配置 COMPOSE_ACTIVITY，无法确定当前生成布局实际由哪个 Activity 承载。'
+    : reason === 'not-found'
+      ? `未在项目源 AndroidManifest.xml 中找到 COMPOSE_ACTIVITY=${component} 对应的 Activity 或 Activity-alias。`
+      : `COMPOSE_ACTIVITY=${component} 已找到，但它没有同时包含 MAIN 和 LAUNCHER 的默认 intent-filter。`;
+
+  return [
+    detail,
+    '需要确认该承载生成布局的 Activity 中存在：',
+    '<intent-filter>、<action android:name="android.intent.action.MAIN" />',
+    '和 <category android:name="android.intent.category.LAUNCHER" />。',
+    '已停止后续 HTML/Compose 生成、编译、安装和验收操作。',
+    '请先确认或提供现有的默认 Activity；禁止自动创建新的 Activity 或修改 Manifest。',
+  ].join('\n');
+}
+
+function inspectConfiguredActivity(projectRoot, activityComponent) {
+  const parsed = parseActivityComponent(activityComponent);
+  if (!parsed) {
+    return {
+      found: false,
+      reason: 'missing-component',
+      activities: [],
+      message: stopMessage(activityComponent, 'missing-component'),
+    };
+  }
+
+  const declarations = collectManifestPaths(projectRoot)
+    .flatMap((manifestPath) => findActivityDeclarations(manifestPath, parsed.packageName))
+    .filter((activity) => activity.fullName === parsed.className);
+  const target = declarations[0];
+  if (!target) {
+    return {
+      found: false,
+      reason: 'not-found',
+      activities: [],
+      message: stopMessage(parsed.component, 'not-found'),
+    };
+  }
+  if (!target.launcher) {
+    return {
+      found: false,
+      reason: 'not-launcher',
+      activities: [target],
+      message: stopMessage(parsed.component, 'not-launcher'),
+    };
+  }
+
+  return { found: true, reason: null, activities: [target], activity: target };
+}
+
+function ensureConfiguredActivity(projectRoot, activityComponent) {
+  const result = inspectConfiguredActivity(projectRoot, activityComponent);
   if (!result.found) {
     const error = new Error(result.message);
-    error.code = 'NO_LAUNCHER_ACTIVITY';
+    error.code = `INVALID_COMPOSE_ACTIVITY_${result.reason.toUpperCase()}`;
     throw error;
   }
   return result;
@@ -102,7 +171,7 @@ function ensureLauncherActivity(projectRoot) {
 
 module.exports = {
   collectManifestPaths,
-  findLauncherActivities,
-  inspectLauncherActivities,
-  ensureLauncherActivity,
+  findActivityDeclarations,
+  inspectConfiguredActivity,
+  ensureConfiguredActivity,
 };

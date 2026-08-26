@@ -61,6 +61,7 @@ const {
 } = require('./compose-generation-rules');
 const {
   COMPOSE_IMAGE_IMPORTS,
+  COMPOSE_ACTIVITY,
   COMPOSE_KOTLIN_DIR,
   COMPOSE_PACKAGE,
   COMPOSE_RES_DIR,
@@ -71,7 +72,7 @@ const {
   TOOL_OUTPUT_DIR,
   requiredSetting,
 } = require('./config');
-const { ensureLauncherActivity } = require('./launcher-activity');
+const { ensureConfiguredActivity } = require('./launcher-activity');
 
 const TOOLS = __dirname;
 const SEMANTIC = path.join(TOOL_OUTPUT_DIR, 'semantic.json');
@@ -1618,7 +1619,7 @@ ${sectionsCode}
 // ---------------- main ----------------
 function main() {
   try {
-    ensureLauncherActivity(PROJECT_ROOT);
+    ensureConfiguredActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);

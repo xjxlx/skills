@@ -24,7 +24,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 
 ## 固定流程
 
-1. 在目标 Android 项目根目录确认工作区改动，并先检查源代码 `AndroidManifest.xml` 是否已有包含 `MAIN` 与 `LAUNCHER` 的默认 Activity（或 Activity-alias）。未检测到时必须提示用户、停止全部后续操作；禁止自行创建 Activity、修改 Manifest 或使用新建验收 Activity 绕过检查。
+1. 在目标 Android 项目根目录确认工作区改动，并先根据 `COMPOSE_ACTIVITY` 定位当前生成布局实际承载的 Activity（或 Activity-alias），检查它自己的 `MAIN` + `LAUNCHER` 默认 intent-filter。未检测到目标 Activity 或标签时必须提示用户、停止全部后续操作；禁止自行创建 Activity、修改 Manifest 或使用其他 Activity 绕过检查。
 2. 安装脚本依赖：`npm ci --prefix <本技能>/scripts`。
 3. 配置 `PROJECT_ROOT`、Compose 目标目录、包名、`R` 与图片组件导入；完整变量见 [配置参考](references/configuration.md)。
 4. 用 `node <本技能>/scripts/run.js <设计包.zip>` 执行：解压、DOM 采集、规范化 HTML、有限像素对比、Compose 生成、构建安装和结构/局部像素验收。
@@ -32,8 +32,9 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 
 ### Launcher Activity 前置阻断
 
-- 总入口和直接的 Compose 生成/验收入口都会扫描项目源 Manifest；只认同一个 `intent-filter` 中同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER` 的现有 Activity/Activity-alias。
-- 未找到时输出缺少标签、已停止后续 HTML/Compose 生成、编译、安装和验收的提示，并以失败状态退出；不得自动创建新的 Activity 或补写 `MAIN`/`LAUNCHER` 标签。
+- 这里检查的是 Launcher 的 `intent-filter` 标签，不是 `android:launchMode` 属性。
+- 总入口和直接的 Compose 生成/验收入口都会读取 `COMPOSE_ACTIVITY`（验收命令行参数优先）并定位该 Activity；只认它自己的同一个 `intent-filter` 中同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。
+- 目标 Activity 未配置、未找到或缺少任一标签时，输出明确提示，停止后续 HTML/Compose 生成、编译、安装和验收，并以失败状态退出；不得用项目中其他 Launcher Activity 替代，也不得自动创建 Activity 或补写 `MAIN`/`LAUNCHER` 标签。
 - `build/`、`.gradle/` 和其他生成目录不参与发现，避免用过期合并 Manifest 掩盖项目源配置缺失。
 
 ## 必须遵守的判断

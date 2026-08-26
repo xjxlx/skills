@@ -10,14 +10,16 @@
 
 ## 执行前置检查
 
-技能会在总入口以及直接 Compose 生成/验收入口扫描项目源 `AndroidManifest.xml`。必须存在已有的 Activity 或 Activity-alias，并在同一个 `<intent-filter>` 中同时包含：
+技能会在总入口以及直接 Compose 生成/验收入口读取 `COMPOSE_ACTIVITY`，定位当前生成布局实际使用的 Activity 或 Activity-alias，并只检查该声明自己的同一个 `<intent-filter>` 是否同时包含：
+
+这里的“启动标签”指 Launcher intent-filter，不是 `android:launchMode` 属性。
 
 ```xml
 <action android:name="android.intent.action.MAIN" />
 <category android:name="android.intent.category.LAUNCHER" />
 ```
 
-未检测到时脚本会提示用户并以失败状态停止，不会创建新的 Activity、修改 Manifest、编译、安装或启动模拟器。请先由用户补齐或确认现有默认 Activity，再重新执行。
+未配置、未找到目标 Activity 或缺少标签时，脚本会提示用户并以失败状态停止，不会用其他 Launcher Activity 替代，也不会创建新的 Activity、修改 Manifest、编译、安装或启动模拟器。请先由用户补齐或确认 `COMPOSE_ACTIVITY` 指向的现有 Activity，再重新执行。
 
 ## 首次安装依赖
 

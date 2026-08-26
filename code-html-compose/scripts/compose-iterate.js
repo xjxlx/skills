@@ -27,13 +27,14 @@ const { recordExperienceEvent } = require('./compose-generation-rules');
 const {
   ADB,
   APK_PATH,
+  COMPOSE_ACTIVITY,
   EXPERIENCE_PATH,
   EXPERIENCE_RULES_PATH,
   PROJECT_ROOT,
   TOOL_OUTPUT_DIR,
   WORK_DIR,
 } = require('./config');
-const { ensureLauncherActivity } = require('./launcher-activity');
+const { ensureConfiguredActivity } = require('./launcher-activity');
 
 const TOOLS = __dirname;
 const OUT_DIR = TOOL_OUTPUT_DIR;
@@ -140,7 +141,7 @@ function appendExperience(report) {
 
 function main() {
   try {
-    ensureLauncherActivity(PROJECT_ROOT);
+    ensureConfiguredActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);

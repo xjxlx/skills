@@ -28,9 +28,8 @@ const {
   PROJECT_ROOT,
   TOOL_OUTPUT_DIR,
   WORK_DIR,
-  requiredSetting,
 } = require('./config');
-const { ensureLauncherActivity } = require('./launcher-activity');
+const { ensureConfiguredActivity } = require('./launcher-activity');
 
 // 设计稿倍率：默认 @2x（DP_PER_PX=0.5，semantic css px 为物理像素），@1x 设计稿（如 812，css px 即 dp 值）传 DP_PER_PX=1。
 // 与 html-to-compose.js 保持一致，经环境变量 DP_PER_PX 传递。
@@ -47,7 +46,7 @@ const DESIGN_PNG = path.join(INPUT_DIR, 'original.png'); // 原始 HTML 截图�
 const NORMALIZED_PNG = path.join(INPUT_DIR, 'normalized.png'); // 规范化 HTML 仅作为中间层健康检查
 const SHOT = path.join(INPUT_DIR, 'compose-shot.png');
 const UI_XML = path.join(INPUT_DIR, 'ui.xml');
-const ACTIVITY = process.argv[2] || requiredSetting('COMPOSE_ACTIVITY', COMPOSE_ACTIVITY);
+const ACTIVITY = process.argv[2] || COMPOSE_ACTIVITY;
 
 // 结构校验容差（px，物理=设计 px）。文本宽高都必须校验，防止 wrapContent 溢出遮挡相邻元素。
 const TOL_XY = parseFloat(process.env.VALIDATE_TOL_XY || '4');
@@ -195,7 +194,7 @@ function regionAvgDist(a, b) {
 
 function main() {
   try {
-    ensureLauncherActivity(PROJECT_ROOT);
+    ensureConfiguredActivity(PROJECT_ROOT, ACTIVITY);
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);
