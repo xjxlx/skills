@@ -32,12 +32,14 @@ function buildResponsivePageRoot({
   designWidthDp,
   designHeightDp,
   rootBackgroundColor,
+  outerBackgroundCode = '',
   backgroundCode = '',
   contentCode = '',
 }) {
   const width = kotlinNumber(designWidthDp);
   const height = kotlinNumber(designHeightDp);
   const backgroundModifier = rootBackgroundColor ? `\n                .background(${rootBackgroundColor})` : '';
+  const outerBackgroundModifier = rootBackgroundColor ? `\n                .background(${rootBackgroundColor})` : '';
   return `@SuppressLint("UnusedBoxWithConstraintsScope")
 @OptIn(ExperimentalComposeUiApi::class, ExperimentalTextApi::class)
 @Preview(widthDp = ${Math.round(designWidthDp)}, heightDp = ${Math.round(designHeightDp)}, showBackground = true)
@@ -45,9 +47,11 @@ function buildResponsivePageRoot({
 fun ${pageName}(modifier: Modifier = Modifier) {
     val hostDensity = LocalDensity.current
     BoxWithConstraints(
-        modifier = modifier.fillMaxSize(),
+        modifier = modifier
+            .fillMaxSize()${outerBackgroundModifier},
         contentAlignment = Alignment.Center,
     ) {
+${outerBackgroundCode}
         val windowWidthPx = with(hostDensity) { maxWidth.toPx() }
         val windowHeightPx = with(hostDensity) { maxHeight.toPx() }
         val fitDensity = min(

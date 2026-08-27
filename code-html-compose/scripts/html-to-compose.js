@@ -15,11 +15,11 @@
  *   - 当前设计稿的实际像素尺寸动态取自 semantic.json，元素坐标在 main() 中用 DP_PER_PX
  *     换算为逻辑 dp 后生成，禁止套用历史设计稿尺寸。
  *   - 根容器以当前设计稿逻辑宽高作为固定画布；运行时按窗口宽高的较小比例动态设置局部 Density，
- *     居中完整显示，不拉伸、不裁切，也不使用 graphicsLayer 掩盖基线几何误差。
+ *     居中完整显示；不同宽高比的剩余空间由设计背景填充，内容不拉伸、不裁切，也不使用 graphicsLayer 掩盖基线几何误差。
  *   - 每个视觉元素直接相对根 Box 用 padding(start, top) 定位，保留 0.5dp 精度。
  *   - 每个视觉元素打 Modifier.testTag("e<domIndex>")，并记录被后层完整覆盖的不可观测节点。
- *   - 设计画布根背景图用 ImageItem(ImageParameter(data=R.mipmap.*, modifier=Modifier.fillMaxSize(),
- *     contentScale=ContentScale.FillBounds))，只铺满固定逻辑画布。
+ *   - 设计画布根背景图用 ContentScale.FillBounds 铺满固定逻辑画布；窗口外层用 ContentScale.Crop
+ *     铺满不同宽高比产生的剩余空间。
  *
  * Major 约束（方法过大）：元素过多时把每个顶层 root 拆成独立 private fun Test1PageSection<k>()
  * Composable，根函数按序调用，避免单个方法字节码超 64KB（MethodTooLargeException）。
@@ -1429,6 +1429,7 @@ function genTest1Page(semantic, imgMap, ruleState) {
   const bgIndex = elements.findIndex((e) => isFullScreenBg(e, designW, designH));
   const pageIndex = elements.findIndex((e) => isFullScreenPlainBox(e, designW, designH));
   let bgCode = '';
+  let outerBgCode = '';
   let rootBgColor = null;
   let restElements = elements;
   const skipIndices = new Set();
@@ -1436,6 +1437,15 @@ function genTest1Page(semantic, imgMap, ruleState) {
     const bg = elements[bgIndex];
     const res = resolveResName(bg, imgMap);
     if (res) {
+      outerBgCode =
+        `        // 宽高比不同的设备：背景铺满窗口，设计内容仍保持等比缩放\n` +
+        `        ImageItem(\n` +
+        `            parameter = ImageParameter(\n` +
+        `                data = R.mipmap.${res},\n` +
+        `                modifier = Modifier.fillMaxSize(),\n` +
+        `                contentScale = ContentScale.Crop,\n` +
+        `            )\n` +
+        `        )\n`;
       bgCode =
         `        // 根布局背景图：仅铺满当前设计画布\n` +
         `        ImageItem(\n` +
@@ -1535,6 +1545,7 @@ function genTest1Page(semantic, imgMap, ruleState) {
     designWidthDp: DESIGN_W,
     designHeightDp: DESIGN_H,
     rootBackgroundColor: rootBgColor,
+    outerBackgroundCode: outerBgCode,
     backgroundCode: bgCode,
     contentCode: callsStr,
   });
@@ -1610,7 +1621,7 @@ ${R_IMPORT}
  *  - 像素级验收尺寸取自当前 semantic.json；运行时按窗口宽高较小比例居中适配，不拉伸、不裁切。
  *  - 元素定位不使用 offset；所有视觉元素直接相对根 Box 使用 padding 定位并保留 0.5dp 精度。
  *  - 每个视觉元素带 Modifier.testTag("e<domIndex>")，供 compose-validate.js 完整边界校验。
- *  - 根背景图只铺满设计画布；不同宽高比窗口允许出现居中留白。
+ *  - 根背景图铺满设计画布，外层背景填充不同宽高比窗口的剩余空间。
  */
 ${responsivePageRoot}
 

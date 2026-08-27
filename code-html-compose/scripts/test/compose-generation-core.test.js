@@ -29,6 +29,7 @@ test('运行时适配必须使用当前设计尺寸并按较小比例完整显�
     designWidthDp: 800,
     designHeightDp: 360,
     rootBackgroundColor: 'Color.White',
+    outerBackgroundCode: '        OuterBackground()',
     backgroundCode: '        SampleBackground()',
     contentCode: '        SampleContent()',
   });
@@ -36,6 +37,8 @@ test('运行时适配必须使用当前设计尺寸并按较小比例完整显�
   assert.match(source, /windowWidthPx \/ 800f/);
   assert.match(source, /windowHeightPx \/ 360f/);
   assert.match(source, /contentAlignment = Alignment\.Center/);
+  assert.equal((source.match(/\.background\(Color\.White\)/g) || []).length, 2);
+  assert.match(source, /OuterBackground\(\)/);
   assert.match(source, /requiredSize\(width = 800\.dp, height = 360\.dp\)/);
   assert.doesNotMatch(source, /Density\(density = 2f/);
 });
