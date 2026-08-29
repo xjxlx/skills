@@ -230,10 +230,7 @@ class NormalizeImagesTest(unittest.TestCase):
         result = self.run_skill("--zip", archive)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        source_hash = hashlib.md5(archive.read_bytes()).hexdigest()
-        extracted = self.project / ".code-image/extracted" / f"L6-{source_hash}"
-        self.assertTrue((extracted / "design/app/src/main/res/mipmap-xhdpi/Group 62.png").is_file())
-        self.assertTrue((extracted / ".extraction.json").is_file())
+        self.assertFalse((self.project / ".code-image/extracted").exists())
         self.assertTrue(
             (self.project / "app/src/main/res/mipmap-xhdpi/icon_l6_group.png").is_file()
         )
@@ -241,6 +238,17 @@ class NormalizeImagesTest(unittest.TestCase):
             (self.project / "app/src/main/res/mipmap-xxhdpi/icon_l6_group.png").is_file()
         )
         self.assertEqual(len(self.resources()), 2)
+        self.assertEqual(
+            {record["originalPath"] for record in self.resources()},
+            {
+                "L6.zip!/design/app/src/main/res/mipmap-xhdpi/Group 62.png",
+                "L6.zip!/design/app/src/main/res/mipmap-xxhdpi/Group 62.png",
+            },
+        )
+        self.assertFalse(
+            any(path.name == "Group 62.png" for path in self.project.rglob("Group 62.png"))
+        )
+        source_hash = hashlib.md5(archive.read_bytes()).hexdigest()
         self.assertTrue(
             (self.project / ".code-image" / f"L6-{source_hash}.resources.json").is_file()
         )

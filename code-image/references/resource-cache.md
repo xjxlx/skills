@@ -8,7 +8,7 @@
 <project>/.code-image/<来源名>-<完整来源MD5>.resources.json
 ```
 
-ZIP 的来源名和 Hash 取 ZIP 本身，单图取图片本身；完整 MD5 避免短前缀碰撞。同一来源身份始终复用一份记录。ZIP 私有缓存位于 `<project>/.code-image/extracted/<来源名>-<完整MD5>/`，以 `.extraction.json` 绑定每个文件的路径、大小和 Hash；JSON 和图片均用同目录临时文件原子替换。
+ZIP 的来源名和 Hash 取 ZIP 本身，单图取图片本身；完整 MD5 避免短前缀碰撞。同一来源身份始终复用一份记录。ZIP 原始文件只在系统临时目录中短暂存在，以 `.extraction.json` 绑定本次解压文件的路径、大小和 Hash；导入结束后临时目录自动清理，项目 `.code-image/` 不保存原始图片。
 
 ## 文件格式
 
@@ -32,11 +32,11 @@ ZIP 的来源名和 Hash 取 ZIP 本身，单图取图片本身；完整 MD5 避
 
 `composeFile` 未提供时为 `null`。身份包含目标资源目录，使同一来源可同时用于多个模块而不迁移或删除旧模块资源。不记录 `resourceFamily` 或 `updatedAt`；目标目录已经由 `outputPath` 表达。
 
-ZIP 图片的 `originalPath` 是项目私有解压目录内路径，`outputPath` 是目标模块对应的 `mipmap` 路径。蓝湖协调器逐图调用时，ZIP 内图片可共用显式来源清单；`--resources-file` 兼容 6 位或完整 MD5 文件名，但路径必须直属项目 `.code-image/`。
+ZIP 图片的 `originalPath` 使用稳定的 `<ZIP文件名>!/<ZIP内部路径>` 格式，例如 `L6.zip!/mipmap-xxhdpi/矩形.png`；`outputPath` 是目标模块对应的 `mipmap` 路径。蓝湖协调器逐图调用时，ZIP 内图片可共用显式来源清单；`--resources-file` 兼容 6 位或完整 MD5 文件名，但路径必须直属项目 `.code-image/`。
 
 ZIP 导入生成名称时使用 ZIP 文件名作为前缀：`L6.zip` 中的 `矩形备份 4.png` 在 `mipmap-xxhdpi` 目录输出为 `icon_l6_rectangle.png`。中文优先转换为语义英文，未知中文使用拼音；不使用 MD5 或 `image_` 作为名称兜底。ZIP 内不同密度目录分别映射到项目对应的同名密度目录。
 
-ZIP 不含任何 `mipmap` 或 `mipmap-*` 目录下的图片时，不创建解压目录、不写入 JSON，也不作为 ZIP 处理；应改为传入一张实际图片使用 `--image`。
+ZIP 不含任何 `mipmap` 或 `mipmap-*` 目录下的图片时，不创建临时解压内容、不写入 JSON，也不作为 ZIP 处理；应改为传入一张实际图片使用 `--image`。
 
 ## 查找和冲突规则
 

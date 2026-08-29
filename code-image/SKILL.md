@@ -5,7 +5,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 # Code Image
 
-导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 解压后按其中的 `mipmap` 或 `mipmap-*` 目录复制到项目对应目录，并以 ZIP 文件名作为资源名前缀。每张导入图片均生成语义化的 Android 资源名并记录映射。视觉对比是独立能力，不会在图片转换时自动执行。
+导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 仅临时解压，按其中的 `mipmap` 或 `mipmap-*` 目录将重命名后的图片复制到项目对应目录，并以 ZIP 文件名作为资源名前缀。原始 ZIP 文件不会复制到项目，临时原始文件在导入结束后自动清理。每张导入图片均生成语义化的 Android 资源名并记录映射。视觉对比是独立能力，不会在图片转换时自动执行。
 
 ## 强制入口与维护边界
 
@@ -30,7 +30,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 ## 导入位置
 
 - 未提供 `--compose` 时写入 `<project>/app/src/main/res/`；提供时从 Compose 的 `src` 路径确定真实模块，禁止跨模块导入。
-- 单图进入目标模块 `mipmap-xxhdpi/`；ZIP 先按完整 MD5 安全解压到 `<project>/.code-image/extracted/`，再将重命名后的图片复制到项目中同名的 `mipmap` 或 `mipmap-*` 密度目录，例如 ZIP 内 `mipmap-xxhdpi/` 进入项目 `mipmap-xxhdpi/`。
+- 单图进入目标模块 `mipmap-xxhdpi/`；ZIP 先按完整 MD5 校验并安全解压到系统临时目录，再将重命名后的图片复制到项目中同名的 `mipmap` 或 `mipmap-*` 密度目录，例如 ZIP 内 `mipmap-xxhdpi/` 进入项目 `mipmap-xxhdpi/`。项目中只保留重命名后的输出图片和资源清单，不保留 ZIP 原始图片。
 - 输出图片始终使用目标目录；不以输入图片原目录或示例中的 `mipmap-nodpi` 作为单图输出位置。
 
 ## 命名规则
@@ -45,7 +45,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 ## 记录与改名
 
-每个来源身份在项目 `.code-image/` 使用一份可复用清单：`<来源名>-<完整来源MD5>.resources.json`。同一 ZIP 或单图复用该清单、解压目录和已导入图片；来源 MD5 改变时创建新批次。协调脚本可显式传入同目录内带 6 位或完整 MD5 的来源清单；禁止共享 `resources.json`。记录格式见 [resource-cache.md](references/resource-cache.md)。
+每个来源身份在项目 `.code-image/` 使用一份可复用清单：`<来源名>-<完整来源MD5>.resources.json`。同一 ZIP 或单图复用该清单和已导入图片；ZIP 原始文件只在系统临时目录存在，导入结束后清理，不在项目中建立解压缓存。来源 MD5 改变时创建新批次。协调脚本可显式传入同目录内带 6 位或完整 MD5 的来源清单；禁止共享 `resources.json`。记录格式见 [resource-cache.md](references/resource-cache.md)。
 
 每项记录原始路径和名称、原始 Hash、输出路径和名称、命名版本、可选 Compose 文件及稳定身份。同一来源清单中相同内容且同目标目录只保留首个规范映射；不同来源或模块记录互不迁移、删除。协调脚本可通过 `--resources-file` 指定来源清单。
 
@@ -93,7 +93,7 @@ python3 scripts/compare_images.py \
 - 禁止覆盖未登记图片、自动合并不同来源的图片或修改 Compose 引用。
 - 禁止把单图输出到输入所在目录；必须使用 `mipmap-xxhdpi`。
 - 禁止把不含 `mipmap*` 图片目录的 ZIP 当作合格 ZIP；必须改用单张实际图片的 `--image` 逻辑。
-- 禁止把 ZIP 解压到公开 Downloads、覆盖不受本 Skill 管理的目录，或让差异输出覆盖输入图片。
+- 禁止把 ZIP 原始文件解压到项目目录、公开 Downloads 或其他不受本 Skill 管理的目录；原始文件只能进入系统临时目录，并在本次导入结束后清理。禁止让差异输出覆盖输入图片。
 - 禁止写入 `.codex/`，或因外部 Skill 调用、日常执行而自行修改本 Skill。
 
 ## 验证

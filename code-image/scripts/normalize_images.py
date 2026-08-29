@@ -285,6 +285,7 @@ def build_plan(
     reserved: set[Path] | None = None,
     asset_name: str | None = None,
     archive_stem: str | None = None,
+    original_path_override: str | None = None,
 ) -> RenamePlan:
     source = Path(source_path).resolve()
     if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -292,13 +293,13 @@ def build_plan(
     validate_image_file(source)
     target_dir = Path(target_dir).resolve()
     project_root = Path(project_root).resolve()
-    current_path = relative_path(source, project_root)
+    current_path = original_path_override or relative_path(source, project_root)
     file_hash = md5_file(source)
     manifest = load_resources(resources_path)
     record = _find_record(manifest["resources"], current_path, file_hash, target_dir, project_root)
     if record is None:
         record = _find_record_by_hash(manifest["resources"], file_hash, target_dir, project_root)
-    original_path = record.get("originalPath") if record else current_path
+    original_path = original_path_override or (record.get("originalPath") if record else current_path)
     original_name = record.get("originalName") if record else source.name
     compose_file = relative_path(compose_path, project_root) if compose_path else (record.get("composeFile") if record else None)
 
@@ -459,44 +460,9 @@ def archive_mipmap_directory(entry_name: str) -> str | None:
     return None
 
 
-def _extraction_cache_is_complete(
-    destination: Path,
-    source_hash: str,
-    entries: list[tuple[ZipInfo, PurePosixPath]],
-) -> bool:
-    marker = destination / EXTRACTION_MARKER
-    try:
-        data = json.loads(marker.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    expected = {
-        path.as_posix(): entry.file_size
-        for entry, path in entries
-        if not entry.is_dir()
-    }
-    recorded = data.get("files") if isinstance(data, dict) else None
-    if data.get("sourceMd5") != source_hash or not isinstance(recorded, list):
-        return False
-    records = {item.get("path"): item for item in recorded if isinstance(item, dict)}
-    if set(records) != set(expected):
-        return False
-    for relative, size in expected.items():
-        target = destination / PurePosixPath(relative)
-        record = records[relative]
-        if (
-            target.is_symlink()
-            or not target.is_file()
-            or target.stat().st_size != size
-            or record.get("size") != size
-            or record.get("md5") != md5_file(target)
-        ):
-            return False
-    return True
-
-
-def extract_zip_to_cache(zip_path: Path, project_root: Path) -> Path:
+def extract_zip_to_temp(zip_path: Path) -> tuple[Path, tempfile.TemporaryDirectory]:
+    """在系统临时目录解压 ZIP，避免把原始文件留在项目中。"""
     source_hash = md5_file(zip_path)
-    destination = project_root / ".code-image/extracted" / f"{safe_token(zip_path.stem)}-{source_hash}"
     with ZipFile(zip_path) as archive:
         entries = _safe_zip_entries(archive)
         if not any(
@@ -504,28 +470,26 @@ def extract_zip_to_cache(zip_path: Path, project_root: Path) -> Path:
             for entry, path in entries
         ):
             raise ValueError("ZIP 不含 mipmap 图片，不能按 ZIP 处理；请传入单个图片使用 --image")
-        if _extraction_cache_is_complete(destination, source_hash, entries):
-            return destination
-        if destination.exists():
-            raise ValueError(f"ZIP 私有解压缓存不完整，拒绝覆盖；请移除后重试：{destination}")
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        with tempfile.TemporaryDirectory(prefix=f".{destination.name}.", dir=destination.parent) as temporary_value:
-            temporary = Path(temporary_value)
+        workspace = tempfile.TemporaryDirectory(prefix=f"code-image-{safe_token(zip_path.stem)}-")
+        destination = Path(workspace.name)
+        try:
             files = []
             for entry, relative in entries:
                 if entry.is_dir():
                     continue
-                target = temporary / relative
+                target = destination / relative
                 target.parent.mkdir(parents=True, exist_ok=True)
                 with archive.open(entry) as input_stream, target.open("xb") as output_stream:
                     shutil.copyfileobj(input_stream, output_stream)
                 files.append({"path": relative.as_posix(), "size": entry.file_size, "md5": md5_file(target)})
             write_resources(
-                temporary / EXTRACTION_MARKER,
+                destination / EXTRACTION_MARKER,
                 {"version": 1, "sourceMd5": source_hash, "files": sorted(files, key=lambda item: item["path"])},
             )
-            os.replace(temporary, destination)
-    return destination
+        except Exception:
+            workspace.cleanup()
+            raise
+    return destination, workspace
 
 
 def mipmap_directory_name(path: Path, extraction_root: Path) -> str | None:
@@ -588,49 +552,56 @@ def main() -> int:
         else resources_path_for_source(project_root, source_path)
     )
     res_root = resource_root_for_compose(project_root, compose)
+    zip_workspace = None
 
-    if args.image:
-        source = source_path
-        plans = [
-            build_plan(
-                source,
-                res_root / "mipmap-xxhdpi",
-                project_root,
-                compose,
-                resources_path,
-                asset_name=args.asset_name,
-            )
-        ]
-    else:
-        extraction_root = extract_zip_to_cache(source_path, project_root)
-        reserved: set[Path] = set()
-        imported_hashes: set[tuple[Path, str]] = set()
-        plans = []
-        for source, directory_name in zip_image_sources(extraction_root):
-            target_dir = (res_root / directory_name).resolve()
-            source_hash = md5_file(source)
-            if (target_dir, source_hash) in imported_hashes:
-                continue
-            plan = build_plan(
-                source,
-                res_root / directory_name,
-                project_root,
-                compose,
-                resources_path,
-                reserved,
-                archive_stem=source_path.stem,
-            )
-            plans.append(plan)
-            reserved.add(plan.target.resolve())
-            imported_hashes.add((target_dir, source_hash))
+    try:
+        if args.image:
+            source = source_path
+            plans = [
+                build_plan(
+                    source,
+                    res_root / "mipmap-xxhdpi",
+                    project_root,
+                    compose,
+                    resources_path,
+                    asset_name=args.asset_name,
+                )
+            ]
+        else:
+            extraction_root, zip_workspace = extract_zip_to_temp(source_path)
+            reserved: set[Path] = set()
+            imported_hashes: set[tuple[Path, str]] = set()
+            plans = []
+            for source, directory_name in zip_image_sources(extraction_root):
+                target_dir = (res_root / directory_name).resolve()
+                source_hash = md5_file(source)
+                if (target_dir, source_hash) in imported_hashes:
+                    continue
+                entry_path = source.relative_to(extraction_root).as_posix()
+                plan = build_plan(
+                    source,
+                    res_root / directory_name,
+                    project_root,
+                    compose,
+                    resources_path,
+                    reserved,
+                    archive_stem=source_path.stem,
+                    original_path_override=f"{source_path.name}!/{entry_path}",
+                )
+                plans.append(plan)
+                reserved.add(plan.target.resolve())
+                imported_hashes.add((target_dir, source_hash))
 
-    _print_plans(plans)
-    if args.apply:
-        apply_plans(plans, resources_path, project_root)
-        print(f"已更新资源记录：{resources_path}")
-    else:
-        print("当前为 Dry Run，确认名称后追加 --apply 执行。")
-    return 0
+        _print_plans(plans)
+        if args.apply:
+            apply_plans(plans, resources_path, project_root)
+            print(f"已更新资源记录：{resources_path}")
+        else:
+            print("当前为 Dry Run，确认名称后追加 --apply 执行。")
+        return 0
+    finally:
+        if zip_workspace is not None:
+            zip_workspace.cleanup()
 
 
 if __name__ == "__main__":
