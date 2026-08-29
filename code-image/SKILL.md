@@ -5,7 +5,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 # Code Image
 
-导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 解压后按其中的 `mipmap` 或 `mipmap-*` 目录复制到项目对应目录。每张导入图片均独立生成合规名称并记录映射。视觉对比是独立能力，不会在图片转换时自动执行。
+导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 解压后按其中的 `mipmap` 或 `mipmap-*` 目录复制到项目对应目录，并以 ZIP 文件名作为资源名前缀。每张导入图片均独立生成合规名称并记录映射。视觉对比是独立能力，不会在图片转换时自动执行。
 
 ## 强制入口与维护边界
 
@@ -29,7 +29,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 ## 导入位置
 
 - 未提供 `--compose` 时写入 `<project>/app/src/main/res/`；提供时从 Compose 的 `src` 路径确定真实模块，禁止跨模块导入。
-- 单图进入目标模块 `mipmap-xxhdpi/`；ZIP 先按完整 MD5 安全解压到 `<project>/.code-image/extracted/`，再保留其中对应的 `mipmap` 密度目录。
+- 单图进入目标模块 `mipmap-xxhdpi/`；ZIP 先按完整 MD5 安全解压到 `<project>/.code-image/extracted/`，再将重命名后的图片复制到项目中同名的 `mipmap` 或 `mipmap-*` 密度目录，例如 ZIP 内 `mipmap-xxhdpi/` 进入项目 `mipmap-xxhdpi/`。
 - 输出图片始终使用目标目录；不以输入图片原目录或示例中的 `mipmap-nodpi` 作为单图输出位置。
 
 ## 命名规则
@@ -37,8 +37,9 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 - 图片基础名转为小写 snake_case：`Group 62.png` → `group_62.png`；无可用英文字符时使用稳定 Hash；数字开头时加 `image_`。
 - 无 `--compose` 时输出 `icon_<图片基础名>.<扩展名>`，例如 `icon_group_62.png`。
 - 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`；提供 `--asset-name` 时图片基础名取该语义名，`Layout` 和 `Page` 后缀不参与命名空间。
-- 已以 `icon_` 开头且满足 Android 小写资源名规则的名称不再加前缀；同一来源清单内，来源路径加 Hash 或同目标密度的内容 Hash 命中已有记录时，先验证输出路径、模块和内容 Hash。完整命中不复制；缺失或损坏时原子恢复原输出名；`--asset-name` 不迁移已有映射。
-- 目标 mipmap 目录已有未登记的同名文件时，从 `_1` 开始依次递增：`icon_group_62.png` → `icon_group_62_1.png` → `icon_group_62_2.png`。禁止覆盖未登记图片。
+- ZIP 导入时以 ZIP 文件名作为前缀，先规范化 ZIP 名称再拼接图片基础名；例如 `L6.zip` 中的 `Group 62.png` 输出为 `icon_l6_group_62.png`。ZIP 前缀优先于 Compose 页面命名空间；ZIP 内已规范化的图片名也必须补上 ZIP 前缀。
+- 命名完成后，如果目标密度目录中已有同名文件，或同一 ZIP 的同一密度目录中生成了同名结果，从 `_1` 开始递增：`icon_l6_group_62.png` → `icon_l6_group_62_1.png` → `icon_l6_group_62_2.png`。禁止覆盖未登记图片。
+- 已以 `icon_` 开头且满足 Android 小写资源名规则的单图名称不再加前缀；同一来源清单内，来源路径加 Hash 或同目标密度的内容 Hash 命中已有记录时，先验证输出路径、模块和内容 Hash。完整命中不复制；缺失或损坏时原子恢复原输出名；`--asset-name` 不迁移已有映射。
 
 ## 记录与改名
 
@@ -69,7 +70,7 @@ ZIP：
 
 ```bash
 python3 scripts/normalize_images.py \
-  --zip ~/Downloads/report-assets.zip \
+  --zip ~/Downloads/L6.zip \
   --project-root . \
   --apply
 ```

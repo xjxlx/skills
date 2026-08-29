@@ -220,8 +220,8 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertTrue((target_dir / "icon_group_62_1.png").is_file())
         self.assertEqual(existing.read_bytes(), b"existing")
 
-    def test_zip_uses_private_cache_and_copies_each_mipmap_directory(self):
-        archive = self.input_dir / "design.zip"
+    def test_zip_uses_archive_name_prefix_and_copies_each_mipmap_directory(self):
+        archive = self.input_dir / "L6.zip"
         with zipfile.ZipFile(archive, "w") as zip_file:
             zip_file.writestr("design/app/src/main/res/mipmap-xhdpi/Group 62.png", self.image_bytes((1, 2, 3)))
             zip_file.writestr("design/app/src/main/res/mipmap-xxhdpi/Group 62.png", self.image_bytes((4, 5, 6)))
@@ -231,26 +231,39 @@ class NormalizeImagesTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         source_hash = hashlib.md5(archive.read_bytes()).hexdigest()
-        extracted = self.project / ".code-image/extracted" / f"design-{source_hash}"
+        extracted = self.project / ".code-image/extracted" / f"L6-{source_hash}"
         self.assertTrue((extracted / "design/app/src/main/res/mipmap-xhdpi/Group 62.png").is_file())
         self.assertTrue((extracted / ".extraction.json").is_file())
         self.assertTrue(
-            (self.project / "app/src/main/res/mipmap-xhdpi/icon_group_62.png").is_file()
+            (self.project / "app/src/main/res/mipmap-xhdpi/icon_l6_group_62.png").is_file()
         )
         self.assertTrue(
-            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_group_62.png").is_file()
+            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_l6_group_62.png").is_file()
         )
         self.assertEqual(len(self.resources()), 2)
         self.assertTrue(
-            (self.project / ".code-image" / f"design-{source_hash}.resources.json").is_file()
+            (self.project / ".code-image" / f"L6-{source_hash}.resources.json").is_file()
         )
 
         repeated = self.run_skill("--zip", archive)
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
         self.assertEqual(len(self.resources()), 2)
         self.assertFalse(
-            (self.project / "app/src/main/res/mipmap-xhdpi/icon_group_62_1.png").exists()
+            (self.project / "app/src/main/res/mipmap-xhdpi/icon_l6_group_62_1.png").exists()
         )
+
+    def test_zip_name_conflict_uses_incrementing_suffix_in_same_density(self):
+        archive = self.input_dir / "L6.zip"
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("mipmap-xxhdpi/Group 62.png", self.image_bytes((1, 2, 3)))
+            zip_file.writestr("mipmap-xxhdpi/Group  62.png", self.image_bytes((4, 5, 6)))
+
+        result = self.run_skill("--zip", archive)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        target_dir = self.project / "app/src/main/res/mipmap-xxhdpi"
+        self.assertTrue((target_dir / "icon_l6_group_62.png").is_file())
+        self.assertTrue((target_dir / "icon_l6_group_62_1.png").is_file())
 
     def test_zip_without_mipmap_images_is_rejected_before_extraction(self):
         archive = self.input_dir / "not-mipmap.zip"

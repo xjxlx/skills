@@ -232,6 +232,7 @@ def build_plan(
     resources_path: Path,
     reserved: set[Path] | None = None,
     asset_name: str | None = None,
+    archive_stem: str | None = None,
 ) -> RenamePlan:
     source = Path(source_path).resolve()
     if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -252,12 +253,15 @@ def build_plan(
     previous_target = _record_output_path(record, project_root) if record else None
     if record:
         output_name = record["outputName"]
-    elif _is_normalized(source.name):
+    elif _is_normalized(source.name) and archive_stem is None:
         output_name = source.name
     else:
-        namespace = normalize_namespace(compose_path) if compose_path else None
-        prefix = f"icon_{namespace}_" if namespace else "icon_"
         name_source = asset_name if asset_name else Path(original_name).stem
+        if archive_stem:
+            prefix = f"icon_{normalize_asset_stem(archive_stem)}_"
+        else:
+            namespace = normalize_namespace(compose_path) if compose_path else None
+            prefix = f"icon_{namespace}_" if namespace else "icon_"
         output_name = (
             prefix
             + normalize_asset_stem(name_source, remove_copy_suffix=asset_name is None)
@@ -557,7 +561,15 @@ def main() -> int:
             source_hash = md5_file(source)
             if (target_dir, source_hash) in imported_hashes:
                 continue
-            plan = build_plan(source, res_root / directory_name, project_root, compose, resources_path, reserved)
+            plan = build_plan(
+                source,
+                res_root / directory_name,
+                project_root,
+                compose,
+                resources_path,
+                reserved,
+                archive_stem=source_path.stem,
+            )
             plans.append(plan)
             reserved.add(plan.target.resolve())
             imported_hashes.add((target_dir, source_hash))
