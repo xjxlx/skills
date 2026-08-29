@@ -5,7 +5,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 # Code Image
 
-导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 解压后按其中的 `mipmap` 或 `mipmap-*` 目录复制到项目对应目录，并以 ZIP 文件名作为资源名前缀。每张导入图片均独立生成合规名称并记录映射。视觉对比是独立能力，不会在图片转换时自动执行。
+导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 解压后按其中的 `mipmap` 或 `mipmap-*` 目录复制到项目对应目录，并以 ZIP 文件名作为资源名前缀。每张导入图片均生成语义化的 Android 资源名并记录映射。视觉对比是独立能力，不会在图片转换时自动执行。
 
 ## 强制入口与维护边界
 
@@ -25,6 +25,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 - `--compose <path>` 可选。提供时必须是实际存在的 Compose 文件，仅用于生成页面命名空间。
 - `--asset-name <name>` 可选，仅与 `--image` 一起使用；上游已解析设计节点语义时，用它替代导出文件名参与命名。
 - `--project-root <path>` 可选，默认当前工作目录。
+- 中文命名依赖 Python 包 `text-unidecode`；缺少该依赖且名称含未配置的中文时应报错，禁止退回 MD5 或 `image_` 名称。
 
 ## 导入位置
 
@@ -34,18 +35,19 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 ## 命名规则
 
-- 图片基础名转为小写 snake_case：`Group 62.png` → `group_62.png`；无可用英文字符时使用稳定 Hash；数字开头时加 `image_`。
-- 无 `--compose` 时输出 `icon_<图片基础名>.<扩展名>`，例如 `icon_group_62.png`。
+- 图片基础名先删除 `备份`、`副本`、`copy`、`backup` 以及独立的复制编号字段，再转换为语义英文和小写 snake_case；例如 `矩形备份 4.png` → `rectangle.png`、`编组 40.png` → `group.png`。
+- 常见中文设计词使用语义英文映射；未配置的中文使用拼音，不使用 MD5：`今日目标.png` → `today_target.png`，`测试图标.png` → `ce_shi_tu_biao.png`。
+- 无 `--compose` 时输出 `icon_<图片基础名>.<扩展名>`，例如 `Group 62.png` → `icon_group.png`。
 - 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`；提供 `--asset-name` 时图片基础名取该语义名，`Layout` 和 `Page` 后缀不参与命名空间。
-- ZIP 导入时以 ZIP 文件名作为前缀，先规范化 ZIP 名称再拼接图片基础名；例如 `L6.zip` 中的 `Group 62.png` 输出为 `icon_l6_group_62.png`。ZIP 前缀优先于 Compose 页面命名空间；ZIP 内已规范化的图片名也必须补上 ZIP 前缀。
-- 命名完成后，如果目标密度目录中已有同名文件，或同一 ZIP 的同一密度目录中生成了同名结果，从 `_1` 开始递增：`icon_l6_group_62.png` → `icon_l6_group_62_1.png` → `icon_l6_group_62_2.png`。禁止覆盖未登记图片。
-- 已以 `icon_` 开头且满足 Android 小写资源名规则的单图名称不再加前缀；同一来源清单内，来源路径加 Hash 或同目标密度的内容 Hash 命中已有记录时，先验证输出路径、模块和内容 Hash。完整命中不复制；缺失或损坏时原子恢复原输出名；`--asset-name` 不迁移已有映射。
+- ZIP 导入时以 ZIP 文件名作为前缀，先规范化 ZIP 名称再拼接图片基础名；例如 `L6.zip` 中的 `Group 62.png` 输出为 `icon_l6_group.png`。ZIP 前缀优先于 Compose 页面命名空间；ZIP 内已规范化的图片名也必须补上 ZIP 前缀。
+- 命名完成后，如果目标密度目录中已有同名文件，或同一 ZIP 的同一密度目录中生成了同名结果，从 `_1` 开始递增：`icon_l6_group.png` → `icon_l6_group_1.png` → `icon_l6_group_2.png`。禁止覆盖未登记图片。
+- 已以 `icon_` 开头且满足 Android 小写资源名规则的单图名称不再加前缀；同一来源清单内，来源路径加 Hash 或同目标密度的内容 Hash 命中已有记录时，先验证输出路径、模块和内容 Hash。完整命中不复制；缺失或损坏时原子恢复当前命名版本的输出名；旧命名版本记录按当前规则迁移；`--asset-name` 不迁移已有当前版本映射。
 
 ## 记录与改名
 
 每个来源身份在项目 `.code-image/` 使用一份可复用清单：`<来源名>-<完整来源MD5>.resources.json`。同一 ZIP 或单图复用该清单、解压目录和已导入图片；来源 MD5 改变时创建新批次。协调脚本可显式传入同目录内带 6 位或完整 MD5 的来源清单；禁止共享 `resources.json`。记录格式见 [resource-cache.md](references/resource-cache.md)。
 
-每项记录原始路径和名称、原始 Hash、输出路径和名称、可选 Compose 文件及稳定身份。同一来源清单中相同内容且同目标目录只保留首个规范映射；不同来源或模块记录互不迁移、删除。协调脚本可通过 `--resources-file` 指定来源清单。
+每项记录原始路径和名称、原始 Hash、输出路径和名称、命名版本、可选 Compose 文件及稳定身份。同一来源清单中相同内容且同目标目录只保留首个规范映射；不同来源或模块记录互不迁移、删除。协调脚本可通过 `--resources-file` 指定来源清单。
 
 ## 工作流程
 

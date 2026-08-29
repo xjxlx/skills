@@ -16,6 +16,10 @@ from pathlib import Path, PurePosixPath
 from zipfile import ZipFile, ZipInfo
 
 from PIL import Image, UnidentifiedImageError
+try:
+    from text_unidecode import unidecode
+except ImportError:
+    unidecode = None
 
 
 IMAGE_EXTENSIONS = {".gif", ".jpeg", ".jpg", ".png", ".webp"}
@@ -24,6 +28,20 @@ MAX_ARCHIVE_ENTRIES = 5000
 MAX_SINGLE_FILE_BYTES = 256 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
+NAMING_VERSION = 3
+
+SEMANTIC_TRANSLATIONS = {
+    "今日目标": "today_target",
+    "形状结合": "shape_combination",
+    "导学": "guide",
+    "矩形": "rectangle",
+    "编组": "group",
+    "蒙版": "mask",
+    "路径": "path",
+    "锁": "lock",
+}
+HAN_CHARACTER_PATTERN = re.compile(r"[\u3400-\u9fff]")
+COPY_MARKER_PATTERN = re.compile(r"(?i)(?:备份|副本|\bbackup\b|\bcopy\b)")
 
 
 @dataclass(frozen=True)
@@ -60,6 +78,17 @@ def snake_token(value: str) -> str:
     return re.sub(r"_+", "_", re.sub(r"[^a-zA-Z0-9]+", "_", ascii_value)).strip("_").lower()
 
 
+def translate_to_english(value: str) -> str:
+    translated = value
+    for source, target in sorted(SEMANTIC_TRANSLATIONS.items(), key=lambda item: len(item[0]), reverse=True):
+        translated = translated.replace(source, f" {target} ")
+    if HAN_CHARACTER_PATTERN.search(translated):
+        if unidecode is None:
+            raise ValueError("无法将中文图片名转换为英文；请安装 text-unidecode")
+        translated = unidecode(translated)
+    return translated
+
+
 def normalize_namespace(compose_path: Path) -> str:
     stem = re.sub(r"(?i)(?:layout|page)$", "", compose_path.stem)
     token = snake_token(stem)
@@ -68,16 +97,39 @@ def normalize_namespace(compose_path: Path) -> str:
     return "screen_" + token if token[0].isdigit() else token
 
 
-def normalize_asset_stem(original_stem: str, remove_copy_suffix: bool = True) -> str:
-    without_copy_suffix = (
-        re.sub(r"(?:\(\d+\)|[_-]\d+)$", "", original_stem)
-        if remove_copy_suffix
-        else original_stem
+def normalize_asset_stem(
+    original_stem: str,
+    remove_copy_suffix: bool = True,
+    remove_numeric_tokens: bool = True,
+) -> str:
+    cleaned = COPY_MARKER_PATTERN.sub(" ", original_stem)
+    if remove_copy_suffix:
+        cleaned = re.sub(r"(?:\(\s*\d+\s*\)|[_-]\d+)$", "", cleaned)
+    if remove_numeric_tokens:
+        cleaned = re.sub(r"(?<![A-Za-z0-9])\d+(?![A-Za-z0-9])", " ", cleaned)
+    token = snake_token(translate_to_english(cleaned))
+    return token or "asset"
+
+
+def expected_output_name(
+    original_name: str,
+    extension: str,
+    compose_path: Path | None,
+    asset_name: str | None,
+    archive_stem: str | None,
+) -> str:
+    name_source = asset_name if asset_name else Path(original_name).stem
+    if archive_stem:
+        prefix = f"icon_{normalize_asset_stem(archive_stem, remove_numeric_tokens=False)}_"
+    else:
+        namespace = normalize_namespace(compose_path) if compose_path else None
+        prefix = f"icon_{namespace}_" if namespace else "icon_"
+    asset_stem = normalize_asset_stem(
+        name_source,
+        remove_copy_suffix=asset_name is None,
+        remove_numeric_tokens=asset_name is None,
     )
-    token = snake_token(without_copy_suffix)
-    if not token:
-        token = "image_" + hashlib.md5(original_stem.encode()).hexdigest()[:6]
-    return "image_" + token if token[0].isdigit() else token
+    return prefix + asset_stem + extension
 
 
 def relative_path(path: Path, project_root: Path) -> str:
@@ -251,21 +303,18 @@ def build_plan(
     compose_file = relative_path(compose_path, project_root) if compose_path else (record.get("composeFile") if record else None)
 
     previous_target = _record_output_path(record, project_root) if record else None
-    if record:
+    legacy_record = record is not None and record.get("namingVersion") != NAMING_VERSION
+    if record and not legacy_record:
         output_name = record["outputName"]
-    elif _is_normalized(source.name) and archive_stem is None:
+    elif not record and _is_normalized(source.name) and archive_stem is None:
         output_name = source.name
     else:
-        name_source = asset_name if asset_name else Path(original_name).stem
-        if archive_stem:
-            prefix = f"icon_{normalize_asset_stem(archive_stem)}_"
-        else:
-            namespace = normalize_namespace(compose_path) if compose_path else None
-            prefix = f"icon_{namespace}_" if namespace else "icon_"
-        output_name = (
-            prefix
-            + normalize_asset_stem(name_source, remove_copy_suffix=asset_name is None)
-            + source.suffix.lower()
+        output_name = expected_output_name(
+            original_name=original_name,
+            extension=source.suffix.lower(),
+            compose_path=compose_path,
+            asset_name=asset_name,
+            archive_stem=archive_stem,
         )
 
     replaceable = {previous_target.resolve()} if previous_target else set()
@@ -348,6 +397,7 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
             "outputPath": relative_path(plan.target, project_root),
             "outputName": plan.output_name,
             "composeFile": plan.compose_file,
+            "namingVersion": NAMING_VERSION,
         }
     manifest["version"] = 2
     manifest["resources"] = sorted(records.values(), key=lambda record: record["identity"])
