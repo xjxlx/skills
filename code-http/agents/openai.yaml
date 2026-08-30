@@ -1,0 +1,4 @@
+interface:
+  display_name: "code-http"
+  short_description: "从 .http 响应生成 Kotlin 接口、Bean 与 Flow"
+  default_prompt: "使用 $code-http 根据这个 .http 接口和响应 JSON，在指定 ViewModel 中生成 API、Bean、Flow 和调用方法，并完成编译校验。"

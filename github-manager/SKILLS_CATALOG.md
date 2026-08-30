@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-29 17:14:13，由 github-manager 维护
+> 自动生成于 2026-08-30 22:08:15，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -9,6 +9,7 @@
 |---|---|---|---|---|
 | [code-analyzer](https://github.com/xjxlx/skills/tree/main/code-analyzer) | 仅在用户明确点名 code-analyzer，或明确要求“使用本技能”进行 Java/Kotlin 代码分析、注释或审查时使用；普通代码阅读、逻辑分析、注... | code-normalize, skill-common | 已发布 | 2026-08-29 |
 | ["code-html-compose"](https://github.com/xjxlx/skills/tree/main/code-html-compose) | "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可量化验收的 Jetpack Compose 高保真基线；用于元素缺失、文字裁切、布局偏移或需要模... | 无 | 已发布 | 2026-08-29 |
+| [code-http](https://github.com/xjxlx/skills/tree/main/code-http) | "Use when Android/Kotlin 需要根据 .http 请求和真实接口响应或 JSON，在指定 ViewModel 中补齐 API、Bea... | skill-common | 已发布 | - |
 | [code-image](https://github.com/xjxlx/skills/tree/main/code-image) | Use when 需要导入 Android 图片资源，或明确要求比较设计图与应用截图的视觉差异。 | 无 | 已发布 | 2026-08-29 |
 | [code-lanhu-compose](https://github.com/xjxlx/skills/tree/main/code-lanhu-compose) | Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，需要在 Android 项目中高保真生成或还原 Jetpack Compose ... | code-image | 已发布 | 2026-08-29 |
 | [code-normalize](https://github.com/xjxlx/skills/tree/main/code-normalize) | 检测并安全规范 Java、Kotlin 类中的成员变量命名，更新全部引用，补充缺失的类注释，并为关键成员添加作用说明；发现已启用 ViewBinding ... | skill-common | 已发布 | 2026-08-29 |
@@ -22,6 +23,7 @@
 graph LR
   code-analyzer --> code-normalize
   code-analyzer --> skill-common
+  code-http --> skill-common
   code-lanhu-compose --> code-image
   code-normalize --> skill-common
   java-to-kotlin --> code-analyzer
@@ -54,6 +56,18 @@ graph LR
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-html-compose
 - **状态**：已发布
 - **最后更新**：2026-08-29
+
+### code-http
+
+- **目录名**：`code-http`
+- **用途**："Use when Android/Kotlin 需要根据 .http 请求和真实接口响应或 JSON，在指定 ViewModel 中补齐 API、Bea...
+- **依赖**：skill-common
+- **文件数**：2
+- **UI 元数据**：有 agents/openai.yaml
+- **路径**：`~/.codex/skills/code-http/`
+- **仓库**：https://github.com/xjxlx/skills/tree/main/code-http
+- **状态**：已发布
+- **最后更新**：-
 
 ### code-image
 
@@ -129,4 +143,4 @@ graph LR
 
 ---
 
-共 **8** 个 skill，其中 **8** 个已发布，**0** 个未发布。
+共 **9** 个 skill，其中 **9** 个已发布，**0** 个未发布。
