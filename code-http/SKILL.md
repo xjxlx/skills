@@ -20,13 +20,15 @@ description: "Use when Android/Kotlin 需要根据 .http 请求和真实接口�
 
 必须确认以下输入：
 
-1. `.http` 文件路径，以及要处理的接口描述或序号。
+1. `.http` 文件路径。用户点名接口描述或序号时只处理该请求；只给文件路径时，按描述块顺序处理全部不同接口。
 2. 目标 ViewModel 路径。
 3. 真实响应文本或 JSON 文件。响应可以是 HTTP 日志，需先去除响应头并解析 JSON body。
 
 响应证据按以下顺序使用：用户明确提供的 JSON、与目标请求匹配的最新 `.idea/httpRequests/*.json`、用户粘贴的响应、在认证和环境均可用时实际运行请求。请求无法运行且没有响应文件时，停止并要求补充响应，不得凭接口名称编造字段。
 
-处理前读取目标 ViewModel 全文、其 package 下的 `bean` 目录、项目实际的 `ApiServiceKotlin` 或等价 API 接口、`BaseBuddyViewModel` 及一个最近的同类 ViewModel。确认 `mApi` 的真实声明、`getMap`/参数封装方式、Flow 类型和错误处理模式后再写代码。
+处理前读取目标 ViewModel 全文、目标 ViewModel 所在 package 的同级 `bean` 目录、项目实际的 `ApiServiceKotlin` 或等价 API 接口、`BaseBuddyViewModel` 及一个最近的同类 ViewModel。Bean 路径严格从目标 ViewModel 的 package 推导，例如 `...compose.v2.V2ViewModel.kt` 对应 `...compose.v2.bean/`；不能根据接口现有调用方、页面路径或其他模块猜目录。确认 `mApi` 的真实声明、`getMap`/参数封装方式、Flow 类型和错误处理模式后再写代码。
+
+`.http` 中完全相同的重复请求块只生成一次；service 相同但参数、描述或响应不同的块视为不同接口，按出现顺序使用版本后缀。描述相同且无法判断是否重复时，先比较请求字段和响应证据，仍不明确则停止并要求选择。
 
 ## 命名契约
 
@@ -61,6 +63,7 @@ Flow 默认遵循项目现有模式：`private val _campHomeFlow = MutableStateF
 - 字段、层级、集合和类型必须来自完整响应。出现 `null` 或同一字段类型不一致时使用可空或项目已有的兼容类型，并记录判断依据。
 - 优先保持当前项目的 JSON 字段命名约定。项目已有 Bean 使用 `snake_case` 属性时不要擅自改成 camelCase；若项目使用 `@SerializedName`，沿用该风格。
 - 不用默认值或“常见用户字段”掩盖缺失响应；默认值只有在同级 Bean 已明确采用该约定时才使用。
+- Bean 文件必须保存到目标 ViewModel package 下的 `bean` 子目录，package 声明、import 和文件路径必须三者一致；即使 API 已在别的模块存在相似 Bean，也不能跨目录复用或迁移，除非用户明确要求。
 
 ## 生成调用链
 
@@ -120,7 +123,7 @@ fun getCampHome(unId: String, termSuiJi: String) {
 3. 使用项目已有的格式化和 Android CLI/Gradle 编译任务。BdEnglish 项目优先验证 `./gradlew :app:spotlessApply :app:compileDebugKotlin`，再运行 `./gradlew :app:spotlessCheck`；若项目变体不同，使用实际存在的目标任务。
 4. 编译失败时区分本次新增错误和工作区原有错误，报告首个可定位错误及证据；不能用“未执行编译”宣称完成。
 
-遇到以下情况停止生成并说明原因：响应缺失或 `data:null` 却要求生成未知 Bean；`.http` 选择不明确；目标 API 接口无法定位；命名冲突无法通过版本后缀消解；响应结构与现有 Bean 冲突且没有明确兼容策略。
+遇到以下情况停止生成并说明原因：响应缺失或 `data:null` 却要求生成未知 Bean；重复请求块无法区分；目标 API 接口无法定位；命名冲突无法通过版本后缀消解；响应结构与现有 Bean 冲突且没有明确兼容策略。
 
 ## 常见错误
 
