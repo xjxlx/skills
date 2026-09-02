@@ -1,7 +1,7 @@
 interface:
   display_name: "code-html-compose"
-  short_description: "把 HTML 设计包转为可量化验收的 Compose 基线"
-  default_prompt: "使用 $code-html-compose 将我提供的 HTML 设计包转换为可验证的 Jetpack Compose 基线。"
+  short_description: "把 HTML 设计包转为带结构和交互验收的 Compose 页面"
+  default_prompt: "使用 $code-html-compose 先区分主页面与滚动/弹窗状态参考，读取现有 Compose 和 code-image 资源，再生成或改造可验证的 Jetpack Compose 页面。"
 
 policy:
   allow_implicit_invocation: true

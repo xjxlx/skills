@@ -79,6 +79,26 @@ test('其他 Activity 有 Launcher 也不能替代生成布局的目标 Activity
   assert.match(result.message, /不要自动创建|禁止自动创建/);
 });
 
+test('existing Activity 模式允许复用非 Launcher 的既有页面承载 Activity', () => {
+  const projectRoot = createProject(`
+    <manifest package="com.example.app" xmlns:android="http://schemas.android.com/apk/res/android">
+      <application>
+        <activity android:name=".PreviewActivity" android:exported="false" />
+      </application>
+    </manifest>
+  `);
+
+  const result = inspectConfiguredActivity(
+    projectRoot,
+    'com.example.app/.PreviewActivity',
+    { allowNonLauncher: true },
+  );
+
+  assert.equal(result.found, true);
+  assert.equal(result.reason, 'existing');
+  assert.equal(result.activity.launcher, false);
+});
+
 test('被 XML 注释掉的 Launcher 配置不能被当成有效 Activity', () => {
   const projectRoot = createProject(`
     <manifest package="com.example.app" xmlns:android="http://schemas.android.com/apk/res/android">

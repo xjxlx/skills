@@ -154,7 +154,7 @@ function stopMessage(component, reason) {
   ].join('\n');
 }
 
-function inspectConfiguredActivity(projectRoot, activityComponent) {
+function inspectConfiguredActivity(projectRoot, activityComponent, options = {}) {
   const parsed = parseActivityComponent(activityComponent);
   if (!parsed) {
     return {
@@ -177,7 +177,7 @@ function inspectConfiguredActivity(projectRoot, activityComponent) {
       message: stopMessage(parsed.component, 'not-found'),
     };
   }
-  if (!target.launcher) {
+  if (!target.launcher && options.allowNonLauncher !== true) {
     return {
       found: false,
       reason: 'not-launcher',
@@ -186,11 +186,16 @@ function inspectConfiguredActivity(projectRoot, activityComponent) {
     };
   }
 
-  return { found: true, reason: null, activities: [target], activity: target };
+  return {
+    found: true,
+    reason: target.launcher ? null : 'existing',
+    activities: [target],
+    activity: target,
+  };
 }
 
-function ensureConfiguredActivity(projectRoot, activityComponent) {
-  const result = inspectConfiguredActivity(projectRoot, activityComponent);
+function ensureConfiguredActivity(projectRoot, activityComponent, options = {}) {
+  const result = inspectConfiguredActivity(projectRoot, activityComponent, options);
   if (!result.found) {
     const error = new Error(result.message);
     error.code = `INVALID_COMPOSE_ACTIVITY_${result.reason.toUpperCase()}`;
@@ -199,8 +204,8 @@ function ensureConfiguredActivity(projectRoot, activityComponent) {
   return result;
 }
 
-function ensureLandscapeActivity(projectRoot, activityComponent) {
-  const result = ensureConfiguredActivity(projectRoot, activityComponent);
+function ensureLandscapeActivity(projectRoot, activityComponent, options = {}) {
+  const result = ensureConfiguredActivity(projectRoot, activityComponent, options);
   const manifestPath = result.activity.manifest;
   const parsed = parseActivityComponent(activityComponent);
   const orientationTarget = result.activity.type === 'activity-alias'

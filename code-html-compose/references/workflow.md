@@ -2,7 +2,29 @@
 
 ## 输入与中间层
 
-开始任何解压、生成、编译、安装或模拟器操作前，先根据 `COMPOSE_ACTIVITY` 在项目源 Manifest 中定位当前生成布局的承载 Activity，并确认该 Activity 自己的同一个 `<intent-filter>` 同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。检查失败时立即提示并停止，不得改用项目中其他 Launcher Activity，也不得为了补齐入口自行创建 Activity 或写入 `MAIN`/`LAUNCHER`；横向设计稿仅允许给已确认的目标 Activity 写入 `android:screenOrientation="landscape"`。`build/` 等生成目录中的合并 Manifest 不能替代源配置。
+开始任何解压、生成、编译、安装或模拟器操作前，先根据 `COMPOSE_ACTIVITY` 在项目源 Manifest 中定位当前页面的承载 Activity。默认确认该 Activity 自己的同一个 `<intent-filter>` 同时声明 `MAIN` 和 `LAUNCHER`；已有非 Launcher 页面必须显式使用 `COMPOSE_ACTIVITY_MODE=existing`。该模式不创建入口、不补写标签、不改用其他 Activity，调试时要走应用真实导航或项目已有测试入口。横向设计稿仅允许给已确认的 Activity 写入 `android:screenOrientation="landscape"`。`build/` 等生成目录中的合并 Manifest 不能替代源配置。
+
+## 参考包分工
+
+先建立 `COMPOSE_REFERENCE_MANIFEST`，把多个设计包声明成一个页面的不同证据来源：
+
+```json
+{
+  "primary": { "zip": "/绝对路径/L6.zip", "scope": "primary-page" },
+  "fragments": [
+    { "zip": "/绝对路径/滑动.zip", "scope": "vertical-list-state" },
+    { "zip": "/绝对路径/弹窗.zip", "scope": "popup-state" }
+  ]
+}
+```
+
+只对 `primary` 执行整页 `normalize → original.png → Compose` 基线；对每个片段提取差异：纵向片段只确认列表 viewport、item 顺序和滚动后的内容，弹窗片段只确认触发锚点、弹窗边界、选中项和遮挡关系。片段的 DOM index、CSS 高度和截图坐标不能直接追加到主页面树。
+
+## 先反向理解现有代码
+
+生成或修改前按以下顺序检查：目标 Kotlin 的页面入口和区域 Composable、Activity/Fragment 的数据流和回调、Manifest 方向与导出属性、`.code-image` 资源元数据及现有 `R` 引用、列表键和弹窗状态。已有结构正确时只补齐状态和验收标签，不重新生成一个平行页面。
+
+对“固定骨架 + 列表 + 弹窗”页面，目标结构至少应是：页面根 → 左导航/顶部 → 今日目标与套系触发器 → 纵向套系列表 → 每个套系内横向书卡；弹窗作为根页面的条件 overlay。状态至少包含 `selectedSet`、`popupVisible`、列表数据和当前 item 定位，不能由静态节点名称推导。
 
 解压目录必须直接包含 `index.html`（或 `.code-lanhu-index.html`）、引用的 CSS 和 `img/`。解析器用 Chrome/Puppeteer 采集可见元素的几何、文本、颜色、背景、圆角、阴影和层级，输出 `semantic.json`。
 
@@ -20,6 +42,7 @@
 - 横向设计稿启动前依赖目标 Activity 的静态 `android:screenOrientation="landscape"` 配置，并要求模拟器已经由用户旋转到横向；截图必须保持原始方向，若截图仍为竖屏则直接失败。禁止脚本执行 `wm size`、`wm density`、`policy_control`、`accelerometer_rotation`、`user_rotation`，禁止旋转图片或做方向补偿；当前模拟器分辨率保持不变，验收按截图真实尺寸换算边界。
 - 坐标、尺寸、字号、行高和圆角固定按 `DP_PER_PX=0.5` 换算，保留半 dp/sp 精度；HTML `1334×750` 与 Android `375×667dp` 的轴向对应关系为 `1334↔667`、`750↔375`。
 - 背景图、裁切背景、圆角阴影、文字基线和单行文字缩放由生成器统一处理。
+- 图片默认只在 `COMPOSE_RESOURCE_MODE=copy` 时复制；项目已有 `@code-image` 资源时使用 `existing` + `COMPOSE_RESOURCE_MAP`，生成 Kotlin 只引用现有 `R.mipmap`，并在资源报告中记录 reused，不复制 ZIP 图片。
 - 元素较多时拆分私有 Composable，避免单方法字节码超过 64KB。
 - 重复且外框几何一致的卡片或文本项识别为列表；横向、纵向均适用，前置完整卡片的宽高允许约 1dp/1–2px 栅格误差。卡片内部的标题、按钮、锁图标、完成态和高亮态属于 item 状态，不因这些字段不同而拆散列表。若最后一个条目在宿主视口边界被裁切，仍要在列表数据中增加一个完整尺寸的 item 对象，再由宿主视口自然裁切其可见部分；不能额外创建半截页面组件，也不能把半截可见宽度写进 item 数据。
 
@@ -33,8 +56,14 @@
 - `Column`、`LazyColumn`、`LazyRow` 或网格只表达容器策略，列表语义来自“数据列表 + item 渲染器”。若像素基线阶段暂时逐元素输出，必须在基线验收通过后完成上述语义化重构，并检查每个 item 的边界、顺序和 `testTag` 映射。
 - 判定顺序固定为“先看前面至少 3 个完整卡片的外框，再用完整 item 数据统一卡片尺寸，最后看尾项是否只是视口裁切”：不要拿尾项的可见宽高改写 item 尺寸，也不要因条目内部状态不同回退成多个页面级 Composable。
 
+### 状态与交互识别
+
+- 弹窗 ZIP 的额外高度通常是展开状态的画布延伸，不是新的页面高度；保留主页面根尺寸，使用 overlay/Popup 表达展开态。
+- 触发器、箭头、选中项、关闭行为和筛选后的列表必须共用一个状态源；不允许生成“看起来打开但点了没有变化”的静态弹窗。
+- 中间纵向列表只在其 viewport 内滚动，左右书卡保持 `LazyRow`/横向容器语义；不要让整页滚动替代设计稿给出的局部滚动。
+
 ## 验收
 
-生成器输出可观测元素清单和被完全覆盖层。安装 APK 后，校验器通过 `uiautomator dump` 比对 `testTag` 边界，并从文本优先的样本中裁剪设计截图和模拟器截图做局部色差比较。
+生成器输出可观测元素清单和被完全覆盖层。安装 APK 后，校验器通过 `uiautomator dump` 比对宏观 `testTag` 与 `testTag("e<domIndex>")` 边界，并从文本优先的样本中裁剪设计截图和模拟器截图做局部色差比较。行为验收顺序固定为：主页面 → 打开套系弹窗 → 选择套系 → 检查筛选 → 滚动中间列表 → 检查当前项定位。
 
 结构通过率低于 95% 或局部抽查低于 80% 即为失败。失败时输出元素/区块清单并保留在目标项目的工作目录；修复生成器后重新跑同一验收，再进行任何语义化重构。

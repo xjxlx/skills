@@ -64,10 +64,13 @@ const {
 const {
   COMPOSE_IMAGE_IMPORTS,
   COMPOSE_ACTIVITY,
+  COMPOSE_ACTIVITY_MODE,
   COMPOSE_KOTLIN_DIR,
   COMPOSE_PACKAGE,
   COMPOSE_RES_DIR,
   COMPOSE_R_IMPORT,
+  COMPOSE_RESOURCE_MAP,
+  COMPOSE_RESOURCE_MODE,
   DESIGN_DIR,
   EXPERIENCE_RULES_PATH,
   PROJECT_ROOT,
@@ -75,6 +78,7 @@ const {
   requiredSetting,
 } = require('./config');
 const { ensureLandscapeActivity } = require('./launcher-activity');
+const { buildImageResourceMap, loadResourceMapping } = require('./resource-map');
 
 const TOOLS = __dirname;
 const SEMANTIC = path.join(TOOL_OUTPUT_DIR, 'semantic.json');
@@ -160,8 +164,7 @@ function esc(str) {
 
 // ---------------- 图片收集与复制 ----------------
 function collectImages(elements) {
-  const map = new Map(); // 文件名 -> 资源名
-  let idx = 0;
+  const files = [];
   for (const e of elements) {
     let file = null;
     if (e.role === 'image' && e.imgSrc) {
@@ -170,15 +173,19 @@ function collectImages(elements) {
       const m = e.style.bgImage.match(/url\("?([^")]+)"?\)/);
       if (m) file = path.basename(m[1]);
     }
-    if (!file) continue;
-    if (map.has(file)) continue;
-    map.set(file, `icon_report_html_${idx++}`);
+    if (file) files.push(file);
   }
-  return map;
+  return buildImageResourceMap(files, {
+    mode: COMPOSE_RESOURCE_MODE,
+    mapping: loadResourceMapping(COMPOSE_RESOURCE_MAP),
+  });
 }
 
 function copyImages(semantic) {
   const map = collectImages(semantic.elements);
+  if (COMPOSE_RESOURCE_MODE === 'existing') {
+    return [...map.entries()].map(([file, resName]) => ({ file, resName, reused: true }));
+  }
   const copied = [];
   fs.mkdirSync(RES_IMG_DIR, { recursive: true });
   for (const [file, resName] of map.entries()) {
@@ -1681,7 +1688,9 @@ ${sectionsCode}
 // ---------------- main ----------------
 function main() {
   try {
-    ensureLandscapeActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
+    ensureLandscapeActivity(PROJECT_ROOT, COMPOSE_ACTIVITY, {
+      allowNonLauncher: COMPOSE_ACTIVITY_MODE === 'existing',
+    });
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);
@@ -1743,6 +1752,7 @@ function main() {
   const observable = findObservableElements(renderableElements);
   fs.writeFileSync(GENERATION_REPORT, JSON.stringify({
     mode: 'pixel-baseline',
+    resourceMode: COMPOSE_RESOURCE_MODE,
     rules: {
       active: Object.keys(experienceState.rules).filter((id) => experienceState.rules[id].enabled),
       referenceFiltered: referenceFilter.filtered,
@@ -1759,13 +1769,21 @@ function main() {
     observableElementCount: observable.observable.length,
     observableDomIndices: observable.observable.map((element) => element.domIndex),
     occluded: observable.occluded,
+    resources: [],
   }, null, 2));
 
   // 1) 复制图片到 res
-  console.log('步骤 9.1：复制设计图到 app res 目录');
+  console.log(COMPOSE_RESOURCE_MODE === 'existing'
+    ? '步骤 9.1：复用现有 code-image 资源映射'
+    : '步骤 9.1：复制设计图到 app res 目录');
   const copied = copyImages(semantic);
-  console.log(`  已复制 ${copied.length} 张图片 → ${RES_IMG_DIR}`);
+  console.log(COMPOSE_RESOURCE_MODE === 'existing'
+    ? `  已复用 ${copied.length} 个资源引用`
+    : `  已复制 ${copied.length} 张图片 → ${RES_IMG_DIR}`);
   const imgMap = new Map(copied.map((c) => [c.file, c.resName]));
+  const report = JSON.parse(fs.readFileSync(GENERATION_REPORT, 'utf8'));
+  report.resources = copied;
+  fs.writeFileSync(GENERATION_REPORT, JSON.stringify(report, null, 2));
 
   // 2) 生成 Kotlin
   console.log(`步骤 9.2：生成 ${PAGE_NAME}.kt`);

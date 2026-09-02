@@ -18,8 +18,15 @@
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const { COMPOSE_ACTIVITY, PROJECT_ROOT, WORK_DIR } = require('./config');
+const {
+  COMPOSE_ACTIVITY,
+  COMPOSE_ACTIVITY_MODE,
+  COMPOSE_REFERENCE_MANIFEST,
+  PROJECT_ROOT,
+  WORK_DIR,
+} = require('./config');
 const { ensureLandscapeActivity } = require('./launcher-activity');
+const { loadReferenceManifest } = require('./reference-manifest');
 
 const TOOLS = __dirname;
 const BASE_ENV = {
@@ -34,7 +41,9 @@ function run(cmd, env = {}) {
 
 function main() {
   try {
-    ensureLandscapeActivity(PROJECT_ROOT, COMPOSE_ACTIVITY);
+    ensureLandscapeActivity(PROJECT_ROOT, COMPOSE_ACTIVITY, {
+      allowNonLauncher: COMPOSE_ACTIVITY_MODE === 'existing',
+    });
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);
@@ -49,6 +58,21 @@ function main() {
   if (!fs.existsSync(zipPath)) {
     console.error(`zip 包不存在：${zipPath}`);
     process.exit(1);
+  }
+
+  if (COMPOSE_REFERENCE_MANIFEST) {
+    let referenceManifest;
+    try {
+      referenceManifest = loadReferenceManifest(COMPOSE_REFERENCE_MANIFEST, PROJECT_ROOT);
+    } catch (error) {
+      console.error(`参考清单无效：${error.message}`);
+      process.exit(1);
+    }
+    if (path.resolve(referenceManifest.primary.zip) !== path.resolve(zipPath)) {
+      console.error('参考清单的 primary zip 必须与本次 run.js 输入的主页面 zip 相同。');
+      process.exit(1);
+    }
+    console.log(`参考角色：主页面 + ${referenceManifest.fragments.length} 个行为状态片段`);
   }
 
   // 步骤 1-3：验证 zip → 解压到下载目录 → 定位设计源目录

@@ -1,6 +1,6 @@
 # 个人 Skills 目录
 
-> 自动生成于 2026-08-30 22:11:38，由 github-manager 维护
+> 自动生成于 2026-09-02 11:57:59，由 github-manager 维护
 > GitHub 账号：xjxlx
 
 ## 概览
@@ -8,7 +8,7 @@
 | Skill | 用途 | 依赖 | 状态 | 最后更新 |
 |---|---|---|---|---|
 | [code-analyzer](https://github.com/xjxlx/skills/tree/main/code-analyzer) | 仅在用户明确点名 code-analyzer，或明确要求“使用本技能”进行 Java/Kotlin 代码分析、注释或审查时使用；普通代码阅读、逻辑分析、注... | code-normalize, skill-common | 已发布 | 2026-08-30 |
-| ["code-html-compose"](https://github.com/xjxlx/skills/tree/main/code-html-compose) | "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可量化验收的 Jetpack Compose 高保真基线；用于元素缺失、文字裁切、布局偏移或需要模... | 无 | 已发布 | 2026-08-30 |
+| ["code-html-compose"](https://github.com/xjxlx/skills/tree/main/code-html-compose) | "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具备页面结构、状态交互和可量化验收能力的 Jetpack Compose 高保真基线；用于元素缺失... | 无 | 已发布 | 2026-08-30 |
 | [code-http](https://github.com/xjxlx/skills/tree/main/code-http) | "Use when Android/Kotlin 需要根据 .http 请求和真实接口响应或 JSON，在指定 ViewModel 中补齐 API、Bea... | skill-common | 已发布 | 2026-08-30 |
 | [code-image](https://github.com/xjxlx/skills/tree/main/code-image) | Use when 需要导入 Android 图片资源，或明确要求比较设计图与应用截图的视觉差异。 | 无 | 已发布 | 2026-08-30 |
 | [code-lanhu-compose](https://github.com/xjxlx/skills/tree/main/code-lanhu-compose) | Use when 用户提供或准备提供蓝湖导出的 HTML/CSS ZIP，需要在 Android 项目中高保真生成或还原 Jetpack Compose ... | code-image | 已发布 | 2026-08-30 |
@@ -48,9 +48,9 @@ graph LR
 ### "code-html-compose"
 
 - **目录名**：`code-html-compose`
-- **用途**："将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可量化验收的 Jetpack Compose 高保真基线；用于元素缺失、文字裁切、布局偏移或需要模...
+- **用途**："将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具备页面结构、状态交互和可量化验收能力的 Jetpack Compose 高保真基线；用于元素缺失...
 - **依赖**：无
-- **文件数**：2284
+- **文件数**：2288
 - **UI 元数据**：有 agents/openai.yaml
 - **路径**：`~/.codex/skills/code-html-compose/`
 - **仓库**：https://github.com/xjxlx/skills/tree/main/code-html-compose

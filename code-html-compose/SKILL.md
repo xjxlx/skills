@@ -1,6 +1,6 @@
 ---
 name: "code-html-compose"
-description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可量化验收的 Jetpack Compose 高保真基线；用于元素缺失、文字裁切、布局偏移或需要模拟器验证的还原任务。"
+description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具备页面结构、状态交互和可量化验收能力的 Jetpack Compose 高保真基线；用于元素缺失、文字裁切、布局偏移、列表/弹窗还原或需要模拟器验证的任务。"
 ---
 
 # HTML → Jetpack Compose 高保真转换
@@ -12,29 +12,31 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 - 输入为含 `index.html`、CSS 和 `img/` 的 HTML 设计压缩包。
 - 需要以像素、元素边界和模拟器截图验证 Compose 还原结果。
 - 已有绝对定位基线，需要在验收通过后再安全重构为 `Row`、`Column` 或列表。
+- 页面同时包含固定视觉骨架、重复列表、弹窗、选中态、滚动或页面级导航逻辑。
 
 不适用于只有截图、没有 HTML/CSS/图片资源的任务；先要求用户提供完整设计包。
 
-## 固定设计尺寸与换算基准
+## 页面角色与换算基准
 
-- HTML 设计稿固定为 `1334px × 750px`，不得根据 CSS、目录名或 `semantic.json` 自动切换其他设计尺寸。
+- 参考清单中的 `primary-page` 才是主页面视觉真源；当前项目主页面验收基准为 `1334px × 750px`。
+- `vertical-list-state` 只描述中间纵向列表的内容/滚动状态，`popup-state` 只描述右上角套系弹窗和遮挡关系；状态片段可以有不同的 CSS 高度，不能被误当成新的整页布局，也不能替换主页面。
 - Android 目标视图固定为 `375dp × 667dp`；HTML 按 2 倍设计稿处理，固定使用 `DP_PER_PX=0.5`（`1dp=2px`）。
 - 数值对应关系固定为：HTML `1334px` ↔ Android `667dp`，HTML `750px` ↔ Android `375dp`；页面方向按目标 Android 页面实际方向对齐，禁止横纵分别拉伸或裁切。
-- 设计包不是 `1334px × 750px` 时立即报告尺寸不匹配并停止，不得静默适配或回退到其他尺寸。
+- 主页面不是 `1334px × 750px` 时报告尺寸不匹配并停止；状态片段只做局部语义提取和行为校验，不参与主页面尺寸判定。
 
 ## 固定流程
 
-1. 在目标 Android 项目根目录确认工作区改动，并先根据 `COMPOSE_ACTIVITY` 定位当前生成布局实际承载的 Activity（或 Activity-alias），检查它自己的 `MAIN` + `LAUNCHER` 默认 intent-filter。未检测到目标 Activity 或标签时必须提示用户、停止全部后续操作；禁止自行创建 Activity、补写 `MAIN`/`LAUNCHER` 标签或使用其他 Activity 绕过检查。横向设计稿通过前，只能在已找到的目标 Activity 声明上写入或更新 `android:screenOrientation="landscape"`。
+1. 在目标 Android 项目根目录确认工作区改动，并先根据 `COMPOSE_ACTIVITY` 定位当前页面实际承载的 Activity（或 Activity-alias）。默认要求它有自己的 `MAIN` + `LAUNCHER`；已有页面 Activity 不是 Launcher 时显式使用 `COMPOSE_ACTIVITY_MODE=existing`，只允许复用该页面和真实导航入口，禁止创建 Activity、补写 `MAIN`/`LAUNCHER` 或用其他页面绕过检查。横向设计稿通过前，只能在已找到的 Activity 声明上写入或更新 `android:screenOrientation="landscape"`。
 2. 安装脚本依赖：`npm ci --prefix <本技能>/scripts`。
-3. 配置 `PROJECT_ROOT`、Compose 目标目录、包名、`R` 与图片组件导入；完整变量见 [配置参考](references/configuration.md)。
-4. 用 `node <本技能>/scripts/run.js <设计包.zip>` 执行：解压、DOM 采集、规范化 HTML、有限像素对比、Compose 生成、构建安装和结构/局部像素验收。
+3. 配置 `PROJECT_ROOT`、Compose 目标目录、包名、`R`、图片组件导入、参考角色清单和现有资源映射；完整变量见 [配置参考](references/configuration.md)。
+4. 先读取目标 Kotlin、调用方、状态数据和 `.code-image` 资源元数据，再用 `node <本技能>/scripts/run.js <主页面设计包.zip>` 执行主页面基线；滚动/弹窗 ZIP 只通过参考清单关联，不能单独生成整页 Kotlin。
 5. 以 `<PROJECT_ROOT>/.code-html-compose/` 内的 `original.png` 和验收报告为真源；它们是运行产物，不得提交或复制到技能仓库。
 
 ### Launcher Activity 与屏幕方向前置检查
 
 - 这里检查的是 Launcher 的 `intent-filter` 标签，不是 `android:launchMode` 属性。
-- 总入口和直接的 Compose 生成/验收入口都会读取 `COMPOSE_ACTIVITY`（验收命令行参数优先）并定位该 Activity；只认它自己的同一个 `intent-filter` 中同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。
-- 目标 Activity 未配置、未找到或缺少任一标签时，输出明确提示，停止后续 HTML/Compose 生成、编译、安装和验收，并以失败状态退出；不得用项目中其他 Launcher Activity 替代，也不得自动创建 Activity 或补写 `MAIN`/`LAUNCHER` 标签。
+- 总入口和直接的 Compose 生成/验收入口都会读取 `COMPOSE_ACTIVITY`（验收命令行参数优先）并定位该 Activity；默认只认它自己的同一个 `intent-filter` 中同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。`COMPOSE_ACTIVITY_MODE=existing` 可显式允许已有非 Launcher 页面，但只改变检查方式，不改变 Android 导出安全限制，也不自动提供启动路径。
+- 目标 Activity 未配置或未找到时，输出明确提示并停止；禁止用项目中其他 Launcher Activity 替代、创建 Activity 或补写 `MAIN`/`LAUNCHER`。
 - 横向设计稿在生成、编译、安装或启动前，更新该目标 Activity 的源 `AndroidManifest.xml` 声明，确保存在 `android:screenOrientation="landscape"`；如果已有其他方向值，替换该值。不得修改其他 Activity。技能不得通过 ADB 修改模拟器的 `wm size`、`wm density`、`policy_control`、`accelerometer_rotation` 或 `user_rotation`；需要横屏时只提示用户将模拟器旋转为横向。
 - `build/`、`.gradle/` 和其他生成目录不参与发现，避免用过期合并 Manifest 掩盖项目源配置缺失。
 
@@ -51,6 +53,14 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 - 横向设计稿验收前必须确保目标 Activity 的静态方向配置为 `landscape`，并要求模拟器当前已经横向显示；截图必须保持设备原始方向，禁止通过 ADB 修改窗口分辨率/density、锁定或设置旋转、使用 `rotate90` 或其他图像变换补偿方向。截图仍为竖屏时直接报错并停止验收；不得为了适配设计稿而覆盖模拟器分辨率，边界换算应使用当前横屏截图的实际尺寸。
 - 每个可观测视觉元素须有 `testTag("e<domIndex>")`；完整被覆盖的层须写入可观测性报告，不能静默跳过。
 - 只生成设计图中可见且有视觉证据的节点，不能凭名称补造箭头、指示器或装饰图。
+
+## 行为型页面规则
+
+- 生成前必须画出状态模型：页面数据、当前套系、弹窗开关、当前列表项、滚动容器和点击后的变化；HTML/CSS 只负责外观，不能代替 Compose 状态。
+- 固定骨架、纵向套系列表、横向书卡和右上角弹窗必须拆成有职责的 Composable。弹窗是页面状态，不是把弹窗 ZIP 追加到主页面坐标树；列表是数据 + item renderer，不是重复复制卡片。
+- 优先复用现有页面的状态字段、回调和资源名；不凭设计文字臆造 API、导航、业务数据或图片。缺少行为证据时保留当前代码契约，并在报告中标注未验证行为。
+- 弹窗中的项目少时直接用 `Column`，项目多时使用弹窗内部的滚动容器；不要把 `LazyColumn` 嵌入 `DropdownMenu` 这类 intrinsic measurement 容器。选中态、关闭、箭头旋转和筛选结果必须由同一状态源驱动。
+- 行为验收至少覆盖：默认主页面、打开弹窗、选择一个套系、弹窗关闭后的筛选结果、纵向列表滚动/当前项定位；每个宏观区域都要有稳定 `testTag`，不能只给静态 DOM 节点贴标签。
 
 ## 资源
 
