@@ -410,12 +410,12 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
     manifest = {
         "version": 2,
         "resources": sorted(
-        records,
-        key=lambda record: (
-            record.get("originalPath", ""),
-            record.get("originalHash", ""),
-            record.get("outputPath", ""),
-        ),
+            records,
+            key=lambda record: (
+                record.get("originalPath", ""),
+                record.get("originalHash", ""),
+                record.get("outputPath", ""),
+            ),
         ),
     }
     write_resources(resources_path, manifest)
