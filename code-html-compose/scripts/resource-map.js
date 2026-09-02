@@ -27,7 +27,7 @@ function isWithinDirectory(filePath, directory) {
 }
 
 /**
- * 读取目标模块 .code-image 清单，按原始图片完整 MD5 建立可复用索引。
+ * 读取目标模块 .code-image/image.json，按原始图片完整 MD5 建立可复用索引。
  * 无清单、坏记录、跨模块记录或不存在的输出文件均忽略，由调用方回退设计包图片。
  */
 function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
@@ -35,11 +35,12 @@ function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
   const ignored = [];
   const directory = path.join(path.resolve(projectRoot), '.code-image');
   const targetRoot = path.resolve(resourceRoot);
-  if (!fs.existsSync(directory)) return { byHash, ignored };
+  if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
+    return { byHash, ignored };
+  }
 
-  const files = fs.readdirSync(directory)
-    .filter((name) => name.endsWith('.resources.json'))
-    .sort();
+  const manifestName = 'image.json';
+  const files = fs.existsSync(path.join(directory, manifestName)) ? [manifestName] : [];
   for (const name of files) {
     const manifestPath = path.join(directory, name);
     let manifest;
@@ -66,12 +67,14 @@ function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
         : path.join(projectRoot, outputPathValue));
       let outputExists = false;
       try {
-        outputExists = fs.statSync(outputPath).isFile();
+        outputExists = fs.statSync(outputPath).isFile()
+          && path.basename(outputPath) === outputName
+          && md5File(outputPath).toLowerCase() === hash;
       } catch (error) {
         outputExists = false;
       }
       if (!isWithinDirectory(outputPath, targetRoot) || !outputExists) {
-        ignored.push({ manifest: name, reason: 'missing-or-cross-module-output', outputPath: outputPathValue });
+        ignored.push({ manifest: name, reason: 'missing-cross-module-or-hash-mismatch', outputPath: outputPathValue });
         continue;
       }
       const outputStem = path.basename(outputName, path.extname(outputName));

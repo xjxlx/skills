@@ -29,7 +29,6 @@ MAX_SINGLE_FILE_BYTES = 256 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
 NAMING_VERSION = 3
-
 SEMANTIC_TRANSLATIONS = {
     "今日目标": "today_target",
     "形状结合": "shape_combination",
@@ -213,13 +212,43 @@ def _record_output_path(record: dict, project_root: Path) -> Path | None:
     return path if path.is_absolute() else project_root / path
 
 
+def _plan_key(original_path: str, file_hash: str, target_dir: Path) -> str:
+    """生成不写入清单的内部资源键。"""
+    return f"{original_path}:{file_hash}:{target_dir.resolve()}"
+
+
+def _record_key(record: dict, project_root: Path) -> str | None:
+    """用五个持久字段生成内部索引键，不把 identity 写回清单。"""
+    original_path = record.get("originalPath")
+    file_hash = record.get("originalHash")
+    output_path = _record_output_path(record, project_root)
+    if not isinstance(original_path, str) or not original_path:
+        return None
+    if not isinstance(file_hash, str) or not re.fullmatch(r"[0-9a-f]{32}", file_hash, re.IGNORECASE):
+        return None
+    if output_path is None:
+        return None
+    return _plan_key(original_path, file_hash.lower(), output_path.parent)
+
+
+def _minimal_record(record: dict) -> dict:
+    """只保留跨 code-image/code-html-compose 需要的五个字段。"""
+    return {
+        "originalPath": record["originalPath"],
+        "originalName": record["originalName"],
+        "originalHash": record["originalHash"],
+        "outputPath": record["outputPath"],
+        "outputName": record["outputName"],
+    }
+
+
 def _find_record_by_hash(
     records: list[dict],
     file_hash: str,
     target_dir: Path,
     project_root: Path,
 ) -> dict | None:
-    """同一来源清单内的同密度重复切图复用首个已记录资源。"""
+    """当前 image.json 内的同密度重复切图复用首个已记录资源。"""
     for record in records:
         output_path = _record_output_path(record, project_root)
         if (
@@ -304,8 +333,7 @@ def build_plan(
     compose_file = relative_path(compose_path, project_root) if compose_path else (record.get("composeFile") if record else None)
 
     previous_target = _record_output_path(record, project_root) if record else None
-    legacy_record = record is not None and record.get("namingVersion") != NAMING_VERSION
-    if record and not legacy_record:
+    if record and isinstance(record.get("outputName"), str) and Path(record["outputName"]).name == record["outputName"]:
         output_name = record["outputName"]
     elif not record and _is_normalized(source.name) and archive_stem is None:
         output_name = source.name
@@ -326,9 +354,7 @@ def build_plan(
         set() if record else reserved or set(),
         replaceable,
     )
-    identity = record.get("identity") if record else (
-        f"{original_path}:{file_hash}:{relative_path(target_dir, project_root)}"
-    )
+    identity = _plan_key(original_path, file_hash, target_dir)
     return RenamePlan(
         source=source,
         target=target,
@@ -374,9 +400,30 @@ def atomic_copy(source: Path, target: Path) -> None:
             temporary_path.unlink(missing_ok=True)
 
 
+def remove_legacy_manifests(project_root: Path) -> None:
+    """清理旧版按来源生成的清单，保留唯一的 image.json。"""
+    directory = project_root / ".code-image"
+    if not directory.is_dir():
+        return
+    for candidate in directory.iterdir():
+        if (
+            candidate.is_file()
+            and candidate.name != RESOURCE_MANIFEST_NAME
+            and (candidate.name == "resources.json" or candidate.name.endswith(".resources.json"))
+        ):
+            candidate.unlink()
+
+
 def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Path) -> None:
     manifest = load_resources(resources_path)
-    records = {record.get("identity"): record for record in manifest["resources"]}
+    records: dict[str, dict] = {}
+    unkeyed_records: list[dict] = []
+    for record in manifest["resources"]:
+        key = _record_key(record, project_root)
+        if key is None:
+            unkeyed_records.append(record)
+        else:
+            records[key] = _minimal_record(record)
     for plan in plans:
         plan.target.parent.mkdir(parents=True, exist_ok=True)
         if plan.source.resolve() != plan.target.resolve():
@@ -391,17 +438,21 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
             if plan.previous_target.is_file():
                 plan.previous_target.unlink()
         records[plan.identity] = {
-            "identity": plan.identity,
             "originalPath": plan.original_path,
             "originalName": plan.original_name,
             "originalHash": plan.file_hash,
             "outputPath": relative_path(plan.target, project_root),
             "outputName": plan.output_name,
-            "composeFile": plan.compose_file,
-            "namingVersion": NAMING_VERSION,
         }
     manifest["version"] = 2
-    manifest["resources"] = sorted(records.values(), key=lambda record: record["identity"])
+    manifest["resources"] = sorted(
+            [*unkeyed_records, *records.values()],
+            key=lambda record: (
+                record.get("originalPath", ""),
+                record.get("originalHash", ""),
+                record.get("outputPath", ""),
+            ),
+        ),
     write_resources(resources_path, manifest)
 
 
@@ -530,7 +581,7 @@ def main() -> int:
     parser.add_argument("--project-root", default=".", help="Android 项目根目录，默认当前目录")
     parser.add_argument(
         "--resources-file",
-        help="可选的新资源清单路径；仅允许项目 .code-image/ 下的专属文件",
+        help="兼容参数；只能指向项目 .code-image/image.json",
     )
     parser.add_argument("--apply", action="store_true", help="实际复制/改名；默认只输出预览")
     args = parser.parse_args()

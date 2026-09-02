@@ -277,14 +277,11 @@ def load_code_image_records_by_hash(resources_path: Path, project_root: Path, co
 
 def resource_manifest_path(
     project_root: Path,
-    zip_path: Path,
-    source_hash: str,
+    _zip_path: Path,
+    _source_hash: str,
 ) -> Path:
-    return (
-        project_root
-        / ".code-image"
-        / f"{safe_file_token(zip_path.stem)}-{source_hash[:6]}.resources.json"
-    )
+    """返回 code-image 的唯一项目级资源清单。"""
+    return project_root / ".code-image" / "image.json"
 
 
 def resolve_asset_reference(document_path: PurePosixPath, raw_reference: str) -> PurePosixPath | None:
@@ -446,7 +443,7 @@ def import_zip_images(
         apply,
     )
     if apply and pending_by_hash:
-        records_by_hash = load_code_image_records_by_hash(resources_path, project_root, compose_path)
+        records_by_hash.update(load_code_image_records_by_hash(resources_path, project_root, compose_path))
     records = []
     for zip_entry, image_path, content_hash, asset_name in image_facts:
         record = records_by_hash.get(content_hash)

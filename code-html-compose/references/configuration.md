@@ -41,10 +41,10 @@ export COMPOSE_ACTIVITY="com.example.app/.MainActivity"
 export COMPOSE_ACTIVITY_MODE="launcher"
 # 主页面 + 行为状态片段的 JSON 清单
 export COMPOSE_REFERENCE_MANIFEST="$PROJECT_ROOT/.code-html-compose/references.json"
-# existing 模式不复制 ZIP 图片，直接引用 code-image 已导入资源
 # reuse 优先按设计包图片 MD5 复用项目 .code-image 资源，未命中时回退复制设计包图片
 export COMPOSE_RESOURCE_MODE="reuse"
-export COMPOSE_RESOURCE_MAP="$PROJECT_ROOT/.code-html-compose/resource-map.json"
+# 可选：仅在需要覆盖某个文件的资源名时提供显式映射
+# export COMPOSE_RESOURCE_MAP="$PROJECT_ROOT/.code-html-compose/resource-map.json"
 ```
 
 `COMPOSE_IMAGE_IMPORTS` 由生成的 Kotlin 直接插入图片组件所需的 import。若目标项目不使用 `ImageItem` / `ImageParameter`，先调整 `html-to-compose.js` 的图片模板及测试，再执行生成。
@@ -62,7 +62,7 @@ export COMPOSE_RESOURCE_MAP="$PROJECT_ROOT/.code-html-compose/resource-map.json"
 | `ADB_SERIAL` | `emulator-5554` | 模拟器序列号 |
 | `COMPOSE_ACTIVITY_MODE` | `launcher` | `launcher` 严格要求目标 Activity 自带 Launcher；`existing` 允许复用已有非 Launcher Activity，但不会替它创建启动入口 |
 | `COMPOSE_REFERENCE_MANIFEST` | 无 | 主页面和行为片段的 JSON 清单；主页面必须为 `scope=primary-page` |
-| `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 按完整 `originalHash` 优先复用目标模块 `.code-image/*.resources.json`，未命中时复制设计包图片；`copy` 强制复制设计包图片；`existing` 只接受显式 `COMPOSE_RESOURCE_MAP` |
+| `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 按完整 `originalHash` 优先复用目标模块 `.code-image/image.json`，未命中时复制设计包图片；`copy` 强制复制设计包图片；`existing` 只接受显式 `COMPOSE_RESOURCE_MAP` |
 | `COMPOSE_RESOURCE_MAP` | 无 | JSON 资源映射，可直接写文件名到 `icon_xxx`、`R.mipmap.icon_xxx` 或 `@mipmap/icon_xxx` |
 | `CHROME_BIN` | macOS Chrome 路径 | Puppeteer 使用的 Chrome 可执行文件 |
 | `VALIDATE_STRUCT_PASS` | `0.95` | 结构通过率阈值 |

@@ -55,9 +55,9 @@ class NormalizeImagesTest(unittest.TestCase):
         )
 
     def resources(self) -> list[dict]:
-        manifests = sorted((self.project / ".code-image").glob("*.resources.json"))
-        self.assertEqual(len(manifests), 1)
-        path = manifests[0]
+        manifests = sorted((self.project / ".code-image").glob("*.json"))
+        self.assertEqual([path.name for path in manifests], ["image.json"])
+        path = self.project / ".code-image/image.json"
         return json.loads(path.read_text(encoding="utf-8"))["resources"]
 
     @staticmethod
@@ -84,11 +84,9 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(record["outputPath"], "app/src/main/res/mipmap-xxhdpi/icon_group.png")
         self.assertNotIn("resourceFamily", record)
         self.assertNotIn("updatedAt", record)
-        self.assertFalse((self.project / ".code-image/resources.json").exists())
-        source_hash = hashlib.md5(image.read_bytes()).hexdigest()
-        self.assertTrue((self.project / ".code-image" / f"Group_62-{source_hash}.resources.json").is_file())
+        self.assertTrue((self.project / ".code-image/image.json").is_file())
 
-    def test_optional_compose_adds_page_namespace_for_single_image(self):
+    def test_optional_compose_adds_page_namespace_and_writes_minimal_record(self):
         image = self.input_dir / "Group 62.png"
         self.write_image(image)
 
@@ -98,7 +96,10 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertTrue(
             (self.project / "app/src/main/res/mipmap-xxhdpi/icon_report_home_group.png").is_file()
         )
-        self.assertEqual(self.resources()[0]["composeFile"], "app/src/main/java/com/example/ReportHomePage.kt")
+        self.assertEqual(
+            set(self.resources()[0]),
+            {"originalPath", "originalName", "originalHash", "outputPath", "outputName"},
+        )
 
     def test_explicit_asset_name_replaces_hash_style_export_name(self):
         image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
@@ -139,9 +140,8 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(migrated.returncode, 0, migrated.stderr)
         self.assertTrue(old_output.is_file())
         self.assertFalse(new_output.exists())
-        manifests = sorted((self.project / ".code-image").glob("*.resources.json"))
-        self.assertEqual(len(manifests), 1)
-        self.assertEqual(json.loads(manifests[0].read_text(encoding="utf-8"))["resources"][0]["outputName"], old_output.name)
+        manifest_path = self.project / ".code-image/image.json"
+        self.assertEqual(json.loads(manifest_path.read_text(encoding="utf-8"))["resources"][0]["outputName"], old_output.name)
 
         repeated = self.run_skill(
             "--image",
@@ -155,38 +155,58 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertTrue(old_output.is_file())
         self.assertFalse(new_output.exists())
 
-    def test_shared_source_manifest_reuses_same_content_from_another_zip_entry(self):
+    def test_each_apply_overwrites_previous_manifest_and_keeps_only_image_json(self):
         first = self.input_dir / "first.png"
         second = self.input_dir / "second.png"
         self.write_image(first)
-        self.write_image(second)
-        resources_path = self.project / ".code-image/design-abcdef.resources.json"
+        self.write_image(second, (1, 2, 3))
 
         first_result = self.run_skill(
             "--image",
             first,
             "--compose",
             str(self.compose),
-            "--resources-file",
-            str(resources_path),
         )
         second_result = self.run_skill(
             "--image",
             second,
             "--compose",
             str(self.compose),
-            "--resources-file",
-            str(resources_path),
         )
 
         target_dir = self.project / "app/src/main/res/mipmap-xxhdpi"
         self.assertEqual(first_result.returncode, 0, first_result.stderr)
         self.assertEqual(second_result.returncode, 0, second_result.stderr)
         self.assertTrue((target_dir / "icon_report_home_first.png").is_file())
-        self.assertFalse((target_dir / "icon_report_home_second.png").exists())
-        resources = json.loads(resources_path.read_text(encoding="utf-8"))["resources"]
+        self.assertTrue((target_dir / "icon_report_home_second.png").is_file())
+        resources = self.resources()
         self.assertEqual(len(resources), 1)
-        self.assertEqual(resources[0]["outputName"], "icon_report_home_first.png")
+        self.assertEqual(resources[0]["outputName"], "icon_report_home_second.png")
+
+    def test_legacy_manifests_are_removed_after_successful_apply(self):
+        code_image = self.project / ".code-image"
+        code_image.mkdir()
+        (code_image / "first-abcdef.resources.json").write_text("{}", encoding="utf-8")
+        (code_image / "resources.json").write_text("{}", encoding="utf-8")
+        image = self.input_dir / "Latest.png"
+        self.write_image(image)
+
+        result = self.run_skill("--image", image)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(sorted(path.name for path in code_image.glob("*.json")), ["image.json"])
+
+    def test_resources_file_cannot_create_a_second_manifest(self):
+        image = self.input_dir / "Latest.png"
+        self.write_image(image)
+        custom_manifest = self.project / ".code-image/custom.resources.json"
+
+        result = self.run_skill("--image", image, "--resources-file", str(custom_manifest))
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("image.json", result.stderr)
+        self.assertFalse(custom_manifest.exists())
+        self.assertFalse((self.project / ".code-image/image.json").exists())
 
     def test_explicit_asset_name_preserves_semantic_trailing_number(self):
         image = self.input_dir / "SketchPng0c6fdffe6b77d5b64d693c16b86d3bfb.png"
@@ -248,10 +268,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertFalse(
             any(path.name == "Group 62.png" for path in self.project.rglob("Group 62.png"))
         )
-        source_hash = hashlib.md5(archive.read_bytes()).hexdigest()
-        self.assertTrue(
-            (self.project / ".code-image" / f"L6-{source_hash}.resources.json").is_file()
-        )
+        self.assertTrue((self.project / ".code-image/image.json").is_file())
 
         repeated = self.run_skill("--zip", archive)
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
@@ -295,7 +312,7 @@ class NormalizeImagesTest(unittest.TestCase):
             (self.project / "app/src/main/res/mipmap-xxhdpi/icon_ce_shi_tu_biao.png").is_file()
         )
 
-    def test_legacy_image_name_is_migrated_to_current_naming(self):
+    def test_legacy_record_fields_are_removed_without_renaming_existing_resource(self):
         archive = self.input_dir / "L6.zip"
         with zipfile.ZipFile(archive, "w") as zip_file:
             zip_file.writestr("mipmap-xxhdpi/矩形.png", self.image_bytes())
@@ -303,7 +320,7 @@ class NormalizeImagesTest(unittest.TestCase):
         first = self.run_skill("--zip", archive)
         self.assertEqual(first.returncode, 0, first.stderr)
 
-        manifest_path = sorted((self.project / ".code-image").glob("*.resources.json"))[0]
+        manifest_path = self.project / ".code-image/image.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         record = manifest["resources"][0]
         current_output = self.project / record["outputPath"]
@@ -317,12 +334,15 @@ class NormalizeImagesTest(unittest.TestCase):
         migrated = self.run_skill("--zip", archive)
 
         self.assertEqual(migrated.returncode, 0, migrated.stderr)
-        self.assertTrue(
-            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_l6_rectangle.png").is_file()
+        self.assertTrue(legacy_output.is_file())
+        self.assertFalse(
+            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_l6_rectangle.png").exists()
         )
-        self.assertFalse(legacy_output.exists())
         migrated_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        self.assertEqual(migrated_manifest["resources"][0]["namingVersion"], 3)
+        self.assertEqual(
+            set(migrated_manifest["resources"][0]),
+            {"originalPath", "originalName", "originalHash", "outputPath", "outputName"},
+        )
 
     def test_zip_without_mipmap_images_is_rejected_before_extraction(self):
         archive = self.input_dir / "not-mipmap.zip"

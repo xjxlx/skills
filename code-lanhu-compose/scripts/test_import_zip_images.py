@@ -47,12 +47,20 @@ class ImportZipImagesContractTest(unittest.TestCase):
                     [(first, "hero"), (second, "logo")],
                     compose,
                     project,
-                    project / ".code-image/resources.json",
+                    project / ".code-image/image.json",
                     apply=True,
                 )
 
             self.assertEqual(module.build_plan.call_count, 2)
             module.apply_plans.assert_called_once()
+
+    def test_code_image_resource_manifest_is_project_level_image_json(self) -> None:
+        archive = Path("/tmp/design.zip")
+        project = Path("/tmp/project")
+        self.assertEqual(
+            IMPORT_IMAGES.resource_manifest_path(project, archive, "a" * 32),
+            project / ".code-image/image.json",
+        )
 
     def test_extract_zip_reuses_complete_source_cache(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

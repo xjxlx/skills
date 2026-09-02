@@ -1,8 +1,13 @@
 const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const test = require('node:test');
 
 const {
   buildImageResourceMap,
+  loadCodeImageResourceIndex,
   normalizeResourceExpression,
 } = require('../resource-map');
 
@@ -35,4 +40,113 @@ test('资源表达式允许直接配置 R.mipmap，但最终统一为资源名',
   assert.equal(normalizeResourceExpression('R.mipmap.icon_l6_mask'), 'icon_l6_mask');
   assert.equal(normalizeResourceExpression('icon_l6_group'), 'icon_l6_group');
   assert.throws(() => normalizeResourceExpression('not-valid-name'), /合法的 Android 资源名/);
+});
+
+test('reuse 模式按 originalHash 复用改名后的 code-image 资源', () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'html-compose-resource-'));
+  try {
+    const output = path.join(projectRoot, 'app/src/main/res/mipmap-xhdpi/icon_renamed.webp');
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    const bytes = Buffer.from('same-image-bytes');
+    fs.writeFileSync(output, bytes);
+    const originalHash = crypto.createHash('md5').update(bytes).digest('hex');
+    fs.mkdirSync(path.join(projectRoot, '.code-image'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectRoot, '.code-image/image.json'),
+      JSON.stringify({
+        version: 2,
+        resources: [{
+          originalPath: 'source.zip!/mipmap-xhdpi/original.webp',
+          originalName: 'original.webp',
+          originalHash,
+          outputPath: 'app/src/main/res/mipmap-xhdpi/icon_renamed.webp',
+          outputName: 'icon_renamed.webp',
+        }],
+      }),
+    );
+
+    const index = loadCodeImageResourceIndex(projectRoot, path.join(projectRoot, 'app/src/main/res'));
+    const resolutions = [];
+    const result = buildImageResourceMap(['renamed-in-html.webp'], {
+      mode: 'reuse',
+      hashes: { 'renamed-in-html.webp': originalHash },
+      codeImageIndex: index,
+      resolutionSink: resolutions,
+    });
+
+    assert.equal(result.get('renamed-in-html.webp'), 'icon_renamed');
+    assert.deepEqual(resolutions[0], {
+      file: 'renamed-in-html.webp',
+      resName: 'icon_renamed',
+      reused: true,
+      source: 'code-image',
+      originalHash,
+      outputPath: output,
+    });
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('reuse 模式未命中或输出损坏时回退设计包资源', () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'html-compose-resource-'));
+  try {
+    const output = path.join(projectRoot, 'app/src/main/res/mipmap-xxhdpi/icon_broken.webp');
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    fs.writeFileSync(output, 'different');
+    fs.mkdirSync(path.join(projectRoot, '.code-image'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectRoot, '.code-image/image.json'),
+      JSON.stringify({
+        resources: [{
+          originalPath: 'source.zip!/mipmap-xxhdpi/source.webp',
+          originalName: 'source.webp',
+          originalHash: '00000000000000000000000000000000',
+          outputPath: 'app/src/main/res/mipmap-xxhdpi/icon_broken.webp',
+          outputName: 'icon_broken.webp',
+        }],
+      }),
+    );
+
+    const index = loadCodeImageResourceIndex(projectRoot, path.join(projectRoot, 'app/src/main/res'));
+    const result = buildImageResourceMap(['source.webp'], {
+      mode: 'reuse',
+      hashes: { 'source.webp': '11111111111111111111111111111111' },
+      codeImageIndex: index,
+    });
+
+    assert.equal(result.get('source.webp'), 'icon_report_html_0');
+    assert.equal(index.byHash.size, 0);
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('reuse 模式忽略旧版按来源清单，只读取固定 image.json', () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'html-compose-resource-'));
+  try {
+    const output = path.join(projectRoot, 'app/src/main/res/mipmap-xxhdpi/icon_legacy.webp');
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    const bytes = Buffer.from('legacy-image-bytes');
+    fs.writeFileSync(output, bytes);
+    const originalHash = crypto.createHash('md5').update(bytes).digest('hex');
+    fs.mkdirSync(path.join(projectRoot, '.code-image'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectRoot, '.code-image/legacy.resources.json'),
+      JSON.stringify({
+        resources: [{
+          originalHash,
+          outputPath: 'app/src/main/res/mipmap-xxhdpi/icon_legacy.webp',
+          outputName: 'icon_legacy.webp',
+        }],
+      }),
+    );
+
+    const index = loadCodeImageResourceIndex(projectRoot, path.join(projectRoot, 'app/src/main/res'));
+
+    assert.equal(index.byHash.size, 0);
+    assert.deepEqual(index.ignored, []);
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
 });
