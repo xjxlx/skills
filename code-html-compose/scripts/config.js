@@ -39,7 +39,7 @@ module.exports = {
   COMPOSE_IMAGE_IMPORTS: process.env.COMPOSE_IMAGE_IMPORTS,
   COMPOSE_REFERENCE_MANIFEST: resolveFromProject(process.env.COMPOSE_REFERENCE_MANIFEST, PROJECT_ROOT),
   COMPOSE_RESOURCE_MAP: resolveFromProject(process.env.COMPOSE_RESOURCE_MAP, PROJECT_ROOT),
-  COMPOSE_RESOURCE_MODE: process.env.COMPOSE_RESOURCE_MODE || 'copy',
+  COMPOSE_RESOURCE_MODE: process.env.COMPOSE_RESOURCE_MODE || 'reuse',
   APK_PATH: resolveFromProject(process.env.APK_PATH, PROJECT_ROOT),
   requiredSetting,
 };

@@ -78,7 +78,12 @@ const {
   requiredSetting,
 } = require('./config');
 const { ensureLandscapeActivity } = require('./launcher-activity');
-const { buildImageResourceMap, loadResourceMapping } = require('./resource-map');
+const {
+  buildImageResourceMap,
+  loadCodeImageResourceIndex,
+  loadResourceMapping,
+  md5File,
+} = require('./resource-map');
 
 const TOOLS = __dirname;
 const SEMANTIC = path.join(TOOL_OUTPUT_DIR, 'semantic.json');
@@ -105,13 +110,16 @@ const TARGET_KT = path.join(requiredSetting('COMPOSE_KOTLIN_DIR', COMPOSE_KOTLIN
 
 // 设计图资源目录（img 源）：优先 DESIGN_DIR，否则从语义树首个 bgImage 提取
 const SOURCE_DIR = requiredSetting('DESIGN_DIR', DESIGN_DIR);
-const IMG_DIR = path.join(SOURCE_DIR, 'img');
+const IMG_DIR = fs.existsSync(path.join(SOURCE_DIR, 'img'))
+  ? path.join(SOURCE_DIR, 'img')
+  : path.join(SOURCE_DIR, 'image');
 
 // 图片复制到 app res：使用已注册的 res 源目录 layouts/v2/report
 // 图片密度目录与设计稿倍率一致：@2x（DP_PER_PX=0.5）→ xhdpi，@1x（DP_PER_PX=1）→ mdpi（1dp=1px）。
 // 放错目录会导致 density 320 模拟器把 @1x 图误判为 @2x 而缩小一半。
+const RES_ROOT = requiredSetting('COMPOSE_RES_DIR', COMPOSE_RES_DIR);
 const RES_IMG_DIR = path.join(
-  requiredSetting('COMPOSE_RES_DIR', COMPOSE_RES_DIR),
+  RES_ROOT,
   `mipmap-${DP_PER_PX < 1 ? 'xhdpi' : 'mdpi'}`,
 );
 const KOTLIN_PACKAGE = requiredSetting('COMPOSE_PACKAGE', COMPOSE_PACKAGE);
@@ -163,7 +171,7 @@ function esc(str) {
 }
 
 // ---------------- 图片收集与复制 ----------------
-function collectImages(elements) {
+function collectImages(elements, resolutionSink = []) {
   const files = [];
   for (const e of elements) {
     let file = null;
@@ -175,29 +183,45 @@ function collectImages(elements) {
     }
     if (file) files.push(file);
   }
-  return buildImageResourceMap(files, {
+  const uniqueFiles = [...new Set(files)];
+  const hashes = Object.fromEntries(uniqueFiles.map((file) => {
+    const source = path.join(IMG_DIR, file);
+    return [file, fs.existsSync(source) ? md5File(source) : null];
+  }));
+  const codeImageIndex = COMPOSE_RESOURCE_MODE === 'reuse'
+    ? loadCodeImageResourceIndex(PROJECT_ROOT, RES_ROOT)
+    : null;
+  if (codeImageIndex && codeImageIndex.ignored.length > 0) {
+    console.warn(`  已忽略 ${codeImageIndex.ignored.length} 条无效或不适用的 .code-image 记录`);
+  }
+  return buildImageResourceMap(uniqueFiles, {
     mode: COMPOSE_RESOURCE_MODE,
     mapping: loadResourceMapping(COMPOSE_RESOURCE_MAP),
+    hashes,
+    codeImageIndex,
+    resolutionSink,
   });
 }
 
 function copyImages(semantic) {
-  const map = collectImages(semantic.elements);
-  if (COMPOSE_RESOURCE_MODE === 'existing') {
-    return [...map.entries()].map(([file, resName]) => ({ file, resName, reused: true }));
-  }
+  const resolutions = [];
+  const map = collectImages(semantic.elements, resolutions);
   const copied = [];
-  fs.mkdirSync(RES_IMG_DIR, { recursive: true });
   for (const [file, resName] of map.entries()) {
-    const src = path.join(IMG_DIR, file);
-    if (!fs.existsSync(src)) {
-      console.warn(`  图片缺失，跳过：${src}`);
+    const resolution = resolutions.find((item) => item.file === file);
+    if (resolution && resolution.reused) {
+      copied.push({ ...resolution, resName });
       continue;
     }
+    const src = path.join(IMG_DIR, file);
+    if (!fs.existsSync(src)) {
+      throw new Error(`设计包图片缺失，无法作为资源回退：${src}`);
+    }
+    fs.mkdirSync(RES_IMG_DIR, { recursive: true });
     const ext = path.extname(file) || '.png';
     const destName = resName + (ext === '.jpg' || ext === '.jpeg' ? '.jpg' : '.png');
     fs.copyFileSync(src, path.join(RES_IMG_DIR, destName));
-    copied.push({ resName, file });
+    copied.push({ file, resName, reused: false, source: 'design-package' });
   }
   return copied;
 }
@@ -1774,12 +1798,18 @@ function main() {
 
   // 1) 复制图片到 res
   console.log(COMPOSE_RESOURCE_MODE === 'existing'
-    ? '步骤 9.1：复用现有 code-image 资源映射'
-    : '步骤 9.1：复制设计图到 app res 目录');
+    ? '步骤 9.1：复用显式资源映射'
+    : COMPOSE_RESOURCE_MODE === 'reuse'
+      ? '步骤 9.1：按 originalHash 优先复用 code-image，未命中时回退设计包图片'
+      : '步骤 9.1：复制设计图到 app res 目录');
   const copied = copyImages(semantic);
+  const reusedCount = copied.filter((item) => item.reused).length;
+  const copiedCount = copied.length - reusedCount;
   console.log(COMPOSE_RESOURCE_MODE === 'existing'
-    ? `  已复用 ${copied.length} 个资源引用`
-    : `  已复制 ${copied.length} 张图片 → ${RES_IMG_DIR}`);
+    ? `  已复用 ${reusedCount} 个资源引用`
+    : COMPOSE_RESOURCE_MODE === 'reuse'
+      ? `  已复用 ${reusedCount} 个，回退复制 ${copiedCount} 张图片 → ${RES_IMG_DIR}`
+      : `  已复制 ${copiedCount} 张图片 → ${RES_IMG_DIR}`);
   const imgMap = new Map(copied.map((c) => [c.file, c.resName]));
   const report = JSON.parse(fs.readFileSync(GENERATION_REPORT, 'utf8'));
   report.resources = copied;

@@ -71,5 +71,6 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具�
 - `scripts/`：DOM 解析、HTML 对比、Compose 基线生成、模拟器结构与局部像素校验及测试。
 - `references/configuration.md`：运行命令、环境变量和产物边界。
 - `references/workflow.md`：工作流细则与视觉还原约束。
+- 图片资源默认按完整 `originalHash` 优先复用目标模块 `.code-image/*.resources.json` 的实际输出；文件名不参与匹配。无可用清单或 Hash 未命中时才使用设计包的 `img`/`image` 图片，禁止跨模块或复用不存在的输出文件。
 
 运行产生的 `run-*`、`compose-run-*`、截图、JSON 报告、图片资源、`node_modules/` 均只允许位于目标项目工作目录，不得发布到 GitHub。
