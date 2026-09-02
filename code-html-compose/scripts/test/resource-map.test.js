@@ -88,6 +88,45 @@ test('reuse 模式按 originalHash 复用改名后的 code-image 资源', () => 
   }
 });
 
+test('reuse 模式按累计 image.json 的 md5/path/name 记录复用项目图片', () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'html-compose-resource-'));
+  try {
+    const output = path.join(projectRoot, 'app/src/main/res/mipmap-xxhdpi/icon_back.webp');
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    const bytes = Buffer.from('catalog-image-bytes');
+    fs.writeFileSync(output, bytes);
+    const md5 = crypto.createHash('md5').update(bytes).digest('hex');
+    const relativePath = 'app/src/main/res/mipmap-xxhdpi/icon_back.webp';
+    fs.mkdirSync(path.join(projectRoot, '.code-image'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectRoot, '.code-image/image.json'),
+      JSON.stringify({
+        version: 3,
+        resources: [{
+          md5,
+          identifier: `${relativePath}-${md5}`,
+          path: relativePath,
+          name: 'icon_back.webp',
+          source: 'L6.zip!/mipmap-xxhdpi/back.webp',
+        }],
+      }),
+    );
+
+    const index = loadCodeImageResourceIndex(projectRoot, path.join(projectRoot, 'app/src/main/res'));
+    const result = buildImageResourceMap(['back.webp'], {
+      mode: 'reuse',
+      hashes: { 'back.webp': md5 },
+      codeImageIndex: index,
+    });
+
+    assert.equal(result.get('back.webp'), 'icon_back');
+    assert.equal(index.byHash.get(md5)[0].outputPath, output);
+    assert.equal(index.ignored.length, 0);
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('reuse 模式未命中或输出损坏时回退设计包资源', () => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'html-compose-resource-'));
   try {

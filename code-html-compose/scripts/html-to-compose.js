@@ -1800,7 +1800,7 @@ function main() {
   console.log(COMPOSE_RESOURCE_MODE === 'existing'
     ? '步骤 9.1：复用显式资源映射'
     : COMPOSE_RESOURCE_MODE === 'reuse'
-      ? '步骤 9.1：按 originalHash 优先复用 code-image，未命中时回退设计包图片'
+      ? '步骤 9.1：按累计 image.json 的 md5 优先复用 code-image，未命中时回退设计包图片'
       : '步骤 9.1：复制设计图到 app res 目录');
   const copied = copyImages(semantic);
   const reusedCount = copied.filter((item) => item.reused).length;

@@ -5,7 +5,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 # Code Image
 
-导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 仅临时解压，按其中的 `mipmap` 或 `mipmap-*` 目录将重命名后的图片复制到项目对应目录，并以 ZIP 文件名作为资源名前缀。原始 ZIP 文件不会复制到项目，临时原始文件在导入结束后自动清理。每张导入图片均生成语义化的 Android 资源名并记录映射。视觉对比是独立能力，不会在图片转换时自动执行。
+导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 仅临时解压，按其中的 `mipmap` 或 `mipmap-*` 目录将重命名后的图片复制到项目对应目录，并以 ZIP 文件名作为资源名前缀。原始 ZIP 文件不会复制到项目，临时原始文件在导入结束后自动清理。每张导入图片均生成语义化的 Android 资源名并记录映射；每次成功执行还会扫描项目所有 Android 模块的 `src/main/res` 图片，累计维护项目级索引。视觉对比是独立能力，不会在图片转换时自动执行。
 
 ## 强制入口与维护边界
 
@@ -19,7 +19,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 ## 输入契约
 
-- 必须且只能提供其中一项：`--image <path>` 或 `--zip <path>`。重复参数、目录、通配符和同时传递两者均无效。
+- 必须且只能提供其中一项：`--scan`、`--image <path>` 或 `--zip <path>`。`--scan` 只扫描项目资源，不接收图片输入；重复参数、目录、通配符和同时传递两种输入均无效。
 - `--image` 只接受一张可解码的 `.png`、`.jpg`、`.jpeg`、`.webp` 或 `.gif` 图片；扩展名与实际内容不符时拒绝，源文件保留不动。
 - `--zip` 只接受一个 ZIP，且其中必须至少有一张图片位于 `mipmap` 或 `mipmap-*` 目录；否则在解压前拒绝，不能按 ZIP 处理。需要处理其中内容时，改为向 `--image` 传入一张实际图片。
 - `--compose <path>` 可选。提供时必须是实际存在的 Compose 文件，仅用于生成页面命名空间。
@@ -45,16 +45,22 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 ## 记录与改名
 
-项目 `.code-image/` 使用统一的 `image.json` 资源索引。每次成功 `--apply` 都只写入当前批次并原子覆盖前一次内容；旧版按来源生成的 `*.resources.json` 和 `resources.json` 会在成功写入后清理，已导入的图片输出文件保留。ZIP 原始文件只在系统临时目录存在，导入结束后清理，不在项目中建立解压缓存。记录格式见 [resource-cache.md](references/resource-cache.md)。
+项目 `.code-image/` 使用统一的 `image.json` 累计资源索引。每次成功 `--apply` 都会扫描所有 Android 模块的 `src/main/res` 图片并原子更新：新增文件追加、同路径内容变化更新、已删除文件移除；多个路径拥有相同 MD5 时分别保留。旧版按来源生成的 `*.resources.json` 和 `resources.json` 会在成功写入后清理，已导入的图片输出文件保留。ZIP 原始文件只在系统临时目录存在，导入结束后清理，不在项目中建立解压缓存。记录格式见 [resource-cache.md](references/resource-cache.md)。
 
-每项清单只记录 `originalPath`、`originalName`、`originalHash`、`outputPath`、`outputName`；其中完整 `originalHash` 是与 `code-html-compose` 协作的唯一内容匹配依据。`identity`、`composeFile`、`namingVersion` 不写入新清单；旧字段只用于兼容读取，并在下一次成功 `--apply` 时清理。同一批次内相同内容且同目标目录只保留首个规范映射。
+每项清单至少记录 `md5`、`identifier`、`path`、`name`；`identifier` 固定为 `path-md5`，`path` 是相对项目根目录的实际资源路径，`name` 是文件名。ZIP 导入记录额外写入 `source`（`<ZIP文件名>!/<ZIP内部路径>`）。完整 `md5` 是与 `code-html-compose` 协作的唯一内容匹配依据；同一 MD5 的不同项目路径不能合并。旧版 `originalHash`/`outputPath`/`outputName` 只用于迁移读取，并在下一次成功 `--apply` 时转换为新格式。
 
 ## 工作流程
 
-1. 校验唯一输入及可选 Compose 文件。
+1. 校验唯一输入及可选 Compose 文件；`--scan` 直接进入全局目录扫描。
 2. 由 Compose 路径确定模块；ZIP 在写入前校验规范化重复路径、符号链接、条目数、解压大小和压缩比。
-3. 按目标目录和内容 Hash 查询当前 `image.json`；完整命中时无写入，否则生成名称或恢复损坏输出。
-4. 输出 Dry Run；确认后以 `--apply` 原子复制图片并原子覆盖 `image.json`。
+3. 在内存中扫描项目资源并按目标目录和内容 Hash 规划导入；完整命中时复用已有输出，否则生成名称或恢复损坏输出。
+4. 输出 Dry Run；确认后以 `--apply` 原子复制图片，再扫描全局资源并原子更新累计 `image.json`。
+
+单独扫描项目图片：
+
+```bash
+python3 scripts/normalize_images.py --scan --project-root . --apply
+```
 
 ## 使用脚本
 

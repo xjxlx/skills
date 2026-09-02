@@ -27,7 +27,8 @@ function isWithinDirectory(filePath, directory) {
 }
 
 /**
- * 读取目标模块 .code-image/image.json，按原始图片完整 MD5 建立可复用索引。
+ * 读取项目根目录累计的 .code-image/image.json，按图片完整 MD5 建立可复用索引。
+ * 同时兼容旧版 originalHash/outputPath/outputName 字段，便于项目平滑迁移。
  * 无清单、坏记录、跨模块记录或不存在的输出文件均忽略，由调用方回退设计包图片。
  */
 function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
@@ -61,9 +62,9 @@ function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
         ignored.push({ manifest: name, reason: 'invalid-record' });
         continue;
       }
-      const hash = String(record.originalHash || '').toLowerCase();
-      const outputPathValue = String(record.outputPath || '');
-      const outputName = String(record.outputName || '');
+      const hash = String(record.md5 || record.originalHash || '').toLowerCase();
+      const outputPathValue = String(record.path || record.outputPath || '');
+      const outputName = String(record.name || record.outputName || (outputPathValue ? path.basename(outputPathValue) : ''));
       if (!FULL_MD5.test(hash) || !outputPathValue || !outputName) {
         ignored.push({ manifest: name, reason: 'incomplete-record' });
         continue;
@@ -98,7 +99,7 @@ function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
           outputPath,
           outputName,
           manifest: name,
-          originalPath: record.originalPath || null,
+          originalPath: record.source || record.originalPath || null,
         });
         entries.sort((a, b) => a.outputPath.localeCompare(b.outputPath));
         byHash.set(hash, entries);

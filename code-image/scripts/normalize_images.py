@@ -41,6 +41,7 @@ SEMANTIC_TRANSLATIONS = {
 HAN_CHARACTER_PATTERN = re.compile(r"[\u3400-\u9fff]")
 COPY_MARKER_PATTERN = re.compile(r"(?i)(?:备份|副本|\bbackup\b|\bcopy\b)")
 RESOURCE_MANIFEST_NAME = "image.json"
+CATALOG_VERSION = 3
 
 
 @dataclass(frozen=True)
@@ -137,6 +138,108 @@ def relative_path(path: Path, project_root: Path) -> str:
         return str(path.resolve())
 
 
+def _record_path(record: dict) -> str | None:
+    value = record.get("path") or record.get("outputPath")
+    return value if isinstance(value, str) and value else None
+
+
+def _record_name(record: dict, path: str | None = None) -> str | None:
+    value = record.get("name") or record.get("outputName")
+    if isinstance(value, str) and value:
+        return value
+    return Path(path).name if path else None
+
+
+def _record_hash(record: dict) -> str | None:
+    value = record.get("md5") or record.get("originalHash")
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{32}", value):
+        return None
+    return value.lower()
+
+
+def _record_source(record: dict) -> str | None:
+    value = record.get("source") or record.get("originalPath")
+    return value if isinstance(value, str) and "!/" in value else None
+
+
+def _record_output_path(record: dict, project_root: Path) -> Path | None:
+    output_path = _record_path(record)
+    if output_path is None:
+        return None
+    path = Path(output_path)
+    return path if path.is_absolute() else project_root / path
+
+
+def _catalog_file_paths(project_root: Path) -> list[Path]:
+    """只扫描 Android 模块的 src/main/res，避免把输入目录和构建产物记入目录。"""
+    excluded = {".git", ".gradle", ".idea", "build", "node_modules", ".code-image"}
+    roots = []
+    for candidate in project_root.rglob("res"):
+        if (
+            candidate.is_dir()
+            and candidate.parent.name == "main"
+            and candidate.parent.parent.name == "src"
+            and not any(part in excluded for part in candidate.relative_to(project_root).parts)
+        ):
+            roots.append(candidate)
+    files = []
+    for root in sorted(roots):
+        for path in sorted(root.rglob("*")):
+            if path.is_file() and path.suffix.lower() in IMAGE_EXTENSIONS:
+                files.append(path)
+    return files
+
+
+def _legacy_catalog_record(record: dict, project_root: Path) -> dict | None:
+    """把旧版来源清单记录转换为当前项目文件记录，仅保留仍存在的文件。"""
+    path_value = _record_path(record)
+    if not path_value:
+        return None
+    output_path = _record_output_path(record, project_root)
+    if output_path is None or not output_path.is_file() or output_path.suffix.lower() not in IMAGE_EXTENSIONS:
+        return None
+    path = relative_path(output_path, project_root)
+    file_hash = md5_file(output_path)
+    result = {
+        "md5": file_hash,
+        "identifier": f"{path}-{file_hash}",
+        "path": path,
+        "name": _record_name(record, path) or output_path.name,
+    }
+    source = _record_source(record)
+    if source:
+        result["source"] = source
+    return result
+
+
+def scan_project_catalog(project_root: Path, previous: dict | None = None, sources: dict[str, str] | None = None) -> dict:
+    """扫描并生成全局累计图片目录；同一路径只保留当前文件，多路径同 MD5 均保留。"""
+    previous_by_path: dict[str, dict] = {}
+    for record in (previous or {}).get("resources", []):
+        if not isinstance(record, dict):
+            continue
+        migrated = _legacy_catalog_record(record, project_root)
+        if migrated:
+            previous_by_path.setdefault(migrated["path"], migrated)
+
+    records = []
+    for path in _catalog_file_paths(project_root):
+        relative = relative_path(path, project_root)
+        file_hash = md5_file(path)
+        record = {
+            "md5": file_hash,
+            "identifier": f"{relative}-{file_hash}",
+            "path": relative,
+            "name": path.name,
+        }
+        source = (sources or {}).get(relative) or previous_by_path.get(relative, {}).get("source")
+        if source:
+            record["source"] = source
+        records.append(record)
+    records.sort(key=lambda record: (record["path"], record["md5"]))
+    return {"version": CATALOG_VERSION, "resources": records}
+
+
 def load_resources(path: Path) -> dict:
     if not path.exists():
         return {"version": 1, "resources": []}
@@ -192,19 +295,12 @@ def _find_record(
     for record in records:
         if not _record_matches_target(record, target_dir, project_root):
             continue
-        if current_path == record.get("originalPath") and file_hash == record.get("originalHash"):
+        record_path = _record_path(record)
+        if current_path == record_path and file_hash == _record_hash(record):
             return record
-        if current_path == record.get("outputPath") and file_hash == record.get("originalHash"):
+        if current_path == record.get("originalPath") and file_hash == _record_hash(record):
             return record
     return None
-
-
-def _record_output_path(record: dict, project_root: Path) -> Path | None:
-    output_path = record.get("outputPath")
-    if not isinstance(output_path, str) or not output_path:
-        return None
-    path = Path(output_path)
-    return path if path.is_absolute() else project_root / path
 
 
 def _plan_key(original_path: str, file_hash: str, target_dir: Path) -> str:
@@ -222,7 +318,7 @@ def _find_record_by_hash(
     for record in records:
         output_path = _record_output_path(record, project_root)
         if (
-            record.get("originalHash") == file_hash
+            _record_hash(record) == file_hash
             and output_path is not None
             and output_path.parent.resolve() == target_dir.resolve()
         ):
@@ -285,6 +381,7 @@ def build_plan(
     asset_name: str | None = None,
     archive_stem: str | None = None,
     original_path_override: str | None = None,
+    resource_manifest: dict | None = None,
 ) -> RenamePlan:
     source = Path(source_path).resolve()
     if not source.is_file() or source.suffix.lower() not in IMAGE_EXTENSIONS:
@@ -295,15 +392,16 @@ def build_plan(
     resources_path = requested_resources_path(str(resources_path), project_root)
     current_path = original_path_override or relative_path(source, project_root)
     file_hash = md5_file(source)
-    manifest = load_resources(resources_path)
+    manifest = resource_manifest or load_resources(resources_path)
     record = _find_record(manifest["resources"], current_path, file_hash, target_dir, project_root)
     if record is None:
         record = _find_record_by_hash(manifest["resources"], file_hash, target_dir, project_root)
-    original_path = original_path_override or (record.get("originalPath") if record else current_path)
-    original_name = record.get("originalName") if record else source.name
+    original_path = original_path_override or (record.get("originalPath") if record else None) or current_path
+    original_name = _record_name(record) if record else source.name
     previous_target = _record_output_path(record, project_root) if record else None
-    if record and isinstance(record.get("outputName"), str) and Path(record["outputName"]).name == record["outputName"]:
-        output_name = record["outputName"]
+    record_name = _record_name(record) if record else None
+    if record and record_name and Path(record_name).name == record_name:
+        output_name = record_name
     elif not record and _is_normalized(source.name) and archive_stem is None:
         output_name = source.name
     else:
@@ -384,7 +482,7 @@ def remove_legacy_manifests(project_root: Path) -> None:
 
 def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Path) -> None:
     resources_path = requested_resources_path(str(resources_path), project_root)
-    records: list[dict] = []
+    previous = load_resources(resources_path)
     for plan in plans:
         plan.target.parent.mkdir(parents=True, exist_ok=True)
         if plan.source.resolve() != plan.target.resolve():
@@ -398,26 +496,12 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
         if plan.previous_target and plan.previous_target.resolve() != plan.target.resolve():
             if plan.previous_target.is_file():
                 plan.previous_target.unlink()
-        records.append(
-            {
-                "originalPath": plan.original_path,
-                "originalName": plan.original_name,
-                "originalHash": plan.file_hash,
-                "outputPath": relative_path(plan.target, project_root),
-                "outputName": plan.output_name,
-            }
-        )
-    manifest = {
-        "version": 2,
-        "resources": sorted(
-            records,
-            key=lambda record: (
-                record.get("originalPath", ""),
-                record.get("originalHash", ""),
-                record.get("outputPath", ""),
-            ),
-        ),
+    sources = {
+        relative_path(plan.target, project_root): plan.original_path
+        for plan in plans
+        if "!/" in plan.original_path
     }
+    manifest = scan_project_catalog(project_root, previous, sources)
     write_resources(resources_path, manifest)
     remove_legacy_manifests(project_root)
 
@@ -542,6 +626,7 @@ def main() -> int:
     source_group = parser.add_mutually_exclusive_group(required=True)
     source_group.add_argument("--image", action="append", help="单个图片文件路径；每次只能提供一次")
     source_group.add_argument("--zip", action="append", help="包含 mipmap 图片目录的 ZIP；每次只能提供一次")
+    source_group.add_argument("--scan", action="store_true", help="扫描项目所有 Android 资源图片并更新 image.json")
     parser.add_argument("--compose", help="可选的 Compose 布局文件，用于生成页面命名空间")
     parser.add_argument("--asset-name", help="可选的语义资源名，仅支持单图导入")
     parser.add_argument("--project-root", default=".", help="Android 项目根目录，默认当前目录")
@@ -557,21 +642,33 @@ def main() -> int:
         parser.error("每次只允许一个 --zip")
     if args.asset_name and args.zip:
         parser.error("--asset-name 仅支持与 --image 一起使用")
+    if args.asset_name and args.scan:
+        parser.error("--asset-name 仅支持与 --image 一起使用")
 
     project_root = Path(args.project_root).resolve()
     compose = Path(args.compose).resolve() if args.compose else None
     if compose and not compose.is_file():
         raise ValueError(f"Compose 文件不存在：{compose}")
-    source_path = Path(args.image[0] if args.image else args.zip[0]).resolve()
+    source_path = Path(args.image[0] if args.image else args.zip[0]).resolve() if not args.scan else None
     resources_path = (
         requested_resources_path(args.resources_file, project_root)
         if args.resources_file
         else resources_path_for_project(project_root)
     )
     res_root = resource_root_for_compose(project_root, compose)
+    resource_manifest = scan_project_catalog(project_root, load_resources(resources_path))
     zip_workspace = None
 
     try:
+        if args.scan:
+            print(f"扫描到 {len(resource_manifest['resources'])} 张项目资源图片")
+            if args.apply:
+                write_resources(resources_path, resource_manifest)
+                remove_legacy_manifests(project_root)
+                print(f"已更新资源记录：{resources_path}")
+            else:
+                print("当前为 Dry Run，确认后追加 --apply 执行。")
+            return 0
         if args.image:
             source = source_path
             plans = [
@@ -582,6 +679,7 @@ def main() -> int:
                     compose,
                     resources_path,
                     asset_name=args.asset_name,
+                    resource_manifest=resource_manifest,
                 )
             ]
         else:
@@ -604,6 +702,7 @@ def main() -> int:
                     reserved,
                     archive_stem=source_path.stem,
                     original_path_override=f"{source_path.name}!/{entry_path}",
+                    resource_manifest=resource_manifest,
                 )
                 plans.append(plan)
                 reserved.add(plan.target.resolve())

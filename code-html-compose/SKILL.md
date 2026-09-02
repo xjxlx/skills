@@ -73,6 +73,6 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具�
 - `scripts/`：DOM 解析、HTML 对比、Compose 基线生成、模拟器结构与局部像素校验及测试。
 - `references/configuration.md`：运行命令、环境变量和产物边界。
 - `references/workflow.md`：工作流细则与视觉还原约束。
-- 图片资源默认按完整 `originalHash` 优先复用目标模块 `.code-image/image.json` 的实际输出；需要复用时先用 `$code-image` 导入并 `--apply`，本 Skill 只读取清单，不重新导入或改名。文件名不参与匹配；跨 Skill 只依赖 `originalHash`、`outputPath` 和 `outputName`，不依赖 `identity`、`composeFile` 或 `namingVersion`。无可用清单或 Hash 未命中时才使用设计包的 `img`/`image` 图片，禁止跨模块或复用不存在、内容 Hash 不一致的输出文件。若导出图片只是纯色背景、圆角或边缘噪声，且 CSS/像素证据可确定其样式，优先用 `background`/`clip(RoundedCornerShape)` 代码实现并删除冗余图片组件。
+- 图片资源默认按完整 `md5` 优先复用项目根目录累计的 `.code-image/image.json` 实际输出；需要复用时先用 `$code-image` 导入并 `--apply`，本 Skill 只读取清单，不重新导入或改名。读取 `path`/`name`/`md5`，并按当前目标模块资源根目录过滤；旧版 `originalHash`/`outputPath`/`outputName` 只作迁移兼容。文件名不参与匹配；同 MD5 多个有效路径按路径稳定选择首个。无可用清单、Hash 未命中或输出内容校验失败时才使用设计包的 `img`/`image` 图片，禁止跨模块或复用不存在、内容 Hash 不一致的输出文件。若导出图片只是纯色背景、圆角或边缘噪声，且 CSS/像素证据可确定其样式，优先用 `background`/`clip(RoundedCornerShape)` 代码实现并删除冗余图片组件。
 
 运行产生的 `run-*`、`compose-run-*`、截图、JSON 报告、图片资源、`node_modules/` 均只允许位于目标项目工作目录，不得发布到 GitHub。

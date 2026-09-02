@@ -42,7 +42,7 @@
 - 横向设计稿启动前依赖目标 Activity 的静态 `android:screenOrientation="landscape"` 配置，并要求模拟器已经由用户旋转到横向；截图必须保持原始方向，若截图仍为竖屏则直接失败。禁止脚本执行 `wm size`、`wm density`、`policy_control`、`accelerometer_rotation`、`user_rotation`，禁止旋转图片或做方向补偿；当前模拟器分辨率保持不变，验收按截图真实尺寸换算边界。
 - 坐标、尺寸、字号、行高和圆角固定按 `DP_PER_PX=0.5` 换算，保留半 dp/sp 精度；HTML `1334×750` 与 Android `375×667dp` 的轴向对应关系为 `1334↔667`、`750↔375`。
 - 背景图、裁切背景、圆角阴影、文字基线和单行文字缩放由生成器统一处理。
-- 图片默认使用 `COMPOSE_RESOURCE_MODE=reuse`：需要复用时先调用 `$code-image` 导入并 `--apply`，再计算设计包 `img`/`image` 文件的完整 MD5，与当前目标模块 `.code-image/image.json` 中所有 `originalHash` 匹配；命中且 `outputPath` 实际存在、输出内容 Hash 仍一致时只引用其 `outputName` 对应的 `R.mipmap`，不复制设计包图片。无清单、Hash 未命中或输出损坏时才回退复制设计包图片。`copy` 强制复制设计包图片，`existing` 仍要求显式资源映射；显式映射优先于自动匹配。同一 Hash 多个有效输出时按 `outputPath` 稳定选择首个，需要指定其他资源时使用显式映射。
+- 图片默认使用 `COMPOSE_RESOURCE_MODE=reuse`：需要复用时先调用 `$code-image` 导入并 `--apply`，再计算设计包 `img`/`image` 文件的完整 MD5，与项目根目录 `.code-image/image.json` 中的 `md5` 匹配，并按当前目标模块资源根目录过滤；命中且 `path` 实际存在、输出内容 Hash 仍一致时只引用其 `name` 对应的 `R.mipmap`，不复制设计包图片。读取器兼容旧版 `originalHash`/`outputPath`/`outputName`。无清单、Hash 未命中或输出损坏时才回退复制设计包图片。`copy` 强制复制设计包图片，`existing` 仍要求显式资源映射；显式映射优先于自动匹配。同一 Hash 多个有效输出时按 `path` 稳定选择首个，需要指定其他资源时使用显式映射。
 - 元素较多时拆分私有 Composable，避免单方法字节码超过 64KB。
 - 重复且外框几何一致的卡片或文本项识别为列表；横向、纵向均适用，前置完整卡片的宽高允许约 1dp/1–2px 栅格误差。卡片内部的标题、按钮、锁图标、完成态和高亮态属于 item 状态，不因这些字段不同而拆散列表。若最后一个条目在宿主视口边界被裁切，仍要在列表数据中增加一个完整尺寸的 item 对象，再由宿主视口自然裁切其可见部分；不能额外创建半截页面组件，也不能把半截可见宽度写进 item 数据。
 
