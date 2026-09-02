@@ -28,7 +28,6 @@ MAX_ARCHIVE_ENTRIES = 5000
 MAX_SINGLE_FILE_BYTES = 256 * 1024 * 1024
 MAX_UNCOMPRESSED_BYTES = 1024 * 1024 * 1024
 MAX_COMPRESSION_RATIO = 200
-NAMING_VERSION = 3
 SEMANTIC_TRANSLATIONS = {
     "今日目标": "today_target",
     "形状结合": "shape_combination",
@@ -41,6 +40,7 @@ SEMANTIC_TRANSLATIONS = {
 }
 HAN_CHARACTER_PATTERN = re.compile(r"[\u3400-\u9fff]")
 COPY_MARKER_PATTERN = re.compile(r"(?i)(?:备份|副本|\bbackup\b|\bcopy\b)")
+RESOURCE_MANIFEST_NAME = "image.json"
 
 
 @dataclass(frozen=True)
@@ -51,7 +51,6 @@ class RenamePlan:
     original_name: str
     output_name: str
     identity: str
-    compose_file: str | None
     file_hash: str
     previous_target: Path | None
 
@@ -162,24 +161,20 @@ def validate_image_file(path: Path) -> None:
         raise ValueError(f"图片尺寸无效：{path} ({width}x{height})")
 
 
-def resources_path_for_source(project_root: Path, source_path: Path) -> Path:
-    """以稳定来源身份定位可复用的资源清单。"""
-    source_hash = md5_file(source_path)
-    prefix = f"{safe_token(source_path.stem)}-{source_hash}"
-    return project_root / ".code-image" / f"{prefix}.resources.json"
+def resources_path_for_project(project_root: Path) -> Path:
+    """所有导入统一使用项目根目录下唯一的资源清单。"""
+    return project_root / ".code-image" / RESOURCE_MANIFEST_NAME
 
 
 def requested_resources_path(value: str, project_root: Path) -> Path:
     path = Path(value).expanduser().resolve()
-    records_directory = (project_root / ".code-image").resolve()
-    if path.parent != records_directory or not re.fullmatch(
-        r".+-(?:[0-9a-f]{6}|[0-9a-f]{32})\.resources\.json", path.name
-    ):
+    expected = resources_path_for_project(project_root).resolve()
+    if path != expected:
         raise ValueError(
-            "--resources-file 必须是项目 .code-image/ 下 "
-            "<来源名>-<6位或完整MD5>.resources.json 格式的来源清单"
+            f"--resources-file 只能指向项目 .code-image/{RESOURCE_MANIFEST_NAME}；"
+            "资源清单不再按来源拆分"
         )
-    return path
+    return expected
 
 
 def _record_matches_target(record: dict, target_dir: Path, project_root: Path) -> bool:
@@ -215,31 +210,6 @@ def _record_output_path(record: dict, project_root: Path) -> Path | None:
 def _plan_key(original_path: str, file_hash: str, target_dir: Path) -> str:
     """生成不写入清单的内部资源键。"""
     return f"{original_path}:{file_hash}:{target_dir.resolve()}"
-
-
-def _record_key(record: dict, project_root: Path) -> str | None:
-    """用五个持久字段生成内部索引键，不把 identity 写回清单。"""
-    original_path = record.get("originalPath")
-    file_hash = record.get("originalHash")
-    output_path = _record_output_path(record, project_root)
-    if not isinstance(original_path, str) or not original_path:
-        return None
-    if not isinstance(file_hash, str) or not re.fullmatch(r"[0-9a-f]{32}", file_hash, re.IGNORECASE):
-        return None
-    if output_path is None:
-        return None
-    return _plan_key(original_path, file_hash.lower(), output_path.parent)
-
-
-def _minimal_record(record: dict) -> dict:
-    """只保留跨 code-image/code-html-compose 需要的五个字段。"""
-    return {
-        "originalPath": record["originalPath"],
-        "originalName": record["originalName"],
-        "originalHash": record["originalHash"],
-        "outputPath": record["outputPath"],
-        "outputName": record["outputName"],
-    }
 
 
 def _find_record_by_hash(
@@ -322,6 +292,7 @@ def build_plan(
     validate_image_file(source)
     target_dir = Path(target_dir).resolve()
     project_root = Path(project_root).resolve()
+    resources_path = requested_resources_path(str(resources_path), project_root)
     current_path = original_path_override or relative_path(source, project_root)
     file_hash = md5_file(source)
     manifest = load_resources(resources_path)
@@ -330,8 +301,6 @@ def build_plan(
         record = _find_record_by_hash(manifest["resources"], file_hash, target_dir, project_root)
     original_path = original_path_override or (record.get("originalPath") if record else current_path)
     original_name = record.get("originalName") if record else source.name
-    compose_file = relative_path(compose_path, project_root) if compose_path else (record.get("composeFile") if record else None)
-
     previous_target = _record_output_path(record, project_root) if record else None
     if record and isinstance(record.get("outputName"), str) and Path(record["outputName"]).name == record["outputName"]:
         output_name = record["outputName"]
@@ -362,7 +331,6 @@ def build_plan(
         original_name=original_name,
         output_name=target.name,
         identity=identity,
-        compose_file=compose_file,
         file_hash=file_hash,
         previous_target=previous_target,
     )
@@ -415,15 +383,8 @@ def remove_legacy_manifests(project_root: Path) -> None:
 
 
 def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Path) -> None:
-    manifest = load_resources(resources_path)
-    records: dict[str, dict] = {}
-    unkeyed_records: list[dict] = []
-    for record in manifest["resources"]:
-        key = _record_key(record, project_root)
-        if key is None:
-            unkeyed_records.append(record)
-        else:
-            records[key] = _minimal_record(record)
+    resources_path = requested_resources_path(str(resources_path), project_root)
+    records: list[dict] = []
     for plan in plans:
         plan.target.parent.mkdir(parents=True, exist_ok=True)
         if plan.source.resolve() != plan.target.resolve():
@@ -437,23 +398,28 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
         if plan.previous_target and plan.previous_target.resolve() != plan.target.resolve():
             if plan.previous_target.is_file():
                 plan.previous_target.unlink()
-        records[plan.identity] = {
-            "originalPath": plan.original_path,
-            "originalName": plan.original_name,
-            "originalHash": plan.file_hash,
-            "outputPath": relative_path(plan.target, project_root),
-            "outputName": plan.output_name,
-        }
-    manifest["version"] = 2
-    manifest["resources"] = sorted(
-            [*unkeyed_records, *records.values()],
-            key=lambda record: (
-                record.get("originalPath", ""),
-                record.get("originalHash", ""),
-                record.get("outputPath", ""),
-            ),
+        records.append(
+            {
+                "originalPath": plan.original_path,
+                "originalName": plan.original_name,
+                "originalHash": plan.file_hash,
+                "outputPath": relative_path(plan.target, project_root),
+                "outputName": plan.output_name,
+            }
+        )
+    manifest = {
+        "version": 2,
+        "resources": sorted(
+        records,
+        key=lambda record: (
+            record.get("originalPath", ""),
+            record.get("originalHash", ""),
+            record.get("outputPath", ""),
         ),
+        ),
+    }
     write_resources(resources_path, manifest)
+    remove_legacy_manifests(project_root)
 
 
 def normalized_zip_path(value: str) -> PurePosixPath:
@@ -568,7 +534,7 @@ def zip_image_sources(extraction_root: Path) -> list[tuple[Path, str]]:
 def _print_plans(plans: list[RenamePlan]) -> None:
     for plan in plans:
         print(f"导入: {plan.source.name} -> {plan.target}")
-        print(f"  Hash: {plan.file_hash[:12]} | Compose: {plan.compose_file or '未提供'}")
+        print(f"  Hash: {plan.file_hash[:12]}")
 
 
 def main() -> int:
@@ -600,7 +566,7 @@ def main() -> int:
     resources_path = (
         requested_resources_path(args.resources_file, project_root)
         if args.resources_file
-        else resources_path_for_source(project_root, source_path)
+        else resources_path_for_project(project_root)
     )
     res_root = resource_root_for_compose(project_root, compose)
     zip_workspace = None

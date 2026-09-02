@@ -54,9 +54,10 @@ class ImportZipImagesContractTest(unittest.TestCase):
             self.assertEqual(module.build_plan.call_count, 2)
             module.apply_plans.assert_called_once()
 
-    def test_code_image_resource_manifest_is_project_level_image_json(self) -> None:
-        archive = Path("/tmp/design.zip")
+    def test_code_image_manifest_is_project_level_singleton(self) -> None:
         project = Path("/tmp/project")
+        archive = Path("/tmp/design.zip")
+
         self.assertEqual(
             IMPORT_IMAGES.resource_manifest_path(project, archive, "a" * 32),
             project / ".code-image/image.json",
@@ -152,7 +153,8 @@ class ImportZipImagesContractTest(unittest.TestCase):
             compose = root / "app" / "src" / "main" / "java" / "Page.kt"
             compose.parent.mkdir(parents=True)
             compose.write_text("package com.example\n", encoding="utf-8")
-            manifest = root / "resources.json"
+            manifest = root / ".code-image/image.json"
+            manifest.parent.mkdir(parents=True)
             manifest.write_text(json.dumps({"resources": [{
                 "originalHash": "abc",
                 "outputPath": "app/src/main/res/mipmap-xhdpi/missing.png",
@@ -172,7 +174,8 @@ class ImportZipImagesContractTest(unittest.TestCase):
             app_resource = root / "app" / "src" / "main" / "res" / "mipmap-xxhdpi" / "icon.png"
             app_resource.parent.mkdir(parents=True)
             app_resource.write_bytes(b"image")
-            manifest = root / "resources.json"
+            manifest = root / ".code-image/image.json"
+            manifest.parent.mkdir(parents=True)
             manifest.write_text(json.dumps({"resources": [{
                 "originalHash": "abc",
                 "outputPath": app_resource.relative_to(root).as_posix(),

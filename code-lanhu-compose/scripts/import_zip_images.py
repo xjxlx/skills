@@ -280,7 +280,7 @@ def resource_manifest_path(
     _zip_path: Path,
     _source_hash: str,
 ) -> Path:
-    """返回 code-image 的唯一项目级资源清单。"""
+    """返回项目级唯一的 code-image 资源清单路径。"""
     return project_root / ".code-image" / "image.json"
 
 

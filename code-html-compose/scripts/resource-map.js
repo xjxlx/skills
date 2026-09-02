@@ -35,7 +35,9 @@ function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
   const ignored = [];
   const directory = path.join(path.resolve(projectRoot), '.code-image');
   const targetRoot = path.resolve(resourceRoot);
-  if (!fs.existsSync(directory) || !fs.statSync(directory).isDirectory()) {
+  try {
+    if (!fs.statSync(directory).isDirectory()) return { byHash, ignored };
+  } catch (error) {
     return { byHash, ignored };
   }
 
@@ -55,6 +57,10 @@ function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
       continue;
     }
     for (const record of manifest.resources) {
+      if (!record || typeof record !== 'object' || Array.isArray(record)) {
+        ignored.push({ manifest: name, reason: 'invalid-record' });
+        continue;
+      }
       const hash = String(record.originalHash || '').toLowerCase();
       const outputPathValue = String(record.outputPath || '');
       const outputName = String(record.outputName || '');

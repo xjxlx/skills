@@ -82,9 +82,10 @@ class NormalizeImagesTest(unittest.TestCase):
         record = self.resources()[0]
         self.assertEqual(record["originalPath"], "input/Group 62.png")
         self.assertEqual(record["outputPath"], "app/src/main/res/mipmap-xxhdpi/icon_group.png")
-        self.assertNotIn("resourceFamily", record)
-        self.assertNotIn("updatedAt", record)
-        self.assertTrue((self.project / ".code-image/image.json").is_file())
+        self.assertEqual(
+            set(record),
+            {"originalPath", "originalName", "originalHash", "outputPath", "outputName"},
+        )
 
     def test_optional_compose_adds_page_namespace_and_writes_minimal_record(self):
         image = self.input_dir / "Group 62.png"
@@ -182,8 +183,12 @@ class NormalizeImagesTest(unittest.TestCase):
         resources = self.resources()
         self.assertEqual(len(resources), 1)
         self.assertEqual(resources[0]["outputName"], "icon_report_home_second.png")
+        self.assertEqual(
+            set(resources[0]),
+            {"originalPath", "originalName", "originalHash", "outputPath", "outputName"},
+        )
 
-    def test_legacy_manifests_are_removed_after_successful_apply(self):
+    def test_invalid_legacy_manifests_are_removed_after_successful_apply(self):
         code_image = self.project / ".code-image"
         code_image.mkdir()
         (code_image / "first-abcdef.resources.json").write_text("{}", encoding="utf-8")
@@ -195,6 +200,39 @@ class NormalizeImagesTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(sorted(path.name for path in code_image.glob("*.json")), ["image.json"])
+
+    def test_valid_legacy_records_are_not_merged_before_legacy_manifest_cleanup(self):
+        code_image = self.project / ".code-image"
+        code_image.mkdir()
+        legacy_output = self.project / "app/src/main/res/mipmap-xxhdpi/icon_legacy_asset.png"
+        legacy_output.parent.mkdir(parents=True)
+        self.write_image(legacy_output, (1, 2, 3))
+        legacy_hash = hashlib.md5(legacy_output.read_bytes()).hexdigest()
+        (code_image / "old-abcdef.resources.json").write_text(
+            json.dumps({
+                "resources": [{
+                    "identity": "legacy",
+                    "originalPath": "old.zip!/mipmap-xxhdpi/old.png",
+                    "originalName": "old.png",
+                    "originalHash": legacy_hash,
+                    "outputPath": str(legacy_output.relative_to(self.project)),
+                    "outputName": legacy_output.name,
+                    "composeFile": None,
+                    "namingVersion": 3,
+                }],
+            }),
+            encoding="utf-8",
+        )
+        image = self.input_dir / "Latest.png"
+        self.write_image(image)
+
+        result = self.run_skill("--image", image)
+
+        self.assertEqual(result.returncode, 0, result.stderr)
+        records = self.resources()
+        self.assertEqual(len(records), 1)
+        self.assertNotIn(legacy_hash, {record["originalHash"] for record in records})
+        self.assertFalse((code_image / "old-abcdef.resources.json").exists())
 
     def test_resources_file_cannot_create_a_second_manifest(self):
         image = self.input_dir / "Latest.png"
@@ -268,6 +306,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertFalse(
             any(path.name == "Group 62.png" for path in self.project.rglob("Group 62.png"))
         )
+        source_hash = hashlib.md5(archive.read_bytes()).hexdigest()
         self.assertTrue((self.project / ".code-image/image.json").is_file())
 
         repeated = self.run_skill("--zip", archive)
@@ -324,11 +363,11 @@ class NormalizeImagesTest(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         record = manifest["resources"][0]
         current_output = self.project / record["outputPath"]
-        legacy_output = current_output.with_name("icon_l6_image_old.png")
+        legacy_output = current_output.with_name("icon_l6_rectangle_old.png")
         current_output.rename(legacy_output)
         record["outputPath"] = str(legacy_output.relative_to(self.project))
         record["outputName"] = legacy_output.name
-        record.pop("namingVersion", None)
+        record.update({"identity": "legacy", "composeFile": None, "namingVersion": 3})
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
         migrated = self.run_skill("--zip", archive)

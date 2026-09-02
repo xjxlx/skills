@@ -41,11 +41,11 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 - 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`；提供 `--asset-name` 时图片基础名取该语义名，`Layout` 和 `Page` 后缀不参与命名空间。
 - ZIP 导入时以 ZIP 文件名作为前缀，先规范化 ZIP 名称再拼接图片基础名；例如 `L6.zip` 中的 `Group 62.png` 输出为 `icon_l6_group.png`。ZIP 前缀优先于 Compose 页面命名空间；ZIP 内已规范化的图片名也必须补上 ZIP 前缀。
 - 命名完成后，如果目标密度目录中已有同名文件，或同一 ZIP 的同一密度目录中生成了同名结果，从 `_1` 开始递增：`icon_l6_group.png` → `icon_l6_group_1.png` → `icon_l6_group_2.png`。禁止覆盖未登记图片。
-- 已以 `icon_` 开头且满足 Android 小写资源名规则的单图名称不再加前缀；当前 `image.json` 内，来源路径加 Hash 或同目标密度的内容 Hash 命中已有记录时，先验证输出路径、模块和内容 Hash。完整命中不复制；缺失或损坏时原子恢复记录中的输出名；不再依赖命名版本字段迁移旧名称；`--asset-name` 不迁移已有资源映射。
+- 已以 `icon_` 开头且满足 Android 小写资源名规则的单图名称不再加前缀；统一清单内，来源路径加 Hash 或同目标密度的内容 Hash 命中已有记录时，先验证输出路径、模块和内容 Hash。完整命中不复制；缺失或损坏时原子恢复记录中的输出名；不再依赖命名版本字段迁移旧名称；`--asset-name` 不迁移已有资源映射。
 
 ## 记录与改名
 
-项目 `.code-image/` 只使用一个 `image.json`。每次成功 `--apply` 都原子覆盖该文件，只记录本次导入的图片；旧版按来源生成的 `*.resources.json` 和 `resources.json` 会在成功写入后清理。图片输出文件保留，但不再由清单复用。`--resources-file` 仅为兼容参数，必须指向这个固定路径。ZIP 原始文件只在系统临时目录存在，导入结束后清理，不在项目中建立解压缓存。记录格式见 [resource-cache.md](references/resource-cache.md)。
+项目 `.code-image/` 使用统一的 `image.json` 资源索引。每次成功 `--apply` 都只写入当前批次并原子覆盖前一次内容；旧版按来源生成的 `*.resources.json` 和 `resources.json` 会在成功写入后清理，已导入的图片输出文件保留。ZIP 原始文件只在系统临时目录存在，导入结束后清理，不在项目中建立解压缓存。记录格式见 [resource-cache.md](references/resource-cache.md)。
 
 每项清单只记录 `originalPath`、`originalName`、`originalHash`、`outputPath`、`outputName`；其中完整 `originalHash` 是与 `code-html-compose` 协作的唯一内容匹配依据。`identity`、`composeFile`、`namingVersion` 不写入新清单；旧字段只用于兼容读取，并在下一次成功 `--apply` 时清理。同一批次内相同内容且同目标目录只保留首个规范映射。
 
@@ -54,7 +54,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 1. 校验唯一输入及可选 Compose 文件。
 2. 由 Compose 路径确定模块；ZIP 在写入前校验规范化重复路径、符号链接、条目数、解压大小和压缩比。
 3. 按目标目录和内容 Hash 查询当前 `image.json`；完整命中时无写入，否则生成名称或恢复损坏输出。
-4. 输出 Dry Run；确认后以 `--apply` 原子复制图片并原子覆盖 `.code-image/image.json`。
+4. 输出 Dry Run；确认后以 `--apply` 原子复制图片并原子覆盖 `image.json`。
 
 ## 使用脚本
 

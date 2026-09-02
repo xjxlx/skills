@@ -66,4 +66,4 @@
 
 `import_zip_images.py` 拒绝绝对路径、`..`、重复规范化路径、异常单文件/总解压大小、异常压缩比、预先存在的符号链接父目录或目标。每张图片按内容 MD5 去重；无位图设计合法写入 `images: []`。
 
-每项 `images.json` 至少保存 `sourcePath`、内容 `md5`、真实 `outputPath`、`outputName` 和资源清单路径。项目级 `$code-image` 资源清单固定为 `.code-image/image.json`，每个成功批次会覆盖其记录；artifact 自身的 `images.json` 仍按设计 ZIP 独立保存。生成器只接受目标 Compose 模块中仍存在的输出文件，不根据旧记录或文件名猜资源。固定链路复用 artifact 私有解压目录，并在一个 Python 进程内批量调用 `$code-image` 的规划/落盘 API。
+每项 `images.json` 至少保存 `sourcePath`、内容 `md5`、真实 `outputPath`、`outputName` 和资源清单路径。`$code-image` 的资源清单固定为项目级 `.code-image/image.json`；每次成功批量导入只写入当前批次并原子覆盖前一批次，artifact 自己的 `images.json` 仍按设计包分别保存。生成器只接受目标 Compose 模块中仍存在的输出文件，不根据旧记录或文件名猜资源。固定链路复用 artifact 私有解压目录，并在一个 Python 进程内批量调用 `$code-image` 的规划/落盘 API。
