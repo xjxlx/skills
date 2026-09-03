@@ -62,7 +62,7 @@ export COMPOSE_RESOURCE_MODE="reuse"
 | `ADB_SERIAL` | `emulator-5554` | 模拟器序列号 |
 | `COMPOSE_ACTIVITY_MODE` | `launcher` | `launcher` 严格要求目标 Activity 自带 Launcher；`existing` 允许复用已有非 Launcher Activity，但不会替它创建启动入口 |
 | `COMPOSE_REFERENCE_MANIFEST` | 无 | 主页面和行为片段的 JSON 清单；主页面必须为 `scope=primary-page` |
-| `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 按完整 `md5` 从项目根目录累计 `.code-image/image.json` 复用当前目标模块资源，未命中时复制设计包图片；兼容旧版 `originalHash`；`copy` 强制复制设计包图片；`existing` 只接受显式 `COMPOSE_RESOURCE_MAP` |
+| `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 按 `md5s` 历史数组或旧版单值 `md5` 从项目根目录累计 `.code-image/image.json` 复用当前目标模块资源，未命中时复制设计包图片；兼容旧版 `originalHash`；`copy` 强制复制设计包图片；`existing` 只接受显式 `COMPOSE_RESOURCE_MAP` |
 | `COMPOSE_RESOURCE_MAP` | 无 | JSON 资源映射，可直接写文件名到 `icon_xxx`、`R.mipmap.icon_xxx` 或 `@mipmap/icon_xxx` |
 | `CHROME_BIN` | macOS Chrome 路径 | Puppeteer 使用的 Chrome 可执行文件 |
 | `VALIDATE_STRUCT_PASS` | `0.95` | 结构通过率阈值 |

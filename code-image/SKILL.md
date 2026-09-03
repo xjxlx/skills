@@ -45,9 +45,9 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 ## 记录与改名
 
-项目 `.code-image/` 使用统一的 `image.json` 累计资源索引。每次成功 `--apply` 都会扫描所有 Android 模块的 `src/main/res` 图片并原子更新：新增文件追加、同路径内容变化更新、已删除文件移除；多个路径拥有相同 MD5 时分别保留。旧版按来源生成的 `*.resources.json` 和 `resources.json` 会在成功写入后清理，已导入的图片输出文件保留。ZIP 原始文件只在系统临时目录存在，导入结束后清理，不在项目中建立解压缓存。记录格式见 [resource-cache.md](references/resource-cache.md)。
+项目 `.code-image/` 使用统一的 `image.json` 累计资源索引。每次成功 `--apply` 都会扫描所有 Android 模块的 `src/main/res` 图片并原子更新：新增文件追加、同一 `resourceKey` 的后缀变化或内容变化追加历史 Hash、已删除文件保留为 `status=missing`；多个路径拥有相同 MD5 时分别保留。旧版按来源生成的 `*.resources.json` 和 `resources.json` 会在成功写入后清理，已导入的图片输出文件保留。ZIP 原始文件只在系统临时目录存在，导入结束后清理，不在项目中建立解压缓存。记录格式见 [resource-cache.md](references/resource-cache.md)。
 
-每项清单至少记录 `md5`、`identifier`、`path`、`name`；`identifier` 固定为 `path-md5`，`path` 是相对项目根目录的实际资源路径，`name` 是文件名。ZIP 导入记录额外写入 `source`（`<ZIP文件名>!/<ZIP内部路径>`）。完整 `md5` 是与 `code-html-compose` 协作的唯一内容匹配依据；同一 MD5 的不同项目路径不能合并。旧版 `originalHash`/`outputPath`/`outputName` 只用于迁移读取，并在下一次成功 `--apply` 时转换为新格式。
+每项清单至少记录 `resourceKey`、`identifier`、`path`、`name`、`md5s`、`currentMd5`；`resourceKey` 和 `identifier` 都是包含模块、资源目录和文件名但不含扩展名的稳定值，`path`/`name` 保留当前实际后缀。`md5s` 记录当前及历史文件 Hash，数组去重；`currentMd5` 记录当前文件 Hash。ZIP 导入记录额外写入 `source`（`<ZIP文件名>!/<ZIP内部路径>`）。完整 Hash 是与 `code-html-compose` 协作的内容匹配依据；同一 Hash 的不同项目路径不能合并。旧版单值 `md5`、`originalHash`/`outputPath`/`outputName` 只用于迁移读取，并在下一次成功 `--apply` 时转换为新格式。
 
 ## 工作流程
 

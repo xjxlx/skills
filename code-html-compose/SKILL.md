@@ -73,7 +73,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具�
 - `scripts/`：DOM 解析、HTML 对比、Compose 基线生成、模拟器结构与局部像素校验及测试。
 - `references/configuration.md`：运行命令、环境变量和产物边界。
 - `references/workflow.md`：工作流细则与视觉还原约束。
-- 图片资源默认按完整 `md5` 优先复用项目根目录累计的 `.code-image/image.json` 实际输出；需要复用时先用 `$code-image` 导入并 `--apply`，本 Skill 只读取清单，不重新导入或改名。读取 `path`/`name`/`md5`，并按当前目标模块资源根目录过滤；旧版 `originalHash`/`outputPath`/`outputName` 只作迁移兼容。同 MD5 多个有效路径按路径稳定选择首个；文件名不能替代内容确认。`image.json` 的 MD5 是字节级身份，PNG/WebP、不同密度或重新压缩会造成视觉相同但 Hash 不同；Hash 未命中时必须在当前模块 `res` 中检索历史/语义别名，结合尺寸、透明边界和实际预览确认，确认后引用既有 `R` 资源，必要时通过 `COMPOSE_RESOURCE_MAP` 固化映射，不能把 Hash 未命中直接当成资源不存在。无可用清单、候选不存在或输出内容校验失败时才使用设计包的 `img`/`image` 图片，禁止跨模块或复用内容 Hash 不一致的输出文件。
+- 图片资源默认按完整 `md5` 优先复用项目根目录累计的 `.code-image/image.json` 实际输出；需要复用时先用 `$code-image` 导入并 `--apply`，本 Skill 只读取清单，不重新导入或改名。读取 `path`/`name`/`md5s` 历史数组或旧版单值 `md5`，并按当前目标模块资源根目录过滤；旧版 `originalHash`/`outputPath`/`outputName` 只作迁移兼容。同一 Hash 多个有效路径按路径稳定选择首个；文件名不能替代内容确认。`image.json` 的 Hash 是字节级身份，PNG/WebP、不同密度或重新压缩会造成视觉相同但 Hash 不同；历史 Hash 命中时仍需确认当前 `path` 存在且当前文件 Hash 位于同一记录的 Hash 集合内。Hash 未命中时必须在当前模块 `res` 中检索历史/语义别名，结合尺寸、透明边界和实际预览确认，确认后引用既有 `R` 资源，必要时通过 `COMPOSE_RESOURCE_MAP` 固化映射，不能把 Hash 未命中直接当成资源不存在。无可用清单、候选不存在或输出内容校验失败时才使用设计包的 `img`/`image` 图片，禁止跨模块或复用内容 Hash 不一致的输出文件。
 - 若导出图片只表达纯色背景、圆角、阴影、描边、透明边缘或边缘噪声，即使命中 MD5 也不得放入生产布局；使用主题 `Color`、`RoundedCornerShape`、`background` 及必要的代码阴影实现，并删除冗余 `ImageItem`。只有真实纹理、插画、照片或无法可靠用代码表达的图标形状才保留图片。
 
 运行产生的 `run-*`、`compose-run-*`、截图、JSON 报告、图片资源、`node_modules/` 均只允许位于目标项目工作目录，不得发布到 GitHub。

@@ -102,11 +102,13 @@ class NormalizeImagesTest(unittest.TestCase):
         file_hash = hashlib.md5(output.read_bytes()).hexdigest()
         self.assertEqual(record["path"], output_path)
         self.assertEqual(record["name"], "icon_group.png")
-        self.assertEqual(record["md5"], file_hash)
-        self.assertEqual(record["identifier"], f"{output_path}-{file_hash}")
+        self.assertEqual(record["currentMd5"], file_hash)
+        self.assertEqual(record["md5s"], [file_hash])
+        self.assertEqual(record["resourceKey"], output_path.removesuffix(".png"))
+        self.assertEqual(record["identifier"], record["resourceKey"])
         self.assertEqual(
             set(record),
-            {"md5", "identifier", "path", "name"},
+            {"resourceKey", "identifier", "path", "name", "md5s", "currentMd5"},
         )
 
     def test_optional_compose_adds_page_namespace_and_writes_minimal_record(self):
@@ -121,7 +123,7 @@ class NormalizeImagesTest(unittest.TestCase):
         )
         self.assertEqual(
             set(self.resources()[0]),
-            {"md5", "identifier", "path", "name"},
+            {"resourceKey", "identifier", "path", "name", "md5s", "currentMd5"},
         )
 
     def test_explicit_asset_name_replaces_hash_style_export_name(self):
@@ -208,7 +210,14 @@ class NormalizeImagesTest(unittest.TestCase):
             {record["name"] for record in resources},
             {"icon_report_home_first.png", "icon_report_home_second.png"},
         )
-        self.assertTrue(all(set(record) == {"md5", "identifier", "path", "name"} for record in resources))
+        self.assertTrue(
+            all(
+                set(record) == {
+                    "resourceKey", "identifier", "path", "name", "md5s", "currentMd5",
+                }
+                for record in resources
+            )
+        )
 
     def test_apply_scans_preexisting_project_images_into_global_catalog(self):
         existing = self.project / "feature/src/main/res/drawable/icon_existing.png"
@@ -225,9 +234,10 @@ class NormalizeImagesTest(unittest.TestCase):
         existing_record = next(
             record for record in resources if record["path"] == "feature/src/main/res/drawable/icon_existing.png"
         )
-        self.assertEqual(existing_record["md5"], existing_hash)
+        self.assertEqual(existing_record["currentMd5"], existing_hash)
+        self.assertEqual(existing_record["md5s"], [existing_hash])
         self.assertEqual(existing_record["name"], "icon_existing.png")
-        self.assertEqual(existing_record["identifier"], f"{existing_record['path']}-{existing_hash}")
+        self.assertEqual(existing_record["identifier"], "feature/src/main/res/drawable/icon_existing")
         self.assertEqual(len(resources), 2)
 
     def test_scan_mode_builds_catalog_without_importing_an_input_file(self):
@@ -241,7 +251,9 @@ class NormalizeImagesTest(unittest.TestCase):
         record = self.resources()[0]
         self.assertEqual(record["path"], "app/src/main/res/drawable/icon_existing.webp")
         self.assertEqual(record["name"], existing.name)
-        self.assertEqual(record["md5"], hashlib.md5(existing.read_bytes()).hexdigest())
+        file_hash = hashlib.md5(existing.read_bytes()).hexdigest()
+        self.assertEqual(record["currentMd5"], file_hash)
+        self.assertEqual(record["md5s"], [file_hash])
 
     def test_scan_keeps_multiple_project_paths_with_the_same_md5(self):
         first = self.project / "app/src/main/res/drawable/icon_first.png"
@@ -257,11 +269,89 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         resources = self.resources()
         self.assertEqual(len(resources), 2)
-        self.assertEqual({record["md5"] for record in resources}, {hashlib.md5(payload).hexdigest()})
+        self.assertEqual({record["currentMd5"] for record in resources}, {hashlib.md5(payload).hexdigest()})
+        self.assertTrue(all(record["md5s"] == [hashlib.md5(payload).hexdigest()] for record in resources))
         self.assertEqual({record["path"] for record in resources}, {
             "app/src/main/res/drawable/icon_first.png",
             "feature/src/main/res/mipmap-xxhdpi/icon_second.png",
         })
+
+    def test_scan_keeps_history_when_resource_extension_changes(self):
+        original = self.project / "app/src/main/res/mipmap-xxhdpi/icon_format.png"
+        original.parent.mkdir(parents=True)
+        self.write_image(original, (6, 7, 8))
+
+        first = self.run_scan()
+        original_hash = hashlib.md5(original.read_bytes()).hexdigest()
+        converted = original.with_suffix(".webp")
+        original.rename(converted)
+        converted_bytes = io.BytesIO()
+        Image.new("RGB", (4, 4), (8, 7, 6)).save(converted_bytes, format="WEBP")
+        converted.write_bytes(converted_bytes.getvalue())
+        converted_hash = hashlib.md5(converted.read_bytes()).hexdigest()
+
+        second = self.run_scan()
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        resources = self.resources()
+        self.assertEqual(len(resources), 1)
+        record = resources[0]
+        self.assertEqual(record["resourceKey"], "app/src/main/res/mipmap-xxhdpi/icon_format")
+        self.assertEqual(record["identifier"], record["resourceKey"])
+        self.assertEqual(record["path"], "app/src/main/res/mipmap-xxhdpi/icon_format.webp")
+        self.assertEqual(record["name"], "icon_format.webp")
+        self.assertEqual(record["currentMd5"], converted_hash)
+        self.assertEqual(record["md5s"], [original_hash, converted_hash])
+
+    def test_historical_hash_reuses_current_output_without_overwriting_it(self):
+        image = self.input_dir / "format.png"
+        self.write_image(image, (6, 7, 8))
+        first = self.run_skill("--image", image)
+        original_output = self.project / "app/src/main/res/mipmap-xxhdpi/icon_format.png"
+        converted_output = original_output.with_suffix(".webp")
+        original_output.rename(converted_output)
+        converted_bytes = io.BytesIO()
+        Image.new("RGB", (4, 4), (8, 7, 6)).save(converted_bytes, format="WEBP")
+        converted_output.write_bytes(converted_bytes.getvalue())
+        converted_payload = converted_output.read_bytes()
+
+        second = self.run_skill("--image", image)
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertTrue(converted_output.is_file())
+        self.assertFalse(original_output.exists())
+        self.assertEqual(converted_output.read_bytes(), converted_payload)
+        record = self.resources()[0]
+        self.assertIn(hashlib.md5(image.read_bytes()).hexdigest(), record["md5s"])
+        self.assertEqual(record["path"], "app/src/main/res/mipmap-xxhdpi/icon_format.webp")
+
+    def test_zip_historical_hash_reuses_current_output_without_overwriting_it(self):
+        archive = self.input_dir / "L6.zip"
+        original_bytes = self.image_bytes((6, 7, 8))
+        with zipfile.ZipFile(archive, "w") as zip_file:
+            zip_file.writestr("mipmap-xxhdpi/Format.png", original_bytes)
+
+        first = self.run_skill("--zip", archive)
+        original_output = self.project / "app/src/main/res/mipmap-xxhdpi/icon_l6_format.png"
+        converted_output = original_output.with_suffix(".webp")
+        original_output.rename(converted_output)
+        converted_bytes = io.BytesIO()
+        Image.new("RGB", (4, 4), (8, 7, 6)).save(converted_bytes, format="WEBP")
+        converted_output.write_bytes(converted_bytes.getvalue())
+        converted_payload = converted_output.read_bytes()
+
+        second = self.run_skill("--zip", archive)
+
+        self.assertEqual(first.returncode, 0, first.stderr)
+        self.assertEqual(second.returncode, 0, second.stderr)
+        self.assertTrue(converted_output.is_file())
+        self.assertFalse(original_output.exists())
+        self.assertEqual(converted_output.read_bytes(), converted_payload)
+        record = self.resources()[0]
+        self.assertIn(hashlib.md5(original_bytes).hexdigest(), record["md5s"])
+        self.assertEqual(record["path"], "app/src/main/res/mipmap-xxhdpi/icon_l6_format.webp")
 
     def test_deleted_project_image_is_removed_from_catalog_on_next_apply(self):
         first = self.input_dir / "first.png"
@@ -277,7 +367,12 @@ class NormalizeImagesTest(unittest.TestCase):
         result = self.run_skill("--image", first)
 
         self.assertEqual(result.returncode, 0, result.stderr)
-        self.assertNotIn(output.relative_to(self.project).as_posix(), {record["path"] for record in self.resources()})
+        deleted_record = next(
+            record for record in self.resources()
+            if record["resourceKey"] == "app/src/main/res/mipmap-xxhdpi/icon_second"
+        )
+        self.assertEqual(deleted_record["status"], "missing")
+        self.assertEqual(deleted_record["path"], output.relative_to(self.project).as_posix())
 
     def test_invalid_legacy_manifests_are_removed_after_successful_apply(self):
         code_image = self.project / ".code-image"
@@ -322,7 +417,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         records = self.resources()
         self.assertEqual(len(records), 2)
-        self.assertIn(legacy_hash, {record["md5"] for record in records})
+        self.assertIn(legacy_hash, {value for record in records for value in record["md5s"]})
         self.assertFalse((code_image / "old-abcdef.resources.json").exists())
 
     def test_resources_file_cannot_create_a_second_manifest(self):
@@ -458,7 +553,7 @@ class NormalizeImagesTest(unittest.TestCase):
         current_output.rename(legacy_output)
         record["path"] = str(legacy_output.relative_to(self.project))
         record["name"] = legacy_output.name
-        record["identifier"] = f"{record['path']}-{record['md5']}"
+        record["identifier"] = record["resourceKey"]
         manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
 
         migrated = self.run_skill("--zip", archive)
@@ -469,9 +564,13 @@ class NormalizeImagesTest(unittest.TestCase):
             (self.project / "app/src/main/res/mipmap-xxhdpi/icon_l6_rectangle.png").exists()
         )
         migrated_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        migrated_record = next(
+            record for record in migrated_manifest["resources"]
+            if record["path"] == legacy_output.relative_to(self.project).as_posix()
+        )
         self.assertEqual(
-            set(migrated_manifest["resources"][0]),
-            {"md5", "identifier", "path", "name", "source"},
+            set(migrated_record),
+            {"resourceKey", "identifier", "path", "name", "md5s", "currentMd5", "source"},
         )
 
     def test_zip_appends_source_to_final_project_catalog_record(self):
@@ -486,7 +585,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(record["source"], "L6.zip!/design/mipmap-xxhdpi/返回.png")
         self.assertEqual(record["path"], "app/src/main/res/mipmap-xxhdpi/icon_l6_fan_hui.png")
         self.assertEqual(record["name"], "icon_l6_fan_hui.png")
-        self.assertEqual(record["identifier"], f"{record['path']}-{record['md5']}")
+        self.assertEqual(record["identifier"], "app/src/main/res/mipmap-xxhdpi/icon_l6_fan_hui")
 
     def test_zip_without_mipmap_images_is_rejected_before_extraction(self):
         archive = self.input_dir / "not-mipmap.zip"

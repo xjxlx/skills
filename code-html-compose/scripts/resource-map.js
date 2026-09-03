@@ -21,13 +21,25 @@ function md5File(filePath) {
   return digest.digest('hex');
 }
 
+function recordHashes(record) {
+  const hashes = [];
+  ['md5s', 'md5', 'currentMd5', 'originalHash'].forEach((field) => {
+    const values = Array.isArray(record[field]) ? record[field] : [record[field]];
+    values.forEach((value) => {
+      const hash = String(value || '').toLowerCase();
+      if (FULL_MD5.test(hash) && !hashes.includes(hash)) hashes.push(hash);
+    });
+  });
+  return hashes;
+}
+
 function isWithinDirectory(filePath, directory) {
   const relative = path.relative(directory, filePath);
   return relative === '' || (relative && !relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
 /**
- * 读取项目根目录累计的 .code-image/image.json，按图片完整 MD5 建立可复用索引。
+ * 读取项目根目录累计的 .code-image/image.json，按当前和历史 MD5 建立可复用索引。
  * 同时兼容旧版 originalHash/outputPath/outputName 字段，便于项目平滑迁移。
  * 无清单、坏记录、跨模块记录或不存在的输出文件均忽略，由调用方回退设计包图片。
  */
@@ -62,10 +74,10 @@ function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
         ignored.push({ manifest: name, reason: 'invalid-record' });
         continue;
       }
-      const hash = String(record.md5 || record.originalHash || '').toLowerCase();
+      const hashes = recordHashes(record);
       const outputPathValue = String(record.path || record.outputPath || '');
       const outputName = String(record.name || record.outputName || (outputPathValue ? path.basename(outputPathValue) : ''));
-      if (!FULL_MD5.test(hash) || !outputPathValue || !outputName) {
+      if (!hashes.length || !outputPathValue || !outputName) {
         ignored.push({ manifest: name, reason: 'incomplete-record' });
         continue;
       }
@@ -76,7 +88,7 @@ function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
       try {
         outputExists = fs.statSync(outputPath).isFile()
           && path.basename(outputPath) === outputName
-          && md5File(outputPath).toLowerCase() === hash;
+          && hashes.includes(md5File(outputPath).toLowerCase());
       } catch (error) {
         outputExists = false;
       }
@@ -92,18 +104,20 @@ function loadCodeImageResourceIndex(projectRoot, resourceRoot) {
         ignored.push({ manifest: name, reason: 'invalid-resource-name', outputName });
         continue;
       }
-      const entries = byHash.get(hash) || [];
-      if (!entries.some((entry) => entry.resourceName === resourceName && entry.outputPath === outputPath)) {
-        entries.push({
-          resourceName,
-          outputPath,
-          outputName,
-          manifest: name,
-          originalPath: record.source || record.originalPath || null,
-        });
-        entries.sort((a, b) => a.outputPath.localeCompare(b.outputPath));
-        byHash.set(hash, entries);
-      }
+      hashes.forEach((hash) => {
+        const entries = byHash.get(hash) || [];
+        if (!entries.some((entry) => entry.resourceName === resourceName && entry.outputPath === outputPath)) {
+          entries.push({
+            resourceName,
+            outputPath,
+            outputName,
+            manifest: name,
+            originalPath: record.source || record.originalPath || null,
+          });
+          entries.sort((a, b) => a.outputPath.localeCompare(b.outputPath));
+          byHash.set(hash, entries);
+        }
+      });
     }
   }
   return { byHash, ignored };

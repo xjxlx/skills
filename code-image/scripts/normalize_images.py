@@ -41,7 +41,8 @@ SEMANTIC_TRANSLATIONS = {
 HAN_CHARACTER_PATTERN = re.compile(r"[\u3400-\u9fff]")
 COPY_MARKER_PATTERN = re.compile(r"(?i)(?:备份|副本|\bbackup\b|\bcopy\b)")
 RESOURCE_MANIFEST_NAME = "image.json"
-CATALOG_VERSION = 3
+CATALOG_VERSION = 4
+MD5_PATTERN = re.compile(r"[0-9a-fA-F]{32}")
 
 
 @dataclass(frozen=True)
@@ -54,6 +55,7 @@ class RenamePlan:
     identity: str
     file_hash: str
     previous_target: Path | None
+    reuse_existing: bool
 
 
 def md5_file(path: Path) -> str:
@@ -150,11 +152,62 @@ def _record_name(record: dict, path: str | None = None) -> str | None:
     return Path(path).name if path else None
 
 
-def _record_hash(record: dict) -> str | None:
-    value = record.get("md5") or record.get("originalHash")
-    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-fA-F]{32}", value):
+def resource_key(value: str) -> str:
+    """返回包含模块、资源目录和文件名但不包含扩展名的稳定键。"""
+    normalized = unicodedata.normalize("NFC", value.replace("\\", "/"))
+    path = PurePosixPath(normalized)
+    return path.with_suffix("").as_posix() if path.suffix else path.as_posix()
+
+
+def _valid_md5(value: object) -> str | None:
+    if not isinstance(value, str) or not MD5_PATTERN.fullmatch(value):
         return None
     return value.lower()
+
+
+def _record_hashes(record: dict) -> list[str]:
+    """兼容旧版单值 md5/originalHash 和新版 md5s 历史数组。"""
+    hashes: list[str] = []
+    for field in ("md5s", "md5", "currentMd5", "originalHash"):
+        value = record.get(field)
+        values = value if isinstance(value, list) else [value]
+        for candidate in values:
+            normalized = _valid_md5(candidate)
+            if normalized and normalized not in hashes:
+                hashes.append(normalized)
+    return hashes
+
+
+def _record_current_hash(record: dict) -> str | None:
+    current = _valid_md5(record.get("currentMd5"))
+    if current:
+        return current
+    hashes = _record_hashes(record)
+    return hashes[0] if hashes else None
+
+
+def _record_hash(record: dict) -> str | None:
+    """返回当前或首个历史 Hash，供旧调用方兼容使用。"""
+    return _record_current_hash(record)
+
+
+def _record_resource_key(record: dict, path: str | None = None) -> str | None:
+    value = record.get("resourceKey")
+    if isinstance(value, str) and value:
+        return resource_key(value)
+    path_value = path or _record_path(record)
+    return resource_key(path_value) if path_value else None
+
+
+def _merge_hashes(*values: object) -> list[str]:
+    merged: list[str] = []
+    for value in values:
+        candidates = value if isinstance(value, list) else [value]
+        for candidate in candidates:
+            normalized = _valid_md5(candidate)
+            if normalized and normalized not in merged:
+                merged.append(normalized)
+    return merged
 
 
 def _record_source(record: dict) -> str | None:
@@ -190,22 +243,43 @@ def _catalog_file_paths(project_root: Path) -> list[Path]:
     return files
 
 
-def _legacy_catalog_record(record: dict, project_root: Path) -> dict | None:
-    """把旧版来源清单记录转换为当前项目文件记录，仅保留仍存在的文件。"""
+def _normalize_previous_record(record: dict, project_root: Path) -> dict | None:
+    """把旧版或新版记录规范化，并保留可用于历史匹配的 Hash。"""
     path_value = _record_path(record)
     if not path_value:
         return None
     output_path = _record_output_path(record, project_root)
-    if output_path is None or not output_path.is_file() or output_path.suffix.lower() not in IMAGE_EXTENSIONS:
+    hashes = _record_hashes(record)
+    exists = (
+        output_path is not None
+        and output_path.is_file()
+        and output_path.suffix.lower() in IMAGE_EXTENSIONS
+    )
+    if exists:
+        path = relative_path(output_path, project_root)
+        hashes = _merge_hashes(hashes, md5_file(output_path))
+        name = output_path.name
+    else:
+        path = path_value
+        name = _record_name(record, path) or Path(path).name
+    if not hashes:
         return None
-    path = relative_path(output_path, project_root)
-    file_hash = md5_file(output_path)
+
     result = {
-        "md5": file_hash,
-        "identifier": f"{path}-{file_hash}",
+        "resourceKey": _record_resource_key(record, path) or resource_key(path),
+        "identifier": _record_resource_key(record, path) or resource_key(path),
         "path": path,
-        "name": _record_name(record, path) or output_path.name,
+        "name": name,
+        "md5s": hashes,
     }
+    current_hash = _valid_md5(record.get("currentMd5"))
+    if exists:
+        result["currentMd5"] = hashes[-1]
+    elif current_hash:
+        result["currentMd5"] = current_hash
+        result["status"] = "missing"
+    else:
+        result["status"] = "missing"
     source = _record_source(record)
     if source:
         result["source"] = source
@@ -213,30 +287,54 @@ def _legacy_catalog_record(record: dict, project_root: Path) -> dict | None:
 
 
 def scan_project_catalog(project_root: Path, previous: dict | None = None, sources: dict[str, str] | None = None) -> dict:
-    """扫描并生成全局累计图片目录；同一路径只保留当前文件，多路径同 MD5 均保留。"""
-    previous_by_path: dict[str, dict] = {}
+    """扫描项目图片，并按不含扩展名的资源键累计历史 Hash。"""
+    previous_by_key: dict[str, list[dict]] = {}
     for record in (previous or {}).get("resources", []):
         if not isinstance(record, dict):
             continue
-        migrated = _legacy_catalog_record(record, project_root)
-        if migrated:
-            previous_by_path.setdefault(migrated["path"], migrated)
+        normalized = _normalize_previous_record(record, project_root)
+        if normalized:
+            previous_by_key.setdefault(normalized["resourceKey"], []).append(normalized)
 
-    records = []
+    records: list[dict] = []
+    seen_keys: set[str] = set()
+    current_paths: set[str] = set()
     for path in _catalog_file_paths(project_root):
         relative = relative_path(path, project_root)
+        current_paths.add(relative)
         file_hash = md5_file(path)
+        key = resource_key(relative)
+        previous_candidates = previous_by_key.get(key, [])
+        previous_record = previous_candidates[0] if previous_candidates else None
+        hashes = _merge_hashes(
+            _record_hashes(previous_record) if previous_record else None,
+            file_hash,
+        )
         record = {
-            "md5": file_hash,
-            "identifier": f"{relative}-{file_hash}",
+            "resourceKey": key,
+            "identifier": key,
             "path": relative,
             "name": path.name,
+            "md5s": hashes,
+            "currentMd5": file_hash,
         }
-        source = (sources or {}).get(relative) or previous_by_path.get(relative, {}).get("source")
+        source = (sources or {}).get(relative) or (previous_record or {}).get("source")
         if source:
             record["source"] = source
         records.append(record)
-    records.sort(key=lambda record: (record["path"], record["md5"]))
+        seen_keys.add(key)
+
+    for key, previous_candidates in previous_by_key.items():
+        if key in seen_keys:
+            continue
+        for previous_record in previous_candidates:
+            if previous_record["path"] in current_paths:
+                continue
+            previous_record = dict(previous_record)
+            previous_record["status"] = "missing"
+            records.append(previous_record)
+
+    records.sort(key=lambda record: record["identifier"])
     return {"version": CATALOG_VERSION, "resources": records}
 
 
@@ -295,10 +393,14 @@ def _find_record(
     for record in records:
         if not _record_matches_target(record, target_dir, project_root):
             continue
+        if file_hash not in _record_hashes(record):
+            continue
         record_path = _record_path(record)
-        if current_path == record_path and file_hash == _record_hash(record):
+        if current_path == record_path:
             return record
-        if current_path == record.get("originalPath") and file_hash == _record_hash(record):
+        if current_path == record.get("originalPath"):
+            return record
+        if current_path == _record_source(record):
             return record
     return None
 
@@ -318,7 +420,7 @@ def _find_record_by_hash(
     for record in records:
         output_path = _record_output_path(record, project_root)
         if (
-            _record_hash(record) == file_hash
+            file_hash in _record_hashes(record)
             and output_path is not None
             and output_path.parent.resolve() == target_dir.resolve()
         ):
@@ -399,6 +501,12 @@ def build_plan(
     original_path = original_path_override or (record.get("originalPath") if record else None) or current_path
     original_name = _record_name(record) if record else source.name
     previous_target = _record_output_path(record, project_root) if record else None
+    reuse_existing = bool(
+        record
+        and previous_target
+        and previous_target.is_file()
+        and file_hash in _record_hashes(record)
+    )
     record_name = _record_name(record) if record else None
     if record and record_name and Path(record_name).name == record_name:
         output_name = record_name
@@ -431,6 +539,7 @@ def build_plan(
         identity=identity,
         file_hash=file_hash,
         previous_target=previous_target,
+        reuse_existing=reuse_existing,
     )
 
 
@@ -485,7 +594,7 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
     previous = load_resources(resources_path)
     for plan in plans:
         plan.target.parent.mkdir(parents=True, exist_ok=True)
-        if plan.source.resolve() != plan.target.resolve():
+        if not plan.reuse_existing and plan.source.resolve() != plan.target.resolve():
             target_hash = md5_file(plan.target) if plan.target.is_file() else None
             if target_hash == plan.file_hash:
                 pass
@@ -493,7 +602,11 @@ def apply_plans(plans: list[RenamePlan], resources_path: Path, project_root: Pat
                 raise FileExistsError(f"目标文件已存在，拒绝覆盖：{plan.target}")
             else:
                 atomic_copy(plan.source, plan.target)
-        if plan.previous_target and plan.previous_target.resolve() != plan.target.resolve():
+        if (
+            not plan.reuse_existing
+            and plan.previous_target
+            and plan.previous_target.resolve() != plan.target.resolve()
+        ):
             if plan.previous_target.is_file():
                 plan.previous_target.unlink()
     sources = {

@@ -127,6 +127,51 @@ test('reuse 模式按累计 image.json 的 md5/path/name 记录复用项目图�
   }
 });
 
+test('reuse 模式按 md5s 历史数组命中已转换格式的项目图片', () => {
+  const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'html-compose-resource-'));
+  try {
+    const output = path.join(projectRoot, 'app/src/main/res/mipmap-xxhdpi/icon_converted.webp');
+    fs.mkdirSync(path.dirname(output), { recursive: true });
+    const originalBytes = Buffer.from('original-png-bytes');
+    const currentBytes = Buffer.from('converted-webp-bytes');
+    fs.writeFileSync(output, currentBytes);
+    const originalMd5 = crypto.createHash('md5').update(originalBytes).digest('hex');
+    const currentMd5 = crypto.createHash('md5').update(currentBytes).digest('hex');
+    const resourceKey = 'app/src/main/res/mipmap-xxhdpi/icon_converted';
+    fs.mkdirSync(path.join(projectRoot, '.code-image'), { recursive: true });
+    fs.writeFileSync(
+      path.join(projectRoot, '.code-image/image.json'),
+      JSON.stringify({
+        version: 4,
+        resources: [{
+          resourceKey,
+          identifier: resourceKey,
+          path: `${resourceKey}.webp`,
+          name: 'icon_converted.webp',
+          md5s: [originalMd5, currentMd5],
+          currentMd5,
+        }],
+      }),
+    );
+
+    const index = loadCodeImageResourceIndex(projectRoot, path.join(projectRoot, 'app/src/main/res'));
+    const resolutions = [];
+    const result = buildImageResourceMap(['converted.png'], {
+      mode: 'reuse',
+      hashes: { 'converted.png': originalMd5 },
+      codeImageIndex: index,
+      resolutionSink: resolutions,
+    });
+
+    assert.equal(result.get('converted.png'), 'icon_converted');
+    assert.equal(index.byHash.get(originalMd5)[0].outputPath, output);
+    assert.equal(index.byHash.get(currentMd5)[0].outputPath, output);
+    assert.equal(resolutions[0].originalHash, originalMd5);
+  } finally {
+    fs.rmSync(projectRoot, { recursive: true, force: true });
+  }
+});
+
 test('reuse 模式未命中或输出损坏时回退设计包资源', () => {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'html-compose-resource-'));
   try {
