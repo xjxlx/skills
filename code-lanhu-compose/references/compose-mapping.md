@@ -23,6 +23,10 @@ fontScale = min(scaleX, scaleY)
 
 全屏填充允许 `scaleX != scaleY`；保持设计比例时必须由调用方明确留白或裁剪策略，不能偷偷拉伸。
 
+### 父子尺寸职责
+
+外层已通过 `ConstraintLayout` 约束、`Dimension.percent`、`fillToConstraints` 或固定容器尺寸确定某一方向的大小时，内部需要占满该方向的 `Box`、`Row` 或 `Column` 使用 `fillMaxHeight()` / `fillMaxWidth()`；不要再次写 `height(...)` / `width(...)` 的固定值。只有当内部节点本身在设计证据中拥有独立尺寸、并非填充父容器时，才保留对应的固定尺寸。
+
 ## 固定视觉映射
 
 | 浏览器事实 | Compose 表达 |
