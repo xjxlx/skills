@@ -27,6 +27,10 @@ fontScale = min(scaleX, scaleY)
 
 外层已通过 `ConstraintLayout` 约束、`Dimension.percent`、`fillToConstraints` 或固定容器尺寸确定某一方向的大小时，内部需要占满该方向的 `Box`、`Row` 或 `Column` 使用 `fillMaxHeight()` / `fillMaxWidth()`；不要再次写 `height(...)` / `width(...)` 的固定值。只有当内部节点本身在设计证据中拥有独立尺寸、并非填充父容器时，才保留对应的固定尺寸。
 
+### 简单图形优先代码实现
+
+进度条、分隔线、纯色或简单圆角块等可由尺寸、颜色、形状和裁剪准确表达的视觉元素，优先使用 Compose 布局、`Shape` 或 `Canvas` 实现，不要用图片资源替代；只有纹理、复杂图案或特殊绘制效果无法可靠重建时才保留图片。进度填充层应继承轨道的可用高度（如 `fillMaxHeight()`），仅按比例调整宽度，并通过视觉对比验证结果。
+
 ## 固定视觉映射
 
 | 浏览器事实 | Compose 表达 |
