@@ -52,6 +52,8 @@ ViewModel：V2ViewModel
 
    读取文件时优先使用执行器返回的绝对路径；若使用已有 Android Studio 日志，则用正则提取 `响应文件已保存。` 后面的 `*.json`，并验证该文件位于项目的 `.idea/httpRequests/` 下。不能只按修改时间盲选响应文件，必须用 HTTP 方法、URL、`service` 和请求字段与目标请求签名核对。
 
+6. ViewModel 只有类名时，先按文件名搜索 `**/<ClassName>.kt`，再确认文件内存在同名 `class`/`open class`/`abstract class` 声明；只有唯一匹配才继续。找不到或找到多个时报告候选路径并停止，不能根据页面路径或接口调用方猜测目标文件。
+
 ### 本流程示例
 
 输入：
