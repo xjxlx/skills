@@ -1,11 +1,22 @@
 ---
 name: code-http
-description: "Use when Android/Kotlin 需要根据 .http 请求和真实接口响应或 JSON，在指定 ViewModel 中补齐 API、Bean、Flow 与调用方法。"
+description: "Use when Android/Kotlin 需要根据标准接口描述和 ViewModel 名称，自动定位并执行 .http 请求，读取真实响应，补齐 API、Bean、Flow 与调用方法。"
 ---
 
 # code-http
 
 根据 `.http` 请求与真实响应，为现有 Android/Kotlin 项目生成一条可编译的接口调用链：请求参数、ViewModel 方法、对外 Flow、响应 Bean 和 Retrofit API。核心原则是“响应证据决定 Bean 结构；项目现有代码决定接入方式”。
+
+## 标准调用格式
+
+用户默认只需提供以下两行，不要求先提供 `.http` 路径或响应 JSON 路径：
+
+```text
+接口：L6789课程- getDayContent
+ViewModel：V2ViewModel
+```
+
+`接口` 是 `.http` 文件中的请求标题；`ViewModel` 可以是类名或完整文件路径。若用户漏掉任一项、使用了无法识别的字段名，先展示上面的格式并说明缺少哪一项，不要猜测目标文件。
 
 ## 基础规范
 
@@ -20,11 +31,46 @@ description: "Use when Android/Kotlin 需要根据 .http 请求和真实接口�
 
 必须确认以下输入：
 
-1. `.http` 文件路径。用户点名接口描述或序号时只处理该请求；只给文件路径时，按描述块顺序处理全部不同接口。
-2. 目标 ViewModel 路径。
-3. 真实响应文本或 JSON 文件。响应可以是 HTTP 日志，需先去除响应头并解析 JSON body。
+1. 标准接口描述，例如 `L6789课程- getDayContent`；用户只点名文件时，按文件中的请求块顺序处理全部不同接口。
+2. 目标 ViewModel 类名或路径，例如 `V2ViewModel`。
+3. 若用户已经提供响应 JSON，优先使用该文件；否则自动执行目标请求并读取保存结果。
 
-响应证据按以下顺序使用：用户明确提供的 JSON、与目标请求匹配的最新 `.idea/httpRequests/*.json`、用户粘贴的响应、在认证和环境均可用时实际运行请求。请求无法运行且没有响应文件时，停止并要求补充响应，不得凭接口名称编造字段。
+响应证据按以下顺序使用：用户明确提供的 JSON、自动执行本次请求生成的响应文件、与目标请求匹配的最新 `.idea/httpRequests/*.json`、用户粘贴的响应。请求无法运行且没有匹配响应文件时，停止并报告具体原因，不得凭接口名称编造字段。
+
+## 自动定位与执行 `.http`
+
+1. 在项目根目录递归搜索 `*.http`。先按文件名匹配接口标题中的课程部分；匹配时忽略空格、标点和 Unicode 全半角差异，并允许用户标题中的“课程”对应文件名中的“课”，例如 `L6789课程` 对应 `L6789课.http`。找不到时报告“未找到与接口描述匹配的 `.http` 文件”并列出搜索根目录；找到多个时列出候选路径并停止。
+2. 在候选文件中按 `### <课程部分>- <方法名>` 精确定位请求块，允许连字符两侧有空格，但不能只按 `service` 名猜测。找不到或同名请求块超过一个时停止并报告。
+3. 读取请求块中的方法、URL、请求头、表单字段和 `{{variable}}`；从请求文件所在目录向项目根目录查找最近的 `http-client.env.json`。只有一个环境时直接使用；多个环境优先使用唯一的 `dev`，仍有歧义时停止并报告，不能硬编码环境值。
+4. 自动执行请求，不要求用户打开 Android Studio 或点击绿色运行按钮。优先调用本 skill 的 `scripts/run_http_request.py`；它会解析请求、解析环境变量、发送请求，并把响应保存到 `.idea/httpRequests/<时间>.<HTTP状态>.json`。
+5. 执行器必须校验 HTTP 请求成功、响应文件存在且内容是合法 JSON，然后输出以下固定结尾，供后续流程捕捉文件名：
+
+   ```text
+   响应文件已保存。
+   > 2026-09-05T182743.200.json
+   ```
+
+   读取文件时优先使用执行器返回的绝对路径；若使用已有 Android Studio 日志，则用正则提取 `响应文件已保存。` 后面的 `*.json`，并验证该文件位于项目的 `.idea/httpRequests/` 下。不能只按修改时间盲选响应文件，必须用 HTTP 方法、URL、`service` 和请求字段与目标请求签名核对。
+
+### 本流程示例
+
+输入：
+
+```text
+接口：L6789课程- getDayContent
+ViewModel：V2ViewModel
+```
+
+应自动解析为：
+
+```text
+.http 文件：httpclient/课程/L6789/V2/L6789课.http
+请求块：### L6789课程- getDayContent
+响应文件：.idea/httpRequests/<本次执行生成的时间>.200.json
+目标文件：app/.../V2ViewModel.kt
+```
+
+然后使用响应文件的 `data` 生成 Bean，并把 API、Flow 和 `getDayContent` 方法写入目标 ViewModel。整个过程不要求用户进行 IDE 点击操作。
 
 处理前读取目标 ViewModel 全文、目标 ViewModel 所在 package 的同级 `bean` 目录、项目实际的 `ApiServiceKotlin` 或等价 API 接口、`BaseBuddyViewModel` 及一个最近的同类 ViewModel。Bean 路径严格从目标 ViewModel 的 package 推导，例如 `...compose.v2.V2ViewModel.kt` 对应 `...compose.v2.bean/`；不能根据接口现有调用方、页面路径或其他模块猜目录。确认 `mApi` 的真实声明、`getMap`/参数封装方式、Flow 类型和错误处理模式后再写代码。
 
@@ -123,7 +169,7 @@ fun getCampHome(unId: String, termSuiJi: String) {
 3. 使用项目已有的格式化和 Android CLI/Gradle 编译任务。BdEnglish 项目优先验证 `./gradlew :app:spotlessApply :app:compileDebugKotlin`，再运行 `./gradlew :app:spotlessCheck`；若项目变体不同，使用实际存在的目标任务。
 4. 编译失败时区分本次新增错误和工作区原有错误，报告首个可定位错误及证据；不能用“未执行编译”宣称完成。
 
-遇到以下情况停止生成并说明原因：响应缺失或 `data:null` 却要求生成未知 Bean；重复请求块无法区分；目标 API 接口无法定位；命名冲突无法通过版本后缀消解；响应结构与现有 Bean 冲突且没有明确兼容策略。
+遇到以下情况停止生成并说明原因：`.http` 文件或请求块不存在；环境变量无法解析；请求执行失败且没有匹配响应文件；响应缺失或 `data:null` 却要求生成未知 Bean；重复请求块无法区分；目标 ViewModel 或 API 接口无法定位；命名冲突无法通过版本后缀消解；响应结构与现有 Bean 冲突且没有明确兼容策略。
 
 ## 常见错误
 
