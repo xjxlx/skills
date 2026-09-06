@@ -40,7 +40,7 @@
 - 元素位于由固定设计尺寸和 `DP_PER_PX=0.5` 推导出的逻辑画布内；页面级区域按语义边界用约束和 `Guideline` 定位，内容内部再用 `padding` 表达间距。禁止用页面级 `offset`、修改源坐标或 `graphicsLayer` 整页缩放掩盖基线误差；经过验收的 item 内小幅光学微调可以保留。
 - 页面入口先复用目标 Activity/项目的全局 AutoSize，直接使用项目惯用的 `dp`/`sp`；不要为了整页缩放引入 `BoxWithConstraints`、局部 Density 或逻辑画布。仅当项目没有全局适配时，才按窗口比例承载固定逻辑画布。Popup 的 `PopupPositionProvider` 为 `Dp` 到窗口像素换算而读取 `LocalDensity` 属于定位例外；不同宽高比的剩余空间由设计背景色或背景图铺满，不能分别拉伸或裁切。
 - 横向设计稿启动前依赖目标 Activity 的静态 `android:screenOrientation="landscape"` 配置，并要求模拟器已经由用户旋转到横向；截图必须保持原始方向，若截图仍为竖屏则直接失败。禁止脚本执行 `wm size`、`wm density`、`policy_control`、`accelerometer_rotation`、`user_rotation`，禁止旋转图片或做方向补偿；当前模拟器分辨率保持不变，验收按截图真实尺寸换算边界。
-- 坐标、尺寸、字号、行高和圆角固定按 `DP_PER_PX=0.5` 换算，保留半 dp/sp 精度；HTML `1334×750` 与 Android `375×667dp` 的轴向对应关系为 `1334↔667`、`750↔375`。
+- 坐标、尺寸、字号、行高和圆角固定按 `DP_PER_PX=0.5` 换算，保留半 dp/sp 精度；页面宽高统一引用项目的 `AutoSizeConfig.DEFAULT_WIDTH` 和 `AutoSizeConfig.DEFAULT_HEIGHT`，不要把 `375`、`667` 等具体 Android 基准值写入页面代码。
 - 背景图、裁切背景、圆角阴影、文字基线和单行文字缩放由生成器统一处理。
 - 图片默认使用 `COMPOSE_RESOURCE_MODE=reuse`：需要复用时先调用 `$code-image` 导入并 `--apply`，再计算设计包 `img`/`image` 文件的完整 MD5，与项目根目录 `.code-image/image.json` 中的 `md5s` 历史数组或旧版单值 `md5` 匹配，并按当前目标模块资源根目录过滤；命中且 `path` 实际存在、当前输出内容 Hash 仍位于该记录 Hash 集合时只引用其 `name` 对应的 `R.mipmap`，不复制设计包图片。读取器兼容旧版 `originalHash`/`outputPath`/`outputName`。无清单、Hash 未命中或输出损坏时才回退复制设计包图片。`copy` 强制复制设计包图片，`existing` 仍要求显式资源映射；显式映射优先于自动匹配。同一 Hash 多个有效输出时按 `path` 稳定选择首个，需要指定其他资源时使用显式映射。
 - 元素较多时拆分私有 Composable，避免单方法字节码超过 64KB。
