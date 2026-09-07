@@ -31,7 +31,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具�
 1. 在目标 Android 项目根目录确认工作区改动，并先根据 `COMPOSE_ACTIVITY` 定位当前页面实际承载的 Activity（或 Activity-alias）。默认要求它有自己的 `MAIN` + `LAUNCHER`；已有页面 Activity 不是 Launcher 时显式使用 `COMPOSE_ACTIVITY_MODE=existing`，只允许复用该页面和真实导航入口，禁止创建 Activity、补写 `MAIN`/`LAUNCHER` 或用其他页面绕过检查。横向设计稿通过前，只能在已找到的 Activity 声明上写入或更新 `android:screenOrientation="landscape"`。
 2. 安装脚本依赖：`npm ci --prefix <本技能>/scripts`。
 3. 配置 `PROJECT_ROOT`、Compose 目标目录、包名、`R`、图片组件导入、参考角色清单和现有资源映射；完整变量见 [配置参考](references/configuration.md)。
-4. 先读取目标 Kotlin、调用方、状态数据和 `.code-image` 资源元数据，并搜索项目中同类生产级 Compose 页面；记录实际宿主（普通页、Dialog 或 Popup）、状态 owner/callback、组件选型和资源/生命周期约定。生产文件只作为决策证据，不复制业务布局，再用 `node <本技能>/scripts/run.js <主页面设计包.zip>` 执行主页面基线；滚动/弹窗 ZIP 只通过参考清单关联，不能单独生成整页 Kotlin。
+4. 先读取目标 Kotlin、调用方、状态数据和 `.code-image` 资源元数据，并搜索项目中同类生产级 Compose 页面；记录实际宿主（普通页、Dialog 或 Popup）、状态 owner/callback、组件选型和资源/生命周期约定。生产文件只作为决策证据，不复制业务布局，再用 `node <本技能>/scripts/run.js <主页面设计包.zip>` 执行主页面基线；滚动/弹窗 ZIP 只通过参考清单关联，不能单独生成整页 Kotlin。基线通过后进行项目级语义适配时，读取 [生产级 Compose 页面适配规范](references/production-compose-style.md)；其中不从特殊业务列表容器推导通用布局规则。
 5. 以 `<PROJECT_ROOT>/.code-html-compose/` 内的 `original.png` 和验收报告为真源；它们是运行产物，不得提交或复制到技能仓库。
 
 ### Launcher Activity 与屏幕方向前置检查
