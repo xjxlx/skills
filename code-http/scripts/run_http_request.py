@@ -29,15 +29,18 @@ def normalized(value: str) -> str:
     return re.sub(r"[^\w\u4e00-\u9fff]+", "", value, flags=re.UNICODE).replace("_", "").lower()
 
 
-def parse_description(description: str) -> tuple[str, str]:
-    match = re.match(r"^\s*(.+?)\s*-\s*([A-Za-z][A-Za-z0-9_-]*)\s*$", description)
-    if not match:
+def parse_description(description: str) -> tuple[str, str | None, str]:
+    description = description.strip()
+    parts = re.split(r"\s*-\s*", description)
+    if len(parts) == 2 and re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", parts[1]):
+        return parts[0].strip(), parts[1], description
+    if len(parts) < 2 or not parts[0].strip():
         raise RunnerError(
             "接口描述格式无法识别。请按以下格式提供：\n"
             "接口：L6789课程- getDayContent\n"
             "ViewModel：V2ViewModel"
         )
-    return match.group(1), match.group(2)
+    return parts[0].strip(), None, description
 
 
 def parse_blocks(path: Path) -> list[dict[str, object]]:
@@ -76,22 +79,33 @@ def parse_blocks(path: Path) -> list[dict[str, object]]:
     return blocks
 
 
-def find_request(project_root: Path, course: str, method_name: str) -> tuple[Path, dict[str, object]]:
+def find_request(
+    project_root: Path,
+    course: str,
+    method_name: str | None,
+    description: str,
+) -> tuple[Path, dict[str, object]]:
     files = sorted(path for path in project_root.rglob("*.http") if ".git" not in path.parts)
     course_key = normalized(course)
+
+    def matches_description(block: dict[str, object]) -> bool:
+        title = str(block["title"])
+        if method_name is None:
+            return normalized(title) == normalized(description)
+        return (
+            title.rsplit("-", 1)[-1].strip() == method_name
+            and normalized(title.split("-", 1)[0]) == course_key
+        )
+
     file_candidates = [path for path in files if normalized(path.stem) == course_key]
     if not file_candidates:
         file_candidates = [
             path
             for path in files
-            if any(
-                normalized(str(block["title"]).split("-", 1)[0]) == course_key
-                and str(block["title"]).rsplit("-", 1)[-1].strip() == method_name
-                for block in parse_blocks(path)
-            )
+            if any(matches_description(block) for block in parse_blocks(path))
         ]
     if not file_candidates:
-        raise RunnerError(f"未找到与接口描述匹配的 .http 文件：{course}-{method_name}")
+        raise RunnerError(f"未找到与接口描述匹配的 .http 文件：{description}")
     if len(file_candidates) > 1:
         paths = "\n".join(f"- {path}" for path in file_candidates)
         raise RunnerError(f"找到多个候选 .http 文件，请明确选择：\n{paths}")
@@ -99,12 +113,12 @@ def find_request(project_root: Path, course: str, method_name: str) -> tuple[Pat
     matches = [
         block
         for block in parse_blocks(file_candidates[0])
-        if str(block["title"]).rsplit("-", 1)[-1].strip() == method_name
-        and normalized(str(block["title"]).split("-", 1)[0]) == course_key
+        if matches_description(block)
     ]
     if len(matches) != 1:
+        request_label = f"{course}-{method_name}" if method_name else description
         raise RunnerError(
-            f"文件 {file_candidates[0]} 中未能唯一定位请求：### {course}-{method_name}"
+            f"文件 {file_candidates[0]} 中未能唯一定位请求：### {request_label}"
         )
     return file_candidates[0], matches[0]
 
@@ -121,7 +135,15 @@ def load_environment(request_file: Path, project_root: Path, requested: str | No
         current = current.parent
     if not candidates:
         raise RunnerError(f"未找到 http-client.env.json：{request_file.parent}")
-    data = json.loads(candidates[0].read_text(encoding="utf-8"))
+    raw_environment = candidates[0].read_text(encoding="utf-8")
+    try:
+        data = json.loads(raw_environment)
+    except json.JSONDecodeError:
+        # JetBrains 环境文件允许独占一行的 // 注释，移除后再按严格 JSON 解析。
+        uncommented_environment = "\n".join(
+            line for line in raw_environment.splitlines() if not line.lstrip().startswith("//")
+        )
+        data = json.loads(uncommented_environment)
     if not isinstance(data, dict):
         raise RunnerError(f"环境文件不是 JSON 对象：{candidates[0]}")
     environments = data if all(isinstance(value, dict) for value in data.values()) else {"default": data}
@@ -202,8 +224,8 @@ def main() -> int:
     parser.add_argument("--dry-run", action="store_true", help="只解析请求，不发送网络请求")
     args = parser.parse_args()
     try:
-        course, method_name = parse_description(args.description)
-        request_file, block = find_request(args.project_root, course, method_name)
+        course, method_name, description = parse_description(args.description)
+        request_file, block = find_request(args.project_root, course, method_name, description)
         environment = load_environment(request_file, args.project_root, args.environment)
         if args.dry_run:
             print(f"请求文件：{request_file}")
