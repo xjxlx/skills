@@ -140,10 +140,15 @@ suspend fun getCampHome(
 
 沿用目标 ViewModel 的协程和错误处理方式。对 `BaseBuddyViewModel` 的常见接入形态是：
 
+- 将新增的 Flow 状态属性放在目标 ViewModel 现有的状态属性区域，沿用其组织方式。
+- 将本次生成的所有 ViewModel 方法作为连续区块追加到类体末尾，即放在最后一个现有成员之后、类的右花括号之前；不要插入相似方法之间。一次生成多个方法时，按 `.http` 请求块的出现顺序排列。
+- 每个生成的方法上方紧邻写一条简短中文 KDoc 注释。先根据接口用途、service 语义及请求/响应内容判断方法实际作用；仍无法明确时，从匹配的 `.http` 请求标题或其相邻说明中提炼用途。不要仅复述方法名，也不要臆造业务行为。
+
 ```kotlin
 private val _campHomeFlow = MutableStateFlow<CampHomeBean?>(null)
 val campHomeFlow = _campHomeFlow.asStateFlow()
 
+/** 获取课程首页数据。 */
 fun getCampHome(unId: String, termSuiJi: String) {
     val map = getMap("getCampHome")
     map.setParameter("unid", unId)
