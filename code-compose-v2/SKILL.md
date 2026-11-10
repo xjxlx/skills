@@ -7,7 +7,7 @@ description: Use when recreating a Jetpack Compose page from a Lanhu HTML ZIP co
 
 ## 职责与入口
 
-本 Skill 是用户提供蓝湖 HTML 压缩包并要求 Compose 还原时的专用入口。压缩包内的 `index.html`、CSS 和图片是原型依据；先检查实际页面结构与资源，再实现页面。
+本 Skill 是用户提供蓝湖 HTML 压缩包并要求 Compose 还原时的专用入口。收到 ZIP 后先解压并检查 `index.html`、它引用的 CSS 和图片，以实际页面布局作为原型底稿，再实现页面。
 
 **必需子 Skill：**完整执行 `$code-html-compose` 的页面分析、实现、像素/元素边界验收、模拟器截图验证和命名规范。它是详细流程的唯一维护位置；本 Skill 只增加下方的用户约定，不复制其余规则。
 
