@@ -15,6 +15,7 @@ description: Use when recreating a Jetpack Compose page from a Lanhu HTML ZIP co
 
 - 主页面验收尺寸为 `1334px × 750px`。设计稿按 2 倍处理，固定使用 `DP_PER_PX=0.5`（`1dp=2px`）；不把其他手机逻辑画布值写成页面或示例的设计基准。
 - 图片先检查项目根目录 `.code-image` 中与设计资源对应的现有资源。找到匹配资源时优先复用；找不到时，才把 ZIP 图片临时放入 `mipmap-xxhdpi` 使用。该资源位置是本 Skill 的明确项目约定，即使常规 Android 建议倾向其他资源目录，也按此约定执行。
+- 使用 inline `ConstraintLayout` DSL 时，只有跨多个页面区域共用的锚点才集中放在内容块顶部；区域/组件专属 `Guideline` 必须放在所属区域注释下、紧挨其首个消费者之前，禁止把所有定位线统一堆在顶部。变量名同时表达所属区域和方向，且方向后缀必须与创建方法一致：`createGuidelineFromStart` 用 `...Start`、`createGuidelineFromEnd` 用 `...End`、`createGuidelineFromTop` 用 `...Top`、`createGuidelineFromBottom` 用 `...Bottom`；避免 `guide1` 等无语义名称。
 - 每个目标项目开始页面验收前，按文件名检索项目的 `TestActivity.kt` 并复用已有类；首次未找到时，按项目现有包名和目录约定创建一个长期保留的测试 Activity，并告知用户该文件供其审阅和提交。此类是本 Skill 对子 Skill“不得创建 Activity”约束的唯一例外，只用于临时展示和比较当前页面；通过显式的 debug/test 启动方式运行，不得添加 `MAIN`/`LAUNCHER` 或替换应用默认入口。它只辅助日常页面比较，不替代 `$code-html-compose` 对正式页面 Activity 的入口检查和最终验收。使用前保留现有测试页内容；验收后撤销本轮加入的临时页面接线、样例数据和专用临时资源，恢复干净、可复用的测试页，保留 `TestActivity.kt` 本身；后续任务发现该类时直接复用，不重复创建。
 - 遵守 `$code-html-compose` 中的引用命名、模块视觉常量命名和中文 KDoc 要求；用户明确指定参考某项已有功能或函数时，先读取其实现与调用关系，确认可复用的行为约定，再把经过验证且能复用于后续任务的要点补入本 Skill。一次性业务细节和未经验证的推测不写入。
 
