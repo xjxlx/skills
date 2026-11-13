@@ -117,20 +117,23 @@ def expected_output_name(
     extension: str,
     compose_path: Path | None,
     asset_name: str | None,
-    archive_stem: str | None,
 ) -> str:
     name_source = asset_name if asset_name else Path(original_name).stem
-    if archive_stem:
-        prefix = f"icon_{normalize_asset_stem(archive_stem, remove_numeric_tokens=False)}_"
-    else:
-        namespace = normalize_namespace(compose_path) if compose_path else None
-        prefix = f"icon_{namespace}_" if namespace else "icon_"
+    namespace = normalize_namespace(compose_path) if compose_path else None
+    prefix = f"icon_{namespace}_" if namespace else "icon_"
     asset_stem = normalize_asset_stem(
         name_source,
         remove_copy_suffix=asset_name is None,
         remove_numeric_tokens=asset_name is None,
     )
     return prefix + asset_stem + extension
+
+
+def expected_zip_output_name(original_name: str, extension: str) -> str:
+    asset_stem = normalize_asset_stem(Path(original_name).stem)
+    if not asset_stem.startswith("icon_"):
+        asset_stem = f"icon_{asset_stem}"
+    return asset_stem + extension
 
 
 def relative_path(path: Path, project_root: Path) -> str:
@@ -481,7 +484,7 @@ def build_plan(
     resources_path: Path,
     reserved: set[Path] | None = None,
     asset_name: str | None = None,
-    archive_stem: str | None = None,
+    is_zip_entry: bool = False,
     original_path_override: str | None = None,
     resource_manifest: dict | None = None,
 ) -> RenamePlan:
@@ -510,15 +513,16 @@ def build_plan(
     record_name = _record_name(record) if record else None
     if record and record_name and Path(record_name).name == record_name:
         output_name = record_name
-    elif not record and _is_normalized(source.name) and archive_stem is None:
+    elif not record and _is_normalized(source.name):
         output_name = source.name
+    elif is_zip_entry:
+        output_name = expected_zip_output_name(original_name, source.suffix.lower())
     else:
         output_name = expected_output_name(
             original_name=original_name,
             extension=source.suffix.lower(),
             compose_path=compose_path,
             asset_name=asset_name,
-            archive_stem=archive_stem,
         )
 
     replaceable = {previous_target.resolve()} if previous_target else set()
@@ -813,7 +817,7 @@ def main() -> int:
                     compose,
                     resources_path,
                     reserved,
-                    archive_stem=source_path.stem,
+                    is_zip_entry=True,
                     original_path_override=f"{source_path.name}!/{entry_path}",
                     resource_manifest=resource_manifest,
                 )

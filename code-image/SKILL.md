@@ -5,7 +5,7 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 # Code Image
 
-导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 仅临时解压，按其中的 `mipmap` 或 `mipmap-*` 目录将重命名后的图片复制到项目对应目录，并以 ZIP 文件名作为资源名前缀。原始 ZIP 文件不会复制到项目，临时原始文件在导入结束后自动清理。每张导入图片均生成语义化的 Android 资源名并记录映射；每次成功执行还会扫描项目所有 Android 模块的 `src/main/res` 图片，累计维护项目级索引。视觉对比是独立能力，不会在图片转换时自动执行。
+导入一个明确来源：单张图片或一个 ZIP。单图复制到项目 `mipmap-xxhdpi`；ZIP 仅临时解压，按其中的 `mipmap` 或 `mipmap-*` 目录复制图片，并依据 ZIP 内部图片文件名生成资源名，不使用 ZIP 文件名或 Compose 页面名作为前缀。原始 ZIP 文件不会复制到项目，临时原始文件在导入结束后自动清理。每张导入图片均生成语义化的 Android 资源名并记录映射；每次成功执行还会扫描项目所有 Android 模块的 `src/main/res` 图片，累计维护项目级索引。视觉对比是独立能力，不会在图片转换时自动执行。
 
 ## 强制入口与维护边界
 
@@ -35,13 +35,13 @@ description: Use when 需要导入 Android 图片资源，或明确要求比较�
 
 ## 命名规则
 
-- 图片基础名先删除 `备份`、`副本`、`copy`、`backup` 以及独立的复制编号字段，再转换为语义英文和小写 snake_case；例如 `矩形备份 4.png` → `rectangle.png`、`编组 40.png` → `group.png`。
+- 需要生成新名称时，图片基础名先删除 `备份`、`副本`、`copy`、`backup` 以及独立的复制编号字段，再转换为语义英文和小写 snake_case；例如 `矩形备份 4.png` → `rectangle.png`、`编组 40.png` → `group.png`。
 - 常见中文设计词使用语义英文映射；未配置的中文使用拼音，不使用 MD5：`今日目标.png` → `today_target.png`，`测试图标.png` → `ce_shi_tu_biao.png`。
 - 无 `--compose` 时输出 `icon_<图片基础名>.<扩展名>`，例如 `Group 62.png` → `icon_group.png`。
 - 有 `--compose` 时输出 `icon_<页面命名空间>_<图片基础名>.<扩展名>`；提供 `--asset-name` 时图片基础名取该语义名，`Layout` 和 `Page` 后缀不参与命名空间。
-- ZIP 导入时以 ZIP 文件名作为前缀，先规范化 ZIP 名称再拼接图片基础名；例如 `L6.zip` 中的 `Group 62.png` 输出为 `icon_l6_group.png`。ZIP 前缀优先于 Compose 页面命名空间；ZIP 内已规范化的图片名也必须补上 ZIP 前缀。
-- 命名完成后，如果目标密度目录中已有同名文件，或同一 ZIP 的同一密度目录中生成了同名结果，从 `_1` 开始递增：`icon_l6_group.png` → `icon_l6_group_1.png` → `icon_l6_group_2.png`。禁止覆盖未登记图片。
-- 已以 `icon_` 开头且满足 Android 小写资源名规则的单图名称不再加前缀；统一清单内，来源路径加 Hash 或同目标密度的内容 Hash 命中已有记录时，先验证输出路径、模块和内容 Hash。完整命中不复制；缺失或损坏时原子恢复记录中的输出名；不再依赖命名版本字段迁移旧名称；`--asset-name` 不迁移已有资源映射。
+- ZIP 导入只按 ZIP 内部图片文件名命名，不使用 ZIP 文件名或 Compose 页面名作为前缀。内部名称已以 `icon_` 开头且符合 Android 小写资源名规则时原样保留；否则按基础名规范化，并确保结果以单个 `icon_` 开头。例如 `Group 62.png` 输出为 `icon_group.png`，`icon_s6789_reading_record_bg.webp` 保持原名。
+- 命名完成后，如果目标密度目录中已有同名文件，或同一 ZIP 的同一密度目录中生成了同名结果，从 `_1` 开始递增：`icon_group.png` → `icon_group_1.png` → `icon_group_2.png`。禁止覆盖未登记图片。
+- 已以 `icon_` 开头且满足 Android 小写资源名规则的单图和 ZIP 图片名称原样保留；统一清单内，来源路径加 Hash 或同目标密度的内容 Hash 命中已有记录时，先验证输出路径、模块和内容 Hash。完整命中不复制；缺失或损坏时原子恢复记录中的输出名；命名规则变化不自动迁移已有映射；`--asset-name` 不迁移已有资源映射。
 
 ## 记录与改名
 

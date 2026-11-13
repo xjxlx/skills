@@ -334,7 +334,7 @@ class NormalizeImagesTest(unittest.TestCase):
             zip_file.writestr("mipmap-xxhdpi/Format.png", original_bytes)
 
         first = self.run_skill("--zip", archive)
-        original_output = self.project / "app/src/main/res/mipmap-xxhdpi/icon_l6_format.png"
+        original_output = self.project / "app/src/main/res/mipmap-xxhdpi/icon_format.png"
         converted_output = original_output.with_suffix(".webp")
         original_output.rename(converted_output)
         converted_bytes = io.BytesIO()
@@ -351,7 +351,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(converted_output.read_bytes(), converted_payload)
         record = self.resources()[0]
         self.assertIn(hashlib.md5(original_bytes).hexdigest(), record["md5s"])
-        self.assertEqual(record["path"], "app/src/main/res/mipmap-xxhdpi/icon_l6_format.webp")
+        self.assertEqual(record["path"], "app/src/main/res/mipmap-xxhdpi/icon_format.webp")
 
     def test_deleted_project_image_is_removed_from_catalog_on_next_apply(self):
         first = self.input_dir / "first.png"
@@ -464,7 +464,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertTrue((target_dir / "icon_group_1.png").is_file())
         self.assertEqual(existing.read_bytes(), b"existing")
 
-    def test_zip_uses_archive_name_prefix_and_copies_each_mipmap_directory(self):
+    def test_zip_uses_inner_name_and_copies_each_mipmap_directory(self):
         archive = self.input_dir / "L6.zip"
         with zipfile.ZipFile(archive, "w") as zip_file:
             zip_file.writestr("design/app/src/main/res/mipmap-xhdpi/Group 62.png", self.image_bytes((1, 2, 3)))
@@ -476,10 +476,10 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse((self.project / ".code-image/extracted").exists())
         self.assertTrue(
-            (self.project / "app/src/main/res/mipmap-xhdpi/icon_l6_group.png").is_file()
+            (self.project / "app/src/main/res/mipmap-xhdpi/icon_group.png").is_file()
         )
         self.assertTrue(
-            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_l6_group.png").is_file()
+            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_group.png").is_file()
         )
         self.assertEqual(len(self.resources()), 2)
         self.assertEqual(
@@ -499,7 +499,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(repeated.returncode, 0, repeated.stderr)
         self.assertEqual(len(self.resources()), 2)
         self.assertFalse(
-            (self.project / "app/src/main/res/mipmap-xhdpi/icon_l6_group_1.png").exists()
+            (self.project / "app/src/main/res/mipmap-xhdpi/icon_group_1.png").exists()
         )
 
     def test_zip_name_conflict_uses_incrementing_suffix_in_same_density(self):
@@ -512,8 +512,8 @@ class NormalizeImagesTest(unittest.TestCase):
 
         self.assertEqual(result.returncode, 0, result.stderr)
         target_dir = self.project / "app/src/main/res/mipmap-xxhdpi"
-        self.assertTrue((target_dir / "icon_l6_group.png").is_file())
-        self.assertTrue((target_dir / "icon_l6_group_1.png").is_file())
+        self.assertTrue((target_dir / "icon_group.png").is_file())
+        self.assertTrue((target_dir / "icon_group_1.png").is_file())
 
     def test_chinese_name_uses_semantic_english_without_hash_or_image_prefix(self):
         image = self.input_dir / "今日目标.png"
@@ -549,7 +549,7 @@ class NormalizeImagesTest(unittest.TestCase):
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         record = manifest["resources"][0]
         current_output = self.project / record["path"]
-        legacy_output = current_output.with_name("icon_l6_rectangle_old.png")
+        legacy_output = current_output.with_name("icon_rectangle_old.png")
         current_output.rename(legacy_output)
         record["path"] = str(legacy_output.relative_to(self.project))
         record["name"] = legacy_output.name
@@ -561,7 +561,7 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(migrated.returncode, 0, migrated.stderr)
         self.assertTrue(legacy_output.is_file())
         self.assertFalse(
-            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_l6_rectangle.png").exists()
+            (self.project / "app/src/main/res/mipmap-xxhdpi/icon_rectangle.png").exists()
         )
         migrated_manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         migrated_record = next(
@@ -583,9 +583,9 @@ class NormalizeImagesTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         record = self.resources()[0]
         self.assertEqual(record["source"], "L6.zip!/design/mipmap-xxhdpi/返回.png")
-        self.assertEqual(record["path"], "app/src/main/res/mipmap-xxhdpi/icon_l6_fan_hui.png")
-        self.assertEqual(record["name"], "icon_l6_fan_hui.png")
-        self.assertEqual(record["identifier"], "app/src/main/res/mipmap-xxhdpi/icon_l6_fan_hui")
+        self.assertEqual(record["path"], "app/src/main/res/mipmap-xxhdpi/icon_fan_hui.png")
+        self.assertEqual(record["name"], "icon_fan_hui.png")
+        self.assertEqual(record["identifier"], "app/src/main/res/mipmap-xxhdpi/icon_fan_hui")
 
     def test_zip_without_mipmap_images_is_rejected_before_extraction(self):
         archive = self.input_dir / "not-mipmap.zip"

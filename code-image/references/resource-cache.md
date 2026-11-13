@@ -38,7 +38,7 @@
 
 ZIP 图片的 `source` 使用稳定的 `<ZIP文件名>!/<ZIP内部路径>` 格式，例如 `L6.zip!/mipmap-xxhdpi/矩形.png`；`path` 是目标模块对应的 `mipmap` 路径。协调脚本统一写入项目级 `image.json`，不创建按来源拆分的清单。
 
-ZIP 导入生成名称时使用 ZIP 文件名作为前缀：`L6.zip` 中的 `矩形备份 4.png` 在 `mipmap-xxhdpi` 目录输出为 `icon_l6_rectangle.png`。中文优先转换为语义英文，未知中文使用拼音；不使用 MD5 或 `image_` 作为名称兜底。ZIP 内不同密度目录分别映射到项目对应的同名密度目录。
+ZIP 导入按 ZIP 内部图片文件名生成名称，不使用 ZIP 文件名或 Compose 页面名作为前缀。合法的 `icon_` 名称原样保留；其他名称按语义英文或拼音规范化，并补上单个 `icon_` 前缀。例如 `矩形备份 4.png` 输出为 `icon_rectangle.png`，`icon_s6789_reading_record_bg.webp` 保持原名。ZIP 内不同密度目录分别映射到项目对应的同名密度目录。
 
 ZIP 不含任何 `mipmap` 或 `mipmap-*` 目录下的图片时，不创建临时解压内容、不写入 JSON，也不作为 ZIP 处理；应改为传入一张实际图片使用 `--image`。
 
