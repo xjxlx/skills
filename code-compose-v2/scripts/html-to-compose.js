@@ -334,7 +334,7 @@ function buildTree(elements) {
 }
 
 // 渲染元素自身内容（不含外层的 padding 定位层）。每个叶子元素带 testTag 供边界校验。
-function genContent(e, ctx, indent) {
+function genContent(e, ctx, indent, outerModifier = '') {
   const imgMap = ctx.imgMap;
   const pad = ' '.repeat(indent);
   const w = e.rect.w, h = e.rect.h;
@@ -342,6 +342,7 @@ function genContent(e, ctx, indent) {
   const radius = parseRadius(s.borderRadius);
   const res = resolveResName(e, imgMap);
   const tag = `Modifier.testTag("e${e.domIndex}")`;
+  const rootTag = `${tag}${outerModifier}`;
 
   // 图片 / 背景图：用 ImageItem 填充
   if (res) {
@@ -355,7 +356,7 @@ function genContent(e, ctx, indent) {
     if (backgroundGeometry) {
       const imageModifier = buildCroppedBackgroundModifier(backgroundGeometry);
       return (
-        `${pad}Box(modifier = ${tag}.size(${w}.dp, ${h}.dp).clipToBounds()) {\n` +
+        `${pad}Box(modifier = ${rootTag}.size(${w}.dp, ${h}.dp).clipToBounds()) {\n` +
         `${pad}    ImageItem(\n` +
         `${pad}        parameter = ImageParameter(\n` +
         `${pad}            data = R.mipmap.${res},\n` +
@@ -370,7 +371,7 @@ function genContent(e, ctx, indent) {
       `${pad}ImageItem(\n` +
       `${pad}    parameter = ImageParameter(\n` +
       `${pad}        data = R.mipmap.${res},\n` +
-      `${pad}        modifier = ${tag}.size(${w}.dp, ${h}.dp)${clip},\n` +
+      `${pad}        modifier = ${rootTag}.size(${w}.dp, ${h}.dp)${clip},\n` +
       `${pad}        contentScale = ContentScale.FillBounds,\n` +
       `${pad}    ),\n` +
       `${pad})\n`
@@ -405,7 +406,7 @@ function genContent(e, ctx, indent) {
       : '';
     return (
       `${pad}Box(\n` +
-      `${pad}    modifier = ${tag}.size(${w}.dp, ${h}.dp),\n` +
+      `${pad}    modifier = ${rootTag}.size(${w}.dp, ${h}.dp),\n` +
       `${pad}    contentAlignment = ${genContentAlignment(align)},\n` +
       `${pad}) {\n` +
       `${pad}    ${renderMetrics.fitWidth ? 'FittedSingleLineText' : 'Text'}(\n` +
@@ -437,7 +438,7 @@ function genContent(e, ctx, indent) {
   if (bgColor) {
     const shadow = parseBoxShadow(s.boxShadow);
     const mod = buildBoxDecorationModifier({
-      tag,
+      tag: rootTag,
       width: w,
       height: h,
       radius,
@@ -1285,15 +1286,19 @@ function renderFlowGroup(type, children, parentRect, ctx) {
     }
   }
   const isCol = type === 'Column';
-  const gapMod = `Spacer(Modifier.${isCol ? 'height' : 'width'}(`;
+  const spacingAxis = isCol ? 'top' : 'start';
   const line = [];
   let prev = null;
   for (const c of sorted) {
+    let outerModifier = '';
     if (prev) {
-      const gap = isCol ? c.e.rect.y - prev.y - prev.h : c.e.rect.x - prev.x - prev.w;
-      line.push(`                ${gapMod}${gap}.dp))`);
+      const gap = Math.max(
+        0,
+        isCol ? c.e.rect.y - prev.y - prev.h : c.e.rect.x - prev.x - prev.w,
+      );
+      if (gap > 0) outerModifier = `.padding(${spacingAxis} = ${r05(gap)}.dp)`;
     }
-    const content = genContent(c.e, ctx, 8);
+    const content = genContent(c.e, ctx, 8, outerModifier);
     if (content) line.push(content);
     prev = c.e.rect;
   }
@@ -1598,7 +1603,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -1824,4 +1828,9 @@ function main() {
   console.log('完成。');
 }
 
-main();
+if (require.main === module) main();
+
+module.exports = {
+  genContent,
+  renderFlowGroup,
+};
