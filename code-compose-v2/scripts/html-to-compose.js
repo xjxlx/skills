@@ -1010,7 +1010,7 @@ data class CardExtraValue(
 data class ${itemDataType}(
     val tag: Int,
     val bgRes: Int?,
-    val backgroundColorArgb: Long,
+    val backgroundColorArgb: Long?,
     val radius: Float,
     val w: Float,
     val h: Float,
@@ -1175,7 +1175,7 @@ private fun ${itemName}(item: ${itemDataType}) {
             .testTag("e" + item.tag)
             .size(item.w.dp, item.h.dp)
             .clip(RoundedCornerShape(item.radius.dp))
-            .background(Color(item.backgroundColorArgb), RoundedCornerShape(item.radius.dp)),
+            .background(item.backgroundColorArgb?.let { Color(it) } ?: Color.Transparent, RoundedCornerShape(item.radius.dp)),
     ) {
 ${bgRender}${childRender}
 ${extraRender}
