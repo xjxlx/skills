@@ -100,5 +100,5 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具�
 
 ## 技能公共约束
 
-- 每次调用先同步 GitHub 最新版本：用 GitHub Manager 的网络封装对技能所在仓库执行 `fetch origin main`；本地落后时用 `pull --ff-only --autostash origin main` 安全快进，本地领先则交给下一步发布，历史分叉立即停止并报告。远端同步成功后再执行 `"${CODEX_HOME:-$HOME/.codex}/skills/github-manager/scripts/check_and_publish.sh"`；拉取、检测或发布失败时不得继续业务任务。
+- 本 Skill 对 `$skill-common` 的启动自动发布规则作明确例外：每次调用只拉取远端更新，不执行 `check_and_publish.sh`，不提交或推送本地 Skill 变更。使用 GitHub Manager 的网络封装对技能所在仓库执行 `fetch origin main`；本地落后时用 `pull --ff-only --autostash origin main` 安全快进，版本相同或本地领先时直接继续，历史分叉或拉取失败时立即停止并报告。只有用户明确要求发布时才允许上传本地更新。
 - 遵守 `$skill-common` 的中文优先、职责唯一、依赖去重及证据驱动的进化规范；任务完成并验证后调用 `$skill-common` 复盘。
