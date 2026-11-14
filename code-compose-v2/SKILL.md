@@ -59,7 +59,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具�
 - 图片、背景、卡片、面板等具有稳定宽高比的区域，优先使用 `aspectRatio(设计宽 / 设计高)`，再配合 `Guideline`、`Dimension.fillToConstraints` 或 `weight` 约束；禁止用 `requiredSize(width, height)` 或成对固定 `width`/`height` 写死尺寸。只有无法表达为比例的结构才使用固定 dp，并说明原因。
 - 使用 inline `ConstraintLayout` DSL 时，先在同一个外层内容块顶部按固定顺序创建公共 `Guideline`、refs 和其他 helper；再按页面区域分组，把每个区域独有的定位紧挨对应子 Composable 调用放置，并用中文区域注释标明归属。子 Composable 只能接收并使用 `HorizontalAnchor`/`VerticalAnchor` 等约束引用，禁止在 `ConstraintLayoutScope` 子函数中创建外层 Guideline。helper ID 按执行顺序生成，筛选、弹窗或条件列表引起的重组可能改变分散创建的顺序，导致约束引用错位。
 - 统一约束命名：`createRefs()` 解构出的页面布局引用使用语义名并以 `Ref` 结尾（如 `titleRef`、`todayRef`）；传入子 Composable、表示布局 ID 的参数使用 `Res` 结尾（如 `titleRes`），明确它是布局引用而不是 Android `R` 资源。`createGuidelineFromStart/End/Top/Bottom` 的变量使用对应方向后缀（如 `titleStart`、`todayTop`、`todayEnd`），禁止用无方向的 `guide`、`line1` 等名称掩盖锚点方向。
-- 页面颜色、`Shape` 和其他视觉常量按所属的大模块命名：模块前缀放在最前，再接组件、类型和用途，例如 `MODULE_CARD_BACKGROUND`、`MODULE_CARD_SHAPE`、`MODULE_COLOR_CARD_TITLE`、`MODULE_COLOR_ORANGE`；没有明确模块归属时使用稳定的页面/区域前缀。禁止使用跨模块含义不清的 `COLOR_ORANGE`、`CARD_SHAPE` 等泛化名称，确保修改和排查时能直接看出常量归属。
+- 视觉常量按“类型 + 实际值”使用大写蛇形命名，不加入页面名、模块名或业务用途：`RoundedCornerShape(14.dp)` 命名为 `ROUNDED_CORNER_SHAPE_14`，`RoundedCornerShape(3.5.dp)` 命名为 `ROUNDED_CORNER_SHAPE_3_5`；`Color.White` 命名为 `COLOR_WHITE`；`Color(0xFFF5F7FA)` 去掉 `0xFF` 前缀后命名为 `COLOR_F5F7FA`；带透明度时在基础色名后追加透明值，例如 `Color.White.copy(alpha = 0.5f)` 命名为 `COLOR_WHITE_ALPHA_05`。同一文件中相同值复用同一常量名，不再使用 `REPORT_READING_CARD_COLOR`、`REPORT_READING_PANEL_SHAPE` 这类用途式名称。
 - 生成的每个命名 Composable、辅助函数和自定义定位方法上方必须有中文 KDoc；参数较多时补充 `@param`，不能只写文件级说明代替方法说明。
 - 像素级验收固定使用 `semantic.designW=1334`、`semantic.designH=750`；尺寸校验失败时立即停止，禁止通过 `DESIGN_WIDTH`、`DESIGN_HEIGHT` 或其他方式静默适配。
 - 生成器固定按 `DP_PER_PX=0.5` 把 HTML 坐标和尺寸换算为 Android dp；不得修改源坐标或用 `graphicsLayer` 整页缩放掩盖基线误差。

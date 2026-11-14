@@ -19,7 +19,7 @@
 
 - 有明确方向的连续内容使用 `Row`、`Column`、`LazyRow` 或 `LazyColumn`；`Box` 只用于背景、叠层、遮罩、对齐或单个复合点击容器。均分列使用 `weight`，弹性空白使用 `Spacer(weight = 1f)`，图片/卡片比例使用 `aspectRatio`。
 - Modifier 保持职责顺序可读：先 `constrainAs` 和尺寸约束，再填充/间距，随后 `clip`、`background`/`border`、点击行为，最后放置 `testTag` 等验收标记。需要视觉微调时只在已验收的局部资产或 item 内使用 `offset`，不能用页面级 offset 替代锚点。
-- 颜色、Shape 和其他视觉常量放在文件顶部，使用稳定的页面/模块前缀；每个命名 Composable、辅助函数和自定义定位方法上方写中文 KDoc，参数较多时补充 `@param`。
+- 颜色、Shape 和其他视觉常量放在文件顶部，按 `SKILL.md` 的“类型 + 实际值”规则使用大写蛇形命名；每个命名 Composable、辅助函数和自定义定位方法上方写中文 KDoc，参数较多时补充 `@param`。
 - 页面可见文本默认使用项目统一封装 `TextItem`；需要多段颜色或字重时组合多个 `TextItem`，不要直接使用 Material3 `Text`。
 
 ## Popup 与数据边界
