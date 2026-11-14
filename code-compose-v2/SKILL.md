@@ -48,7 +48,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 ## HTML 与 Compose 生成
 
 - 以 DOM 文本、角色、矩形、层级、间距、对齐轴、背景和重复结构为依据选择布局，不根据页面业务名称生成固定结构。
-- 固定骨架和可重复入口使用稳定锚点。页面级区域可使用 `ConstraintLayout` 和独立 `Guideline`；有明确方向的连续内容使用 `Row`、`Column` 或列表容器。
+- 固定骨架和可重复入口使用稳定锚点。页面级区域可使用 `ConstraintLayout` 和独立 `Guideline`；在首次使用 Guideline 的节点前就地创建，禁止集中声明在 `ConstraintLayout` 顶部。有明确方向的连续内容使用 `Row`、`Column` 或列表容器。
 - 3 个及以上条目共享近似外框尺寸、对齐轴、间距和字段槽位时，按数据类、`listOf` 和单一 item Composable 建模。
 - 横向或纵向列表由可见视口和排列方向决定。尾项只被视口裁切时，数据仍保存完整 item 尺寸，由 `LazyRow`/`LazyColumn` 自然裁切。
 - 透明容器可扁平化；同 rect 的背景层可合并到同一复合项。只有设计和交互确实需要时才使用页面级 `offset`，不得用 `graphicsLayer` 整页缩放掩盖几何误差。
@@ -81,7 +81,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 
 1. 启动 IDE 已经运行的最新 Activity；使用 `am start -W` 和短轮询等待 `testTag` 就绪，不使用固定长等待。
 2. 截取当前真实横屏画面，与 `original.png` 计算整页像素相似度。
-3. 通过 `uiautomator` 获取 `testTag("e<domIndex>")` 边界，与语义树 rect 比对。
+3. 通过 `uiautomator` 获取 `testTag("e<domIndex>")` 边界，与语义树 rect 比对；重组或动画期间 dump 可能返回空树，短轮询重试直到非空语义树。
 4. 对文本和关键区域做局部色差抽查。
 5. 输出 `compose-report.json`、`compose-diff.png`、热点、差异区域和失败元素。
 
