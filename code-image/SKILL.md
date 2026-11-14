@@ -94,6 +94,10 @@ python3 scripts/compare_images.py \
   --output-dir <差异证据目录>
 ```
 
+## 区域布局约束
+
+- 对具有外侧定位依据的区域，禁止用 `width(...dp)`、`height(...dp)` 直接写死宽高。在首次使用处创建所需 Guideline，并在 `constrainAs` 中至少链接三个边界锚点（如 `start`、`top`、`end`），再用 `aspectRatio(设计宽 / 设计高)` 等比例推导剩余尺寸。
+
 ## 禁止事项
 
 - 禁止覆盖未登记图片、自动合并不同来源的图片或修改 Compose 引用；清单只覆盖记录内容，不覆盖已有图片。
