@@ -168,7 +168,7 @@ function buildImageResourceMap(files, options = {}) {
         return;
       }
     }
-    const resName = `icon_report_html_${index}`;
+    const resName = `image_html_${index}`;
     result.set(file, resName);
     if (resolutionSink) {
       resolutionSink.push({ file, resName, reused: false, source: 'design-package' });

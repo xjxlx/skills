@@ -4,7 +4,6 @@ const test = require('node:test');
 const {
   evaluateStructure,
   selectSpotCandidates,
-  evaluateReferenceImage,
   evaluateReferenceDimensions,
   shouldAcceptReport,
 } = require('../compose-validation-core');
@@ -66,41 +65,39 @@ test('超出视口的元素必须按可见裁剪边界校验', () => {
   assert.deepEqual(result.checks[0].expected, { x: 8, y: 8, w: 1326, h: 742 });
 });
 
-test('设计基准与原始截图差异过大时必须判为无效', () => {
-  const reference = {
-    width: 2,
-    height: 1,
-    data: Uint8Array.from([0, 255, 0, 0, 255, 0]),
-  };
-  const original = {
-    width: 2,
-    height: 1,
-    data: Uint8Array.from([255, 255, 255, 255, 255, 255]),
-  };
-
-  const result = evaluateReferenceImage(reference, original, 0.02);
-
-  assert.equal(result.valid, false);
-  assert.equal(result.reason, 'reference-mismatch');
-});
-
 test('原始设计截图尺寸必须与语义树一致', () => {
-  assert.equal(evaluateReferenceDimensions({ width: 1600, height: 720 }, 1600, 720).valid, true);
-  assert.equal(evaluateReferenceDimensions({ width: 720, height: 1600 }, 1600, 720).valid, false);
+  assert.equal(evaluateReferenceDimensions({ width: 1334, height: 750 }, 1334, 750).valid, true);
+  assert.equal(evaluateReferenceDimensions({ width: 750, height: 1334 }, 1334, 750).valid, false);
 });
 
 test('结构或抽查失败时总验收不能通过', () => {
   assert.equal(shouldAcceptReport({
     reference: { valid: true },
+    pixel: { similarity: 0.96 },
     structure: { passRate: 1 },
     spot: { passRate: 0 },
-  }, { structurePass: 0.95, spotPass: 0.8 }), false);
+  }, { pixelPass: 0.95, structurePass: 0.95, spotPass: 0.8 }), false);
 
   assert.equal(shouldAcceptReport({
     reference: { valid: false },
+    pixel: { similarity: 1 },
     structure: { passRate: 1 },
     spot: { passRate: 1 },
-  }, { structurePass: 0.95, spotPass: 0.8 }), false);
+  }, { pixelPass: 0.95, structurePass: 0.95, spotPass: 0.8 }), false);
+
+  assert.equal(shouldAcceptReport({
+    reference: { valid: true },
+    pixel: { similarity: 0.9499 },
+    structure: { passRate: 1 },
+    spot: { passRate: 1 },
+  }, { pixelPass: 0.95, structurePass: 0.95, spotPass: 0.8 }), false);
+
+  assert.equal(shouldAcceptReport({
+    reference: { valid: true },
+    pixel: { similarity: 0.96 },
+    structure: { passRate: 1 },
+    spot: { passRate: 1 },
+  }, { pixelPass: 0.95, structurePass: 0.95, spotPass: 0.8 }), true);
 });
 
 test('局部像素抽查必须覆盖文本而不是只抽大背景', () => {

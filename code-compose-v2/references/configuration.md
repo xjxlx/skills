@@ -1,31 +1,20 @@
 # 配置与运行
 
-在目标 Android 项目根目录执行。所有脚本的临时文件、截图、JSON 报告和经验状态默认写入：
+在目标 Android 项目根目录执行。设计包、截图、报告和日志统一写入：
 
 ```text
 <PROJECT_ROOT>/.code-compose-v2/
 ```
 
-个人技能目录只保存脚本和文档；不得在其中保存设计包、图片、APK、`node_modules` 或执行产物。
+个人技能目录只保存脚本、规则和测试，不得写入设计包、图片、APK 或运行产物。
 
-## 执行前置检查
+## 前置条件
 
-技能会在总入口以及直接 Compose 生成/验收入口读取 `COMPOSE_ACTIVITY`，定位当前页面实际使用的 Activity 或 Activity-alias。默认只接受该声明自己的同一个 `<intent-filter>` 同时包含：
-
-这里的“启动标签”指 Launcher intent-filter，不是 `android:launchMode` 属性。
-
-```xml
-<action android:name="android.intent.action.MAIN" />
-<category android:name="android.intent.category.LAUNCHER" />
-```
-
-已有页面 Activity 不是 Launcher 时，可以显式配置 `COMPOSE_ACTIVITY_MODE=existing`；这仅允许复用既有声明，脚本不会创建 Activity、补写 `MAIN`/`LAUNCHER`，也不会绕过 `exported=false` 的启动限制。目标 Activity 未配置或未找到时仍会停止。通过前置检查后，横向设计稿只会在已找到的目标 Activity 源声明上写入或更新 `android:screenOrientation="landscape"`。
-
-## 首次安装依赖
-
-```bash
-npm ci --prefix <技能目录>/scripts
-```
+- HTML 设计稿固定为 `1334px × 750px`。
+- 目标 Activity 已配置横屏，并由项目 `BaseV3Page` 包裹生成页面。
+- 模拟器已经由用户旋转为横屏。
+- 应用已经通过 IDE Running、Run 或 Apply Changes 刷新。
+- `scripts/node_modules` 已存在且依赖有效。正常页面任务不执行 `npm ci`；依赖缺失时先通知用户。
 
 ## 必填变量
 
@@ -36,54 +25,100 @@ export COMPOSE_RES_DIR="app/src/main/res"
 export COMPOSE_PACKAGE="com.example.app.ui.generated"
 export COMPOSE_R_IMPORT="import com.example.app.R"
 export COMPOSE_IMAGE_IMPORTS=$'import com.example.widget.ImageItem\nimport com.example.widget.ImageParameter'
-export COMPOSE_ACTIVITY="com.example.app/.MainActivity"
-# 已有非 Launcher 页面时使用 existing；默认 launcher 会严格检查 MAIN + LAUNCHER
-export COMPOSE_ACTIVITY_MODE="launcher"
-# 主页面 + 行为状态片段的 JSON 清单
-export COMPOSE_REFERENCE_MANIFEST="$PROJECT_ROOT/.code-compose-v2/references.json"
-# reuse 优先按设计包图片 MD5 复用项目根目录累计 .code-image/image.json 资源，未命中时回退复制设计包图片
-export COMPOSE_RESOURCE_MODE="reuse"
-# 可选：仅在需要覆盖某个文件的资源名时提供显式映射
-# export COMPOSE_RESOURCE_MAP="$PROJECT_ROOT/.code-compose-v2/resource-map.json"
+export COMPOSE_ACTIVITY="com.example.app/.TestActivity"
+export COMPOSE_ACTIVITY_MODE="existing"
 ```
 
-`COMPOSE_IMAGE_IMPORTS` 由生成的 Kotlin 直接插入图片组件所需的 import。若目标项目不使用 `ImageItem` / `ImageParameter`，先调整 `html-to-compose.js` 的图片模板及测试，再执行生成。
+`COMPOSE_TEXT_IMPORT` 必须由目标项目提供：
+
+```bash
+export COMPOSE_TEXT_IMPORT="import com.example.widget.TextItem"
+```
 
 ## 可选变量
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
-| `DESIGN_DIR` | 一键流程自动传入 | 直接包含 `index.html` 的解压设计目录 |
-| `DESIGN_WIDTH` / `DESIGN_HEIGHT` | 禁止设置 | 本技能固定使用 `1334 × 750`；尺寸不匹配时应停止并报告，不得覆盖基准 |
-| `CODE_COMPOSE_V2_WORK_DIR` | `<PROJECT_ROOT>/.code-compose-v2` | 自定义运行产物目录 |
-| `PAGE_NAME` | `Test1Page` | 生成的 Kotlin 文件和 Composable 名 |
-| `DP_PER_PX` | `0.5` | 固定按 2 倍 HTML 设计稿换算 Android dp；不得改为其他倍率 |
-| `APK_PATH` | `app/build/outputs/apk/debug/app-debug.apk` | 待安装 APK 路径 |
-| `ADB_SERIAL` | `emulator-5554` | 模拟器序列号 |
-| `COMPOSE_ACTIVITY_MODE` | `launcher` | `launcher` 严格要求目标 Activity 自带 Launcher；`existing` 允许复用已有非 Launcher Activity，但不会替它创建启动入口 |
-| `COMPOSE_REFERENCE_MANIFEST` | 无 | 主页面和行为片段的 JSON 清单；主页面必须为 `scope=primary-page` |
-| `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 按 `md5s` 历史数组或旧版单值 `md5` 从项目根目录累计 `.code-image/image.json` 复用当前目标模块资源，未命中时复制设计包图片；兼容旧版 `originalHash`；`copy` 强制复制设计包图片；`existing` 只接受显式 `COMPOSE_RESOURCE_MAP` |
-| `COMPOSE_RESOURCE_MAP` | 无 | JSON 资源映射，可直接写文件名到 `icon_xxx`、`R.mipmap.icon_xxx` 或 `@mipmap/icon_xxx` |
-| `CHROME_BIN` | macOS Chrome 路径 | Puppeteer 使用的 Chrome 可执行文件 |
-| `VALIDATE_STRUCT_PASS` | `0.95` | 结构通过率阈值 |
+| `CODE_COMPOSE_V2_WORK_DIR` | `<PROJECT_ROOT>/.code-compose-v2` | 运行产物目录 |
+| `PAGE_NAME` | `GeneratedPage` | 生成的 Kotlin 文件和 Composable 名 |
+| `COMPOSE_REFERENCE_MANIFEST` | 无 | 主页面和通用状态片段的 JSON 清单 |
+| `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 优先 code-image；`copy` 先从设计包复制；`existing` 只接受显式映射 |
+| `COMPOSE_RESOURCE_MAP` | 无 | 设计图片文件到现有 `R` 资源的映射 |
+| `ADB_SERIAL` | `emulator-5554` | 验证目标模拟器 |
+| `VALIDATE_PIXEL_PASS` | `0.95` | 整页像素相似度阈值 |
+| `VALIDATE_STRUCT_PASS` | `0.95` | 元素边界通过率阈值 |
 | `VALIDATE_SPOT_PASS` | `0.8` | 局部抽查通过率阈值 |
+| `VALIDATE_TOL_XY` | `4` | 元素位置容差，设计 px |
+| `VALIDATE_TOL_WH` | `4` | 普通元素尺寸容差，设计 px |
+| `VALIDATE_TOL_TEXT_WH` | `6` | 文本尺寸容差，设计 px |
+| `VALIDATE_SPOT_DIST` | `0.18` | 局部平均色差阈值 |
+| `VALIDATE_READY_ATTEMPTS` | `10` | 等待 `testTag` 出现的最多轮数 |
+| `VALIDATE_READY_INTERVAL_MS` | `200` | 两轮就绪检查间隔 |
 
-主页面设计稿必须校验为 `1334px × 750px`。参考清单中声明为 `vertical-list-state` 或 `popup-state` 的片段可以有不同 CSS 高度，但只能用于提取局部状态和行为，不能参与主页面尺寸校验。
+以下变量不再支持：
 
-横向设计稿依赖目标 Activity 的静态 `android:screenOrientation="landscape"` 配置，并要求用户先将模拟器旋转到横向。脚本只重启 Activity 和读取截图，不执行 `wm size`、`wm density`、`policy_control`、`accelerometer_rotation` 或 `user_rotation`，也不旋转截图数据；坐标校验按当前横屏截图实际尺寸缩放。若截图仍为竖屏，验收直接失败，请手动旋转模拟器后重试。
+- `DESIGN_WIDTH`
+- `DESIGN_HEIGHT`
+- `DP_PER_PX`
+- `Z_STRATEGY`
 
-## 常用命令
+## 全屏测试 Activity
+
+优先复用项目已有 `TestActivity.kt`：
+
+1. 继承项目已有的全屏 Compose Activity 封装。
+2. Manifest 使用 `FullScreenTheme` 和 `screenOrientation="landscape"`。
+3. `InitView()` 内只调用一次 `BaseV3Page { 生成页面() }`。
+4. 需要 adb 启动时保留 `MAIN + LAUNCHER`；若项目已有真实导航入口，可设置 `COMPOSE_ACTIVITY_MODE=existing`。
+5. 不创建第二套测试 Activity，不在生成页面内部再次添加尺寸缩放包装。
+
+任务开始时由 `run.js` 扫描一次 Manifest，并写入：
+
+```text
+<PROJECT_ROOT>/.code-compose-v2/out/runtime-context.json
+```
+
+后续脚本只读取该文件。
+
+## 参考清单
+
+主页面和附加状态片段使用：
+
+```json
+{
+  "primary": { "zip": "/绝对路径/主页面.zip", "scope": "primary-page" },
+  "fragments": [
+    { "zip": "/绝对路径/状态片段.zip", "scope": "state-reference" }
+  ]
+}
+```
+
+只有 `primary-page` 参与整页视觉验收。`state-reference` 只提供局部状态和行为证据，不追加到主页面坐标树中。
+
+## 命令
 
 ```bash
 node <技能目录>/scripts/run.js /绝对路径/设计包.zip
+```
 
-# 分阶段排查
-DESIGN_DIR="/绝对路径/解压目录/设计目录" \
-  node <技能目录>/scripts/normalize.js
-DESIGN_DIR="$DESIGN_DIR" \
-  node <技能目录>/scripts/iterate.js
-DESIGN_DIR="$DESIGN_DIR" \
-  node <技能目录>/scripts/html-to-compose.js
+该命令完成：
+
+1. 单次 Activity/Manifest 检查。
+2. 解压设计包。
+3. 单次 DOM 解析和原始截图。
+4. 生成 Compose 页面。
+
+生成后通过 IDE 刷新应用，再执行：
+
+```bash
+node <技能目录>/scripts/compose-validate.js
+```
+
+分阶段命令：
+
+```bash
+DESIGN_DIR="/绝对路径/解压目录" node <技能目录>/scripts/normalize.js
+DESIGN_DIR="/绝对路径/解压目录" node <技能目录>/scripts/html-to-compose.js
 node <技能目录>/scripts/compose-validate.js
 ```
 
@@ -92,3 +127,10 @@ node <技能目录>/scripts/compose-validate.js
 ```bash
 npm test --prefix <技能目录>/scripts
 ```
+
+## 运行边界
+
+- 生成与验证脚本不执行 `assembleDebug`、`installDebug` 或 `adb install -r`。
+- 不修改模拟器 `wm size`、`wm density`、旋转锁定或系统栏。
+- 不轮询固定 6 秒；只通过 `am start -W` 和短轮询等待页面标签。
+- 验证失败时返回非零退出码，并保留统一报告和差异图。

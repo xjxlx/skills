@@ -88,7 +88,7 @@ function resolveImagePath(imgSrc, designDir) {
   return path.resolve(designDir, value);
 }
 
-function referencePixelSupport(element, source, reference, normalized) {
+function referencePixelSupport(element, source, reference) {
   const rect = element.rect;
   let opaque = 0;
   let supported = 0;
@@ -111,31 +111,10 @@ function referencePixelSupport(element, source, reference, normalized) {
       if (distance <= 35) supported++;
     }
   }
-  let referenceRenderDistance = 0;
-  if (normalized) {
-    let distance = 0;
-    const width = Math.ceil(rect.w);
-    const height = Math.ceil(rect.h);
-    for (let y = 0; y < height; y++) {
-      for (let x = 0; x < width; x++) {
-        const rx = Math.min(reference.width - 1, Math.max(0, Math.floor(rect.x + x)));
-        const ry = Math.min(reference.height - 1, Math.max(0, Math.floor(rect.y + y)));
-        const ri = (ry * reference.width + rx) * 4;
-        const ni = (Math.min(normalized.height - 1, ry) * normalized.width + Math.min(normalized.width - 1, rx)) * 4;
-        distance += Math.hypot(
-          reference.data[ri] - normalized.data[ni],
-          reference.data[ri + 1] - normalized.data[ni + 1],
-          reference.data[ri + 2] - normalized.data[ni + 2],
-        ) / Math.sqrt(255 * 255 * 3);
-      }
-    }
-    referenceRenderDistance = distance / Math.max(1, width * height);
-  }
   return {
     opaquePixels: opaque,
     sourceCoverage: opaque / Math.max(1, Math.ceil(rect.w) * Math.ceil(rect.h)),
     supportRate: supported / Math.max(1, opaque),
-    referenceRenderDistance,
   };
 }
 
@@ -143,27 +122,24 @@ function referencePixelSupport(element, source, reference, normalized) {
  * 过滤语义树中没有原始设计稿视觉证据的稀疏图片节点。
  * 重点防止透明小箭头、指示器等资源被误当成页面组件生成。
  */
-function filterReferenceUnsupportedImages(semantic, { designDir, referencePath, normalizedPath }) {
+function filterReferenceUnsupportedImages(semantic, { designDir, referencePath }) {
   if (!referencePath || !fs.existsSync(referencePath)) {
     return { semantic, filtered: [], skipped: true };
   }
 
   const reference = PNG.sync.read(fs.readFileSync(referencePath));
-  const normalized = normalizedPath && fs.existsSync(normalizedPath)
-    ? PNG.sync.read(fs.readFileSync(normalizedPath))
-    : null;
   const filtered = [];
   const kept = semantic.elements.filter((element) => {
     if (element.role !== 'image' || !element.imgSrc) return true;
     const imagePath = resolveImagePath(element.imgSrc, designDir);
     if (!imagePath || !fs.existsSync(imagePath)) return true;
     const source = PNG.sync.read(fs.readFileSync(imagePath));
-    const evidence = referencePixelSupport(element, source, reference, normalized);
+    const evidence = referencePixelSupport(element, source, reference);
     const smallIndependentImage = element.rect.w * element.rect.h <= 1200;
     const sparseUnsupportedByReference =
       smallIndependentImage &&
       evidence.sourceCoverage < 0.1 &&
-      evidence.referenceRenderDistance > 0.15;
+      evidence.supportRate < 0.25;
     const unsupportedByReference = sparseUnsupportedByReference;
     if (!unsupportedByReference) return true;
     filtered.push({

@@ -9,69 +9,25 @@ function scaleCssPxList(value, ratio) {
   return String(value).replace(/(-?[\d.]+)px/g, (_, number) => `${Number(number) * ratio}px`);
 }
 
-function calculateFitDensity({
-  containerWidthPx,
-  containerHeightPx,
-  designWidthDp,
-  designHeightDp,
-}) {
-  const values = [containerWidthPx, containerHeightPx, designWidthDp, designHeightDp];
-  if (values.some((value) => !Number.isFinite(value) || value <= 0)) {
-    throw new Error('窗口和设计稿尺寸必须是大于 0 的有限数值');
-  }
-  return Math.min(containerWidthPx / designWidthDp, containerHeightPx / designHeightDp);
-}
-
-function kotlinNumber(value) {
-  if (!Number.isFinite(value)) throw new Error(`无法生成 Kotlin 数值：${value}`);
-  return Number.isInteger(value) ? String(value) : String(Number(value.toFixed(4)));
-}
-
-function buildResponsivePageRoot({
+function buildPageRoot({
   pageName,
   designWidthDp,
   designHeightDp,
   rootBackgroundColor,
-  outerBackgroundCode = '',
   backgroundCode = '',
   contentCode = '',
 }) {
-  const width = kotlinNumber(designWidthDp);
-  const height = kotlinNumber(designHeightDp);
-  const backgroundModifier = rootBackgroundColor ? `\n                .background(${rootBackgroundColor})` : '';
-  const outerBackgroundModifier = rootBackgroundColor ? `\n                .background(${rootBackgroundColor})` : '';
-  return `@SuppressLint("UnusedBoxWithConstraintsScope")
-@OptIn(ExperimentalComposeUiApi::class, ExperimentalTextApi::class)
+  const backgroundModifier = rootBackgroundColor ? `\n            .background(${rootBackgroundColor})` : '';
+  return `@OptIn(ExperimentalComposeUiApi::class)
 @Preview(widthDp = ${Math.round(designWidthDp)}, heightDp = ${Math.round(designHeightDp)}, showBackground = true)
 @Composable
 fun ${pageName}(modifier: Modifier = Modifier) {
-    val hostDensity = LocalDensity.current
-    BoxWithConstraints(
+    Box(
         modifier = modifier
-            .fillMaxSize()${outerBackgroundModifier},
-        contentAlignment = Alignment.Center,
+            .fillMaxSize()${backgroundModifier}
+            .semantics { testTagsAsResourceId = true },
     ) {
-${outerBackgroundCode}
-        val windowWidthPx = with(hostDensity) { maxWidth.toPx() }
-        val windowHeightPx = with(hostDensity) { maxHeight.toPx() }
-        val fitDensity = min(
-            windowWidthPx / ${width}f,
-            windowHeightPx / ${height}f,
-        )
-        CompositionLocalProvider(
-            LocalDensity provides Density(
-                density = fitDensity,
-                fontScale = hostDensity.fontScale,
-            ),
-        ) {
-            Box(
-                modifier = Modifier
-                    .requiredSize(width = ${width}.dp, height = ${height}.dp)${backgroundModifier}
-                    .semantics { testTagsAsResourceId = true },
-            ) {
 ${backgroundCode}${contentCode}
-            }
-        }
     }
 }`;
 }
@@ -143,9 +99,7 @@ function deriveTextRenderMetrics({ boundsHeight, fontSize, lineHeight, maxLines,
     logicalHeight,
     renderLineHeight,
     renderHeight,
-    fitWidth: isNowrap,
     allowInkOverflow: isNowrap && safeLines === 1,
-    includeFontPadding: true,
   };
 }
 
@@ -244,8 +198,7 @@ function findObservableElements(elements) {
 module.exports = {
   buildBoxDecorationModifier,
   buildCroppedBackgroundModifier,
-  buildResponsivePageRoot,
-  calculateFitDensity,
+  buildPageRoot,
   convertSemanticToDp,
   deriveBackgroundImageGeometry,
   deriveTextRenderMetrics,

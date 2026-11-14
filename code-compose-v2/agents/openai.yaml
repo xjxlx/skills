@@ -1,7 +1,7 @@
 interface:
   display_name: "Code Compose v2"
-  short_description: "独立完成蓝湖 HTML 到 Compose 的生成、还原与验收"
-  default_prompt: "使用 $code-compose-v2 分析蓝湖 HTML 设计包，复用现有资源与业务状态，生成可适配、可验收的 Jetpack Compose 页面。"
+  short_description: "完成蓝湖 HTML 到 Compose 的生成、项目适配与统一验收"
+  default_prompt: "使用 $code-compose-v2 分析 1334×750 蓝湖 HTML 设计包，直接生成 Compose 页面，通过 IDE 运行并验证整页相似度、结构边界和局部色差。"
 
 policy:
   allow_implicit_invocation: true

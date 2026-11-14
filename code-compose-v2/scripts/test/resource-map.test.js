@@ -11,7 +11,7 @@ const {
   normalizeResourceExpression,
 } = require('../resource-map');
 
-test('existing 模式使用显式的现有 R 资源名，不生成 icon_report_html 前缀', () => {
+test('existing 模式使用显式的现有 R 资源名，不生成通用回退前缀', () => {
   const result = buildImageResourceMap(['mask.png', 'book.webp'], {
     mode: 'existing',
     mapping: {
@@ -107,7 +107,7 @@ test('reuse 模式按累计 image.json 的 md5/path/name 记录复用项目图�
           identifier: `${relativePath}-${md5}`,
           path: relativePath,
           name: 'icon_back.webp',
-          source: 'L6.zip!/mipmap-xxhdpi/back.webp',
+          source: 'design.zip!/mipmap-xxhdpi/back.webp',
         }],
       }),
     );
@@ -199,7 +199,7 @@ test('reuse 模式未命中或输出损坏时回退设计包资源', () => {
       codeImageIndex: index,
     });
 
-    assert.equal(result.get('source.webp'), 'icon_report_html_0');
+    assert.equal(result.get('source.webp'), 'image_html_0');
     assert.equal(index.byHash.size, 0);
   } finally {
     fs.rmSync(projectRoot, { recursive: true, force: true });

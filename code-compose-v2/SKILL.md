@@ -1,102 +1,112 @@
 ---
 name: "code-compose-v2"
-description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具备页面结构、状态交互和可量化验收能力的 Jetpack Compose 高保真基线；用于元素缺失、文字裁切、布局偏移、列表/弹窗还原或需要模拟器验证的任务。"
+description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可运行、可验证的 Jetpack Compose 页面；用于元素缺失、文字裁切、布局偏移、列表/弹窗还原和图标验证。"
 ---
 
-# 蓝湖 HTML → Jetpack Compose 高保真还原 v2
+# 蓝湖 HTML → Jetpack Compose
 
 所有面向用户的沟通、说明和代码注释使用中文。
 
-## 职责与入口
+## 职责
 
-本 Skill 是完全自包含的蓝湖 HTML 转 Compose 工作流。页面分析、生成、资源复用、结构验收、截图比较、语义化重构和测试均由本目录内的 `scripts/` 与 `references/` 完成，不依赖其他 Compose 转换 Skill。
+本 Skill 负责一次完整的 HTML 设计包到 Jetpack Compose 页面转换：
 
-## 适用范围
-
-- 输入为含 `index.html`、CSS 和 `img/` 的 HTML 设计压缩包。
-- 需要以像素、元素边界和模拟器截图验证 Compose 还原结果。
-- 已有绝对定位基线，需要在验收通过后再安全重构为 `Row`、`Column` 或列表。
-- 页面同时包含固定视觉骨架、重复列表、弹窗、选中态、滚动或页面级导航逻辑。
+- 解析 HTML DOM 的几何、样式、层级和布局关系。
+- 直接选择 `Box`、`Row`、`Column`、`LazyRow`、`LazyColumn` 或网格容器。
+- 复用项目资源、状态和组件封装。
+- 通过已运行的应用、整页像素、元素边界和局部色差完成验收。
 
 不适用于只有截图、没有 HTML/CSS/图片资源的任务；先要求用户提供完整设计包。
 
-## 页面角色与换算基准
+## 固定基准与页面宿主
 
-- 参考清单中的 `primary-page` 才是主页面视觉真源；当前项目主页面验收基准为 `1334px × 750px`。
-- `vertical-list-state` 只描述中间纵向列表的内容/滚动状态，`popup-state` 只描述右上角套系弹窗和遮挡关系；状态片段可以有不同的 CSS 高度，不能被误当成新的整页布局，也不能替换主页面。
-- 多个 ZIP 即使都导出为完整 HTML 页面，角色也以用户明确指定为准：被指定为主页面的 ZIP 才参与根页面结构、尺寸和视觉验收；被指定为右侧列表、条目或图标参考的 ZIP 只能提取对应区域的条目、状态、资源和尺寸，不能把它的根背景、标题栏、左侧内容、页面高度或更多条目并入主页面。用户未指定角色时，先列出各 ZIP 的尺寸和结构证据，再确认角色，不能按页面高度自动选主页面。
-- 先判定设计包的页面角色：若存在独立且有明确边界的居中面板，外层有全屏遮罩，遮罩下内容只是上下文，则按 Dialog 处理；只生成 Dialog 内部节点，背景上下文不生成、不参与结构验收，遮罩仅保留为 Dialog 宿主行为或统一底色。只有明确要求恢复底层页面时才提取背景。
-- Android 目标视图的宽高统一静态导入项目的 `AutoSizeConfig.DEFAULT_WIDTH` 和 `AutoSizeConfig.DEFAULT_HEIGHT`，布局中直接使用 `DEFAULT_WIDTH`、`DEFAULT_HEIGHT`；禁止在页面代码、示例或 Skill 规则中重复写死 `375`、`667` 等基准值。HTML 按 2 倍设计稿处理，固定使用 `DP_PER_PX=0.5`（`1dp=2px`）。
-- 数值对应关系由当前 `DEFAULT_WIDTH`、`DEFAULT_HEIGHT` 和页面方向决定：HTML 坐标先按 `DP_PER_PX=0.5` 换算，再用这两个常量作为页面宽高基准；禁止把具体 Android 宽高数字写回页面代码，或横纵分别拉伸、裁切。
-- 主页面不是 `1334px × 750px` 时报告尺寸不匹配并停止；状态片段只做局部语义提取和行为校验，不参与主页面尺寸判定。
+- 只接受 `1334px × 750px` 的横屏设计包；尺寸不一致时立即停止并提示用户重新导出。
+- 固定 `DP_PER_PX=0.5`，即 `1334×750px → 667×375dp`。不得通过 `DESIGN_WIDTH`、`DESIGN_HEIGHT`、`DP_PER_PX` 或其他环境变量覆盖。
+- 生成页面不处理窗口适配，不生成 `AutoSizeConfig`、`BoxWithConstraints`、局部 `Density` 或整页缩放。
+- Activity 层只调用一次项目已有的 `BaseV3Page { GeneratedPage() }`。`BaseV3Page` 是唯一允许承载横屏基准缩放的包装层。
+- 优先复用项目的 `TestActivity.kt`，要求它继承项目已有的全屏 Compose Activity 封装，并通过 `BaseV3Page` 承载页面。已有测试 Activity 只补充当前页面的临时入口、状态和样例数据，不创建第二套 Activity。
+- 测试 Activity 不承担业务导航，只用于临时展示、截图和结构校验；验收完成后撤销本轮临时接线和样例数据，保留可复用的全屏测试宿主。
+- Activity、方向和 Manifest 只在任务开始时扫描一次，结果写入 `.code-compose-v2/out/runtime-context.json`；后续生成和验证脚本直接复用，不得重复扫描。
+
+## 启动与依赖
+
+1. 检查远端技能版本并按公共约束拉取最新提交。
+2. 确认工作区现有改动，不覆盖用户未提交内容。
+3. 检查 `scripts/node_modules` 和依赖状态；依赖存在时直接使用，不重复执行 `npm ci`。缺失时明确提示用户安装，不在正常页面流程中自动重装依赖。
+4. 配置 `PROJECT_ROOT`、Compose 目录、包名、`R`、`TextItem`/`ImageItem` import、Activity 和目标页面名；完整变量见 [配置参考](references/configuration.md)。
 
 ## 固定流程
 
-1. 在目标 Android 项目根目录确认工作区改动，并先根据 `COMPOSE_ACTIVITY` 定位当前页面实际承载的 Activity（或 Activity-alias）。默认要求它有自己的 `MAIN` + `LAUNCHER`；已有页面 Activity 不是 Launcher 时显式使用 `COMPOSE_ACTIVITY_MODE=existing`，只允许复用该页面和真实导航入口，禁止创建正式页面 Activity、补写 `MAIN`/`LAUNCHER` 或用其他页面绕过检查。横向设计稿通过前，只能在已找到的 Activity 声明上写入或更新 `android:screenOrientation="landscape"`。
-2. 安装脚本依赖：`npm ci --prefix <本技能>/scripts`。
-3. 配置 `PROJECT_ROOT`、Compose 目标目录、包名、`R`、图片组件导入、参考角色清单和现有资源映射；完整变量见 [配置参考](references/configuration.md)。
-4. 先读取目标 Kotlin、调用方、状态数据和 `.code-image` 资源元数据，并搜索项目中同类生产级 Compose 页面；记录实际宿主（普通页、Dialog 或 Popup）、状态 owner/callback、组件选型和资源/生命周期约定。生产文件只作为决策证据，不复制业务布局，再用 `node <本技能>/scripts/run.js <主页面设计包.zip>` 执行主页面基线；滚动/弹窗 ZIP 只通过参考清单关联，不能单独生成整页 Kotlin。基线通过后进行项目级语义适配时，读取 [生产级 Compose 页面适配规范](references/production-compose-style.md)；其中不从特殊业务列表容器推导通用布局规则。
-5. 以 `<PROJECT_ROOT>/.code-compose-v2/` 内的 `original.png` 和验收报告为真源；它们是运行产物，不得提交或复制到技能仓库。
+1. 在目标 Android 项目根目录定位并确认全屏 Compose 测试 Activity，只解析一次 Manifest。
+2. 解压设计包，定位直接包含 `index.html` 或 `.code-lanhu-index.html` 的目录。
+3. 运行一次 `normalize.js`：采集 DOM 语义树，并截取 `original.png` 作为唯一视觉真源。
+4. 根据 HTML 布局参数直接生成 Compose，不生成“绝对定位基线”中间阶段，也不设置验收后才允许语义化的门槛。
+5. 将生成页面临时接入全屏测试 Activity，由 IDE Running、Run 或 Apply Changes 刷新正在运行的应用。脚本不执行 `assembleDebug` 或 `adb install -r`。
+6. 运行 `compose-validate.js`，一次生成整页像素、结构边界、局部抽查、差异图和统一报告。
+7. 未达到 95% 时，根据差异区域和失败元素修正生成逻辑，再由 IDE 刷新并重新验证。
 
-每个目标项目开始页面验收前，按文件名检索项目的 `TestActivity.kt` 并复用已有类；首次未找到时，按项目现有包名和目录约定创建一个长期保留的测试 Activity，并告知用户该文件供其审阅和提交。测试 Activity 只用于临时展示和比较当前页面，必须通过显式 debug/test 启动方式运行，不得添加 `MAIN`/`LAUNCHER` 或替换应用默认入口。使用前保留现有测试页内容；验收后撤销本轮加入的临时接线、样例数据和专用临时资源，恢复干净、可复用的测试页，保留 `TestActivity.kt` 本身；后续任务直接复用，不重复创建。
+## HTML 与 Compose 生成
 
-### Launcher Activity 与屏幕方向前置检查
+- 以 DOM 文本、角色、矩形、层级、间距、对齐轴、背景和重复结构为依据选择布局，不根据页面业务名称生成固定结构。
+- 固定骨架和可重复入口使用稳定锚点。页面级区域可使用 `ConstraintLayout` 和独立 `Guideline`；有明确方向的连续内容使用 `Row`、`Column` 或列表容器。
+- 3 个及以上条目共享近似外框尺寸、对齐轴、间距和字段槽位时，按数据类、`listOf` 和单一 item Composable 建模。
+- 横向或纵向列表由可见视口和排列方向决定。尾项只被视口裁切时，数据仍保存完整 item 尺寸，由 `LazyRow`/`LazyColumn` 自然裁切。
+- 透明容器可扁平化；同 rect 的背景层可合并到同一复合项。只有设计和交互确实需要时才使用页面级 `offset`，不得用 `graphicsLayer` 整页缩放掩盖几何误差。
+- 文字内容默认由文字测量决定宽高；固定视觉盒、裁切和覆盖关系才使用固定尺寸。固定行盒出现底部裁切时，先检查父约束和测量高度，再调整行高、绘制高度或 `wrapContentHeight(unbounded = true)`。
+- 页面颜色、Shape 和视觉常量按“类型 + 实际值”命名，例如 `COLOR_F5F7FA`、`ROUNDED_CORNER_SHAPE_14`。
+- 每个命名 Composable、辅助函数和自定义定位方法使用中文 KDoc；参数较多时补充 `@param`。
+- 只生成原始 HTML 中可见且有视觉证据的节点。不得根据文案或组件名补造箭头、指示器、装饰和业务数据。
 
-- 这里检查的是 Launcher 的 `intent-filter` 标签，不是 `android:launchMode` 属性。
-- 总入口和直接的 Compose 生成/验收入口都会读取 `COMPOSE_ACTIVITY`（验收命令行参数优先）并定位该 Activity；默认只认它自己的同一个 `intent-filter` 中同时声明 `android.intent.action.MAIN` 和 `android.intent.category.LAUNCHER`。`COMPOSE_ACTIVITY_MODE=existing` 可显式允许已有非 Launcher 页面，但只改变检查方式，不改变 Android 导出安全限制，也不自动提供启动路径。
-- 目标 Activity 未配置或未找到时，输出明确提示并停止；禁止用项目中其他 Launcher Activity 替代、创建 Activity 或补写 `MAIN`/`LAUNCHER`。
-- 横向设计稿在生成、编译、安装或启动前，更新该目标 Activity 的源 `AndroidManifest.xml` 声明，确保存在 `android:screenOrientation="landscape"`；如果已有其他方向值，替换该值。不得修改其他 Activity。技能不得通过 ADB 修改模拟器的 `wm size`、`wm density`、`policy_control`、`accelerometer_rotation` 或 `user_rotation`；需要横屏时只提示用户将模拟器旋转为横向。
-- `build/`、`.gradle/` 和其他生成目录不参与发现，避免用过期合并 Manifest 掩盖项目源配置缺失。
+## 项目组件与资源
 
-## 必须遵守的判断
+- 页面可见文本默认使用项目 `TextItem`；图片默认使用 `ImageItem` 和 `ImageParameter`。只有文字装饰、特殊交互或项目封装无法表达时，才使用 Material3 组件。
+- `TextItem` 和 `ImageItem` 的具体 import 由项目配置提供，不得硬编码到不兼容的包名。
+- 图片优先按完整 MD5 从项目根目录 `.code-image/image.json` 中复用当前模块的有效资源，并确认路径存在且内容 Hash 匹配。
+- 显式 `COMPOSE_RESOURCE_MAP` 可指定现有 `R` 资源名；映射优先于自动匹配。
+- 项目现有资源和 `.code-image` 均无法确认匹配时，才从设计包复制图片到当前模块 `mipmap-xxhdpi`。
+- 纯色背景、圆角、描边、阴影和透明边缘使用 Compose `Color`、`Shape` 和 Modifier；只有纹理、照片、插画和无法用代码可靠表达的图标使用图片。
+- 运行产物只写入目标项目 `.code-compose-v2/`，不得把截图、报告、设计资源或 `node_modules` 复制回技能仓库。
 
-- `original.png` 是最终视觉真源；`normalized.png` 只用于诊断，不能覆盖原始截图。
-- HTML 规范化每个确定性策略最多执行一次。未达标时保留最佳报告，禁止无限重试。
-- Compose 先生成逐元素高保真基线；仅当结构通过率不少于 95%、局部抽查通过率不少于 80% 后，才能局部语义化重构。
-- 先识别复合列表项：当 3 个及以上视觉条目沿横向或纵向共享相同的外框卡片尺寸（允许约 1dp/1–2px 栅格误差）、对齐轴、间距和字段槽位时，必须按列表建模；卡片内部标题、按钮、锁图标或高亮等状态差异不否定列表语义，连续的 `01`、`02`、`03` 等编号是强信号。若最后一个条目只因落在设计稿/宿主视口边界而显示不全，必须仍作为一个使用完整卡片尺寸的 item 数据对象加入 `listOf`，由列表宿主视口按设计稿可见宽度自然裁切；禁止另造页面级半截组件，也禁止把半截可见宽度写入 item 数据。把字段按条目边界聚合为数据类、`listOf` 数据和 item Composable，禁止生成 `Number01`、`Number02`、`Number03` 这类复制粘贴的页面级组件。
-- 强列表证据下，基线验收通过后必须完成数据驱动的 `Column`、`LazyColumn`、`LazyRow` 或网格重构；容器类型由设计图的排列方向和是否存在可视视口决定。横向同态条目且尾项只在边界露出时，必须用 `LazyRow` 的可滚动视口承载完整 item，由容器自然裁切，不能把尾项做成半截组件。单独一行需要横向滑动且没有底部选中指示器时，优先使用 `LazyRow`；每个选项下方需要跟随选中项移动的指示器时，使用 `PrimaryScrollableTabRow`/`ScrollableTabRow` 的 `selectedTabIndex` 与 `tabIndicatorOffset` 机制，点击回调必须更新同一选中状态，禁止用固定 `offset` 或独立线条手动推算指示器位置。重构后仍须保留每个条目的可观测边界，并重新执行结构和局部像素验收。
-- 固定骨架和可重复入口必须先建立稳定锚点：返回、左侧导航、标题、目标栏等页面级节点不得成为筛选列表的子项；页面级区域优先用 `ConstraintLayout` 和独立 `Guideline` 约束。需要适配手机和平板的外层面板，按设计稿比例使用 parent 的 percentage `Guideline` 或 `Dimension.fillToConstraints`，不要用固定 `size` 充当外层适配策略；内部固定 dp 仅用于已验收的资产和微调。重复入口先建数据列表并在已锚定的 `Row`/`Column` 内用 `forEach`/`forEachIndexed` 和固定 `Arrangement.spacedBy` 排列；只有设计要求独立起点、跨区域对齐或叠层时，才为每个入口建立独立 `Guideline`。选中态只能改变入口状态，不能用前一个条目的测量结果、内容高度或自适应间距推导后续位置；禁止用页面级 `offset` 代替锚点，仅允许经过验收的 item 内微小光学修正；标题等文本的 `Arrangement`/`align` 必须与其设计区域的起点一致，左侧标题不得默认居中。
-- 图片、背景、卡片、面板等具有稳定宽高比的区域，优先使用 `aspectRatio(设计宽 / 设计高)`，再配合 `Guideline`、`Dimension.fillToConstraints` 或 `weight` 约束；`fillToConstraints` 只填一个方向，另一方向由比例推导，宽高同时 fill 会使比例失效并让组件在双向锚点间居中；禁止用 `requiredSize(width, height)` 或成对固定 `width`/`height` 写死尺寸。只有无法表达为比例的结构才使用固定 dp，并说明原因。
-- 使用 inline `ConstraintLayout` DSL 时，先在同一个外层内容块顶部按固定顺序创建公共 `Guideline`、refs 和其他 helper；再按页面区域分组，把每个区域独有的定位紧挨对应子 Composable 调用放置，并用中文区域注释标明归属。子 Composable 只能接收并使用 `HorizontalAnchor`/`VerticalAnchor` 等约束引用，禁止在 `ConstraintLayoutScope` 子函数中创建外层 Guideline。helper ID 按执行顺序生成，筛选、弹窗或条件列表引起的重组可能改变分散创建的顺序，导致约束引用错位。
-- 统一约束命名：`createRefs()` 解构出的页面布局引用使用语义名并以 `Ref` 结尾（如 `titleRef`、`todayRef`）；传入子 Composable、表示布局 ID 的参数使用 `Res` 结尾（如 `titleRes`），明确它是布局引用而不是 Android `R` 资源。`createGuidelineFromStart/End/Top/Bottom` 的变量使用对应方向后缀（如 `titleStart`、`todayTop`、`todayEnd`），禁止用无方向的 `guide`、`line1` 等名称掩盖锚点方向。
-- 视觉常量按“类型 + 实际值”使用大写蛇形命名，不加入页面名、模块名或业务用途：`RoundedCornerShape(14.dp)` 命名为 `ROUNDED_CORNER_SHAPE_14`，`RoundedCornerShape(3.5.dp)` 命名为 `ROUNDED_CORNER_SHAPE_3_5`；`Color.White` 命名为 `COLOR_WHITE`；`Color(0xFFF5F7FA)` 去掉 `0xFF` 前缀后命名为 `COLOR_F5F7FA`；带透明度时在基础色名后追加透明值，例如 `Color.White.copy(alpha = 0.5f)` 命名为 `COLOR_WHITE_ALPHA_05`。同一文件中相同值复用同一常量名，不再使用 `REPORT_READING_CARD_COLOR`、`REPORT_READING_PANEL_SHAPE` 这类用途式名称。
-- 生成的每个命名 Composable、辅助函数和自定义定位方法上方必须有中文 KDoc；参数较多时补充 `@param`，不能只写文件级说明代替方法说明。
-- 像素级验收固定使用 `semantic.designW=1334`、`semantic.designH=750`；尺寸校验失败时立即停止，禁止通过 `DESIGN_WIDTH`、`DESIGN_HEIGHT` 或其他方式静默适配。
-- 生成器固定按 `DP_PER_PX=0.5` 把 HTML 坐标和尺寸换算为 Android dp；不得修改源坐标或用 `graphicsLayer` 整页缩放掩盖基线误差。
-- 运行时尺寸适配先检查目标 Activity 的真实继承链和项目已有的 AutoSize；已完成全局适配时直接使用项目惯用的 `dp`/`sp`（或既有适配代理），不要再引入 `BoxWithConstraints`、局部 Density 或整页缩放。Popup 的 `PopupPositionProvider` 为把 `Dp` 转成窗口像素而使用 `LocalDensity` 属于定位例外，不是尺寸适配。只有项目没有全局适配时，才按窗口宽高比例承载固定逻辑画布，并用设计背景色或背景图填充剩余空间，不能横纵分别拉伸或裁切。
-- 横向设计稿验收前必须确保目标 Activity 的静态方向配置为 `landscape`，并要求模拟器当前已经横向显示；截图必须保持设备原始方向，禁止通过 ADB 修改窗口分辨率/density、锁定或设置旋转、使用 `rotate90` 或其他图像变换补偿方向。截图仍为竖屏时直接报错并停止验收；不得为了适配设计稿而覆盖模拟器分辨率，边界换算应使用当前横屏截图的实际尺寸。
-- 只有验收基线需要为可观测视觉元素设置 `testTag("e<domIndex>")` 并记录被覆盖层；集成到没有 UI 自动化或无障碍依赖的业务布局时，移除生成用 `testTag` 和 `testTagsAsResourceId`，不要把验收标记当成布局的一部分。
-- 只生成设计图中可见且有视觉证据的节点，不能凭名称补造箭头、指示器或装饰图。
+## 状态与行为
 
-## 文字裁切与内容高度
+- 生成前建立状态模型：页面数据、当前选中项、弹窗开关、列表数据、滚动状态和点击后的变化。
+- 优先复用现有 ViewModel、状态 owner、回调和资源名；证据不足时保留项目现有契约，并记录未验证行为。
+- 选中态、关闭态、箭头和筛选结果由同一状态源驱动。资源副作用使用稳定业务 key，并在 `DisposableEffect` 中释放。
+- 弹窗使用项目已有 Dialog 或锚点 Popup 宿主，不把弹窗画布直接追加到主页面坐标树。
+- 静态设计无法证明导航目标或接口数据时，不臆造业务 API；只生成可见状态或复用已有回调。
 
-- 页面可见文本默认使用项目统一封装 `TextItem`，不要直接使用 Material3 `Text`。需要多种文字样式时，组合多个使用同一字体参数的 `TextItem`；仅在 `TextItem` 无法表达且原因明确时才使用其他文本组件。
-- 出现文字底部缺失时，先沿外层容器 → `Row`/`Column` → 数字/标签检查实际约束和测量高度；区分文字自身裁切、父容器裁切与相邻组件重叠。`sp` 字号不等于文字组件的 `dp` 高度；固定高度中的 `Column` 会让后续文字受前面子项占用后的剩余高度限制。不要只增大 `lineHeight`、开启字体留白或挪动下方内容就判定修复，也不要未经测量直接归因于 `includeFontPadding=false`。
-- 设计行盒高度必须保留而文字底部被裁切时，给文本加 `Modifier.wrapContentHeight(unbounded = true)` 并让 `lineHeight` 大于 `fontSize`，父容器不得 `clip`，使字形超出固定行盒居中绘制；不要改成整块内容撑高来替代设计行高。
-- 纯文字以及主要由文字撑开的 `Row`、`Column`、`Box` 默认不设置固定 `width`、`height`、`size` 或 `requiredSize`，让内容测量决定宽高；图片使用 `aspectRatio` 等比例约束。只有固定视觉盒、裁切边界、覆盖关系或已验收固定行盒等设计确有必要的场景才使用固定尺寸并说明原因；生成器首稿为匹配像素 bounds 使用的尺寸只能在基线阶段保留，语义化改造和正式布局中移除。下方统计、进度条、按钮应在同一 `Column` 中按间距顺序排列，或约束到前一内容的底部；不能释放文字高度后仍用固定 `padding(top=...)` 定位后续内容。页面级固定骨架保持独立锚点；若总内容超过面板，按页面交互采用滚动或响应式布局，不能继续挤压文字。
-- 验证同时覆盖文字自身和相邻布局：读取 `TextLayoutResult` 检查 `didOverflowHeight`（必要时检查宽度溢出），再检查相邻 bounds 和真实宿主截图；“两个区域不重叠”不能证明文字完整。测试应记录窗口方向、可用尺寸、density 和 fontScale；出现 `maxHeight=0` 时先核对测试宿主约束。显式设计尺寸的组件测试只能证明该尺寸下的行为，不能替代真实设备与实际适配链的验证，也不能把测试用 `requiredSize`/局部 `Density` 当作生产修复。
+## 验收闭环
 
-## 行为型页面规则
+统一使用 `compose-validate.js`，不再保留独立整页截图脚本或重复验证器。单次验证包含：
 
-- 生成前必须画出状态模型：页面数据、当前套系、弹窗开关、当前列表项、滚动容器和点击后的变化；HTML/CSS 只负责外观，不能代替 Compose 状态。
-- 固定骨架、纵向套系列表、横向书卡和右上角弹窗必须拆成有职责的 Composable。优先复用项目已有的 Dialog 宿主（如 `ComposeDialog`）和锚点 `Popup`/`PopupPositionProvider`，让宿主负责遮罩、关闭和窗口定位；弹窗是页面状态，不是把弹窗 ZIP 追加到主页面坐标树；列表是数据 + item renderer，不是重复复制卡片。包含播放器或其他需释放资源的内容时，用与可见状态绑定的 `DisposableEffect` 在关闭/离开组合时清理资源。
-- 优先复用现有页面的状态字段、回调和资源名；不凭设计文字臆造 API、导航、业务数据或图片。缺少行为证据时保留当前代码契约，并在报告中标注未验证行为。
-- 有明确排列方向的连续内容（包括多行统计项）必须按方向使用 `Column`、`Row`、`weight` 或列表容器；动态高度内容用 `verticalScroll` 或合适的列表承载，避免用 `Box` 的多层 `padding(top=...)` 定位造成重叠。复合项内部有明确方向时，不用 `Box` 叠加上下左右 padding 模拟行列布局；`Box` 只用于单个复合项的背景、叠层或点击容器。不要把 `LazyColumn` 嵌入 `DropdownMenu` 这类 intrinsic measurement 容器。选中态、关闭、箭头旋转和筛选结果必须由同一状态源驱动。
-- `Row`、`Column` 中相邻子项的普通间距优先由后一个子项按排列方向使用 `padding(top = ...)` 或 `padding(start = ...)` 表达，重复条目使用容器 `Arrangement.spacedBy(...)`；不要额外插入固定高度的 `Spacer(Modifier.height(...))` 或固定宽度的 `Spacer(Modifier.width(...))`。`Spacer(weight = 1f)` 等弹性占位以及无法由任何相邻子项承载的特殊间距可以使用 `Spacer`。
-- 套系选择只允许替换或过滤列表数据，必须保留根页面背景、返回、左侧导航、标题、目标栏和触发器；筛选状态与滚动偏移是两个独立变量。每个套系 item 使用完整且一致的外框高度，初始未滚动时也不得按状态片段或可见半截反推高度；尾项半截只能由列表 viewport 自然裁切。
-- 行为验收至少覆盖：默认主页面、打开弹窗、选择一个套系、弹窗关闭后的筛选结果、纵向列表滚动/当前项定位；验收基线可用稳定 `testTag` 观测宏观区域，正式业务布局则使用真实文本、点击回调和列表状态核对，不要求保留生成用标签。
-- 涉及筛选、Tab、套系或弹窗选择的页面，切换前后必须核对返回、侧栏、标题和目标栏等固定骨架节点的 bounds；固定节点发生位置变化时，先检查外层 helper 的创建归属/顺序和状态是否存在二次同步，再考虑尺寸或 offset 调整。
+1. 启动 IDE 已经运行的最新 Activity；使用 `am start -W` 和短轮询等待 `testTag` 就绪，不使用固定长等待。
+2. 截取当前真实横屏画面，与 `original.png` 计算整页像素相似度。
+3. 通过 `uiautomator` 获取 `testTag("e<domIndex>")` 边界，与语义树 rect 比对。
+4. 对文本和关键区域做局部色差抽查。
+5. 输出 `compose-report.json`、`compose-diff.png`、热点、差异区域和失败元素。
 
-## 资源
+验收条件：
 
-- `scripts/`：DOM 解析、HTML 对比、Compose 基线生成、模拟器结构与局部像素校验及测试。
-- `references/configuration.md`：运行命令、环境变量和产物边界。
-- `references/workflow.md`：工作流细则与视觉还原约束。
-- 图片先检查项目根目录 `.code-image` 中与设计资源对应的现有资源；找到匹配资源时优先复用。找不到时，才把设计包图片临时放入 `mipmap-xxhdpi` 使用；该资源位置是本 Skill 的项目约定，即使常规 Android 建议倾向其他资源目录，也按此约定执行。
-- 图片资源默认按完整 `md5` 优先复用项目根目录累计的 `.code-image/image.json` 实际输出；需要复用时先用 `$code-image` 导入并 `--apply`，本 Skill 只读取清单，不重新导入或改名。读取 `path`/`name`/`md5s` 历史数组或旧版单值 `md5`，并按当前目标模块资源根目录过滤；旧版 `originalHash`/`outputPath`/`outputName` 只作迁移兼容。同一 Hash 多个有效路径按路径稳定选择首个；文件名不能替代内容确认。`image.json` 的 Hash 是字节级身份，PNG/WebP、不同密度或重新压缩会造成视觉相同但 Hash 不同；历史 Hash 命中时仍需确认当前 `path` 存在且当前文件 Hash 位于同一记录的 Hash 集合内。Hash 未命中时必须在当前模块 `res` 中检索历史/语义别名，结合尺寸、透明边界和实际预览确认，确认后引用既有 `R` 资源，必要时通过 `COMPOSE_RESOURCE_MAP` 固化映射，不能把 Hash 未命中直接当成资源不存在。无可用清单、候选不存在或输出内容校验失败时才使用设计包的 `img`/`image` 图片，禁止跨模块或复用内容 Hash 不一致的输出文件。
-- 若导出图片只表达纯色背景、圆角、阴影、描边、透明边缘或边缘噪声，即使命中 MD5 也不得放入生产布局；使用主题 `Color`、`RoundedCornerShape`、`background` 及必要的代码阴影实现，并删除冗余 `ImageItem`。只有真实纹理、插画、照片或无法可靠用代码表达的图标形状才保留图片。
+- 整页像素相似度不少于 `95%`。
+- 结构边界通过率不少于 `95%`。
+- 局部抽查通过率不少于 `80%`。
+- 原始设计截图尺寸必须与语义树一致。
 
-运行产生的 `run-*`、`compose-run-*`、截图、JSON 报告、图片资源、`node_modules/` 均只允许位于目标项目工作目录，不得发布到 GitHub。
+未通过时按以下顺序排查并修正：
+
+1. 缺失元素：检查 DOM 可见性、资源过滤、列表槽位和 `testTag`。
+2. 位置/尺寸异常：检查父容器约束、锚点、Row/Column 测量和视口裁切。
+3. 图片差异：检查 code-image Hash、显式映射、ContentScale 和裁剪几何。
+4. 文字差异：检查 `TextItem` 字体、行高、最大行数、对齐和父容器高度。
+5. 层级差异：检查 z 序、遮罩、Dialog/Popup 宿主和覆盖关系。
+
+修正生成器或页面后，通过 IDE Running 刷新应用并重新验证。单轮任务最多自动修正 5 次；仍未达到 95% 时保留最佳报告并明确停止，禁止原样重跑、无限循环或伪造通过。
+
+## 参考文件
+
+- [配置参考](references/configuration.md)：命令、变量、目录和运行模式。
+- [工作流细则](references/workflow.md)：HTML 分析、生成、运行和验收细节。
+- [生产级 Compose 适配](references/production-compose-style.md)：现有项目结构、组件和状态复用规则。
 
 ## 技能公共约束
 

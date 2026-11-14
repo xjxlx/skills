@@ -4,7 +4,10 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { detectDesignSize } = require('../design-size');
+const {
+  detectDesignSize,
+  requireSupportedDesignSize,
+} = require('../design-size');
 
 function withDesignDirectory(files, callback) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'code-compose-v2-size-'));
@@ -18,20 +21,24 @@ function withDesignDirectory(files, callback) {
   }
 }
 
-test('设计尺寸必须从当前设计包的 page 样式读取', () => {
+test('设计尺寸必须从当前设计包的 page 样式读取并符合固定基准', () => {
   withDesignDirectory({
-    'index.css': '.page { width: 1600px; height: 720px; }',
+    'index.css': '.page { width: 1334px; height: 750px; }',
   }, (directory) => {
-    assert.deepEqual(detectDesignSize(directory), { w: 1600, h: 720, source: 'css' });
+    const size = detectDesignSize(directory);
+    assert.deepEqual(size, { w: 1334, h: 750, source: 'css' });
+    assert.deepEqual(requireSupportedDesignSize(size), size);
   });
 });
 
-test('无法自动识别时允许成对显式指定当前设计尺寸', () => {
-  withDesignDirectory({}, (directory) => {
-    assert.deepEqual(detectDesignSize(directory, {
-      width: '812',
-      height: '375',
-    }), { w: 812, h: 375, source: 'environment' });
+test('非 1334x750 设计稿必须立即停止', () => {
+  withDesignDirectory({
+    'index.css': '.page { width: 1600px; height: 720px; }',
+  }, (directory) => {
+    assert.throws(
+      () => requireSupportedDesignSize(detectDesignSize(directory)),
+      /需要 1334x750，实际为 1600x720/,
+    );
   });
 });
 

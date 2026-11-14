@@ -1,31 +1,3 @@
-function pixelDistance(a, b) {
-  if (!a || !b || a.width !== b.width || a.height !== b.height || a.data.length !== b.data.length) {
-    return Number.POSITIVE_INFINITY;
-  }
-  let sum = 0;
-  const pixels = a.width * a.height;
-  for (let i = 0; i < pixels; i++) {
-    const dr = a.data[i * 3] - b.data[i * 3];
-    const dg = a.data[i * 3 + 1] - b.data[i * 3 + 1];
-    const db = a.data[i * 3 + 2] - b.data[i * 3 + 2];
-    sum += Math.sqrt(dr * dr + dg * dg + db * db) / Math.sqrt(3 * 255 * 255);
-  }
-  return pixels ? sum / pixels : Number.POSITIVE_INFINITY;
-}
-
-function evaluateReferenceImage(reference, original, tolerance) {
-  const distance = pixelDistance(reference, original);
-  if (!Number.isFinite(distance)) {
-    return { valid: false, reason: 'reference-size-mismatch', distance };
-  }
-  return {
-    valid: distance <= tolerance,
-    reason: distance <= tolerance ? null : 'reference-mismatch',
-    distance: +distance.toFixed(6),
-    tolerance,
-  };
-}
-
 function evaluateReferenceDimensions(reference, designWidth, designHeight) {
   const valid = Boolean(reference && reference.width === designWidth && reference.height === designHeight);
   return {
@@ -104,6 +76,7 @@ function evaluateStructure(elements, bounds, options) {
 function shouldAcceptReport(report, thresholds) {
   return Boolean(
     report.reference && report.reference.valid &&
+    report.pixel && report.pixel.similarity >= thresholds.pixelPass &&
     report.structure && report.structure.passRate >= thresholds.structurePass &&
     report.spot && report.spot.passRate >= thresholds.spotPass
   );
@@ -125,10 +98,8 @@ function selectSpotCandidates(elements, count, designWidth, designHeight) {
 }
 
 module.exports = {
-  evaluateReferenceImage,
   evaluateReferenceDimensions,
   evaluateStructure,
-  pixelDistance,
   selectSpotCandidates,
   shouldAcceptReport,
 };

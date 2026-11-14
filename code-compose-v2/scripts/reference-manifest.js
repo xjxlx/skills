@@ -1,7 +1,7 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
-const FRAGMENT_SCOPES = new Set(['vertical-list-state', 'popup-state']);
+const FRAGMENT_SCOPES = new Set(['state-reference']);
 
 function resolveZip(value, projectRoot) {
   if (!value || typeof value !== 'string') {
@@ -29,7 +29,7 @@ function loadReferenceManifest(manifestPath, projectRoot = process.cwd()) {
   const primary = normalizeEntry(source.primary, projectRoot, 'primary-page');
   const fragments = (source.fragments || []).map((entry) => {
     if (!entry || !FRAGMENT_SCOPES.has(entry.scope)) {
-      throw new Error('参考清单的每个片段必须声明 scope：vertical-list-state 或 popup-state');
+      throw new Error('参考清单的每个片段必须声明 scope=state-reference');
     }
     return { ...entry, zip: resolveZip(entry.zip, projectRoot) };
   });

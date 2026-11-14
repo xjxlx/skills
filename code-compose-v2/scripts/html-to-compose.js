@@ -1,27 +1,23 @@
 /**
- * code-compose-v2 步骤 9：基于语义树生成「可维护」的 Compose 布局（脚本生成，避免大模型跑偏）。
+ * 根据 HTML 语义树直接生成 Compose 页面。
  *
- * 高保真基线：以语义树提供几何和样式，以原始 HTML 截图提供视觉真源，逐元素确定性生成。
- * 先通过「元素边界校验 + 文本/关键区块抽查」，再允许独立进行语义化重构。
+ * 生成器结合 DOM 几何、样式、重复结构和对齐关系，直接选择 Box、Row、Column
+ * 或 Lazy 容器，不再先输出一次性绝对定位基线。
  *
  * 输入：
  *   - 语义树 JSON：tools/out/semantic.json（normalize.js 产出，坐标为设计稿 px）
  *   - 设计图资源目录：由 DESIGN_DIR 指定（含 img/*.png）
  * 输出：
- *   - app/src/main/java/com/jollyeng/www/compose/ui/activity/report/Test1Page.kt
- *   - 设计图 png 复制到 app res 目录（mipmap-xhdpi），并引用为 R.mipmap.*
+ *   - 配置目录下的 PAGE_NAME.kt
+ *   - 设计包尚无可复用资源时复制到 app res 的 mipmap-xxhdpi
  *
- * 布局策略（准确性优先）：
- *   - 当前设计稿的实际像素尺寸动态取自 semantic.json，元素坐标在 main() 中用 DP_PER_PX
- *     换算为逻辑 dp 后生成，禁止套用历史设计稿尺寸。
- *   - 根容器以当前设计稿逻辑宽高作为固定画布；运行时按窗口宽高的较小比例动态设置局部 Density，
- *     居中完整显示；不同宽高比的剩余空间由设计背景填充，内容不拉伸、不裁切，也不使用 graphicsLayer 掩盖基线几何误差。
- *   - 每个视觉元素直接相对根 Box 用 padding(start, top) 定位，保留 0.5dp 精度。
+ * 布局策略：
+ *   - 设计稿固定为 1334x750px，按 1dp=2px 换算为 667x375dp。
+ *   - 生成页面不处理窗口适配，Activity 只调用一次项目 BaseV3Page 包裹本页面。
+ *   - 布局直接利用 DOM 几何、样式和对齐关系选择语义容器。
  *   - 每个视觉元素打 Modifier.testTag("e<domIndex>")，并记录被后层完整覆盖的不可观测节点。
- *   - 设计画布根背景图用 ContentScale.FillBounds 铺满固定逻辑画布；窗口外层用 ContentScale.Crop
- *     铺满不同宽高比产生的剩余空间。
  *
- * Major 约束（方法过大）：元素过多时把每个顶层 root 拆成独立 private fun Test1PageSection<k>()
+ * Major 约束（方法过大）：元素过多时把每个顶层 root 拆成独立私有 Composable，
  * Composable，根函数按序调用，避免单个方法字节码超 64KB（MethodTooLargeException）。
  */
 const fs = require('fs');
@@ -29,7 +25,7 @@ const path = require('path');
 const {
   buildBoxDecorationModifier,
   buildCroppedBackgroundModifier,
-  buildResponsivePageRoot,
+  buildPageRoot,
   convertSemanticToDp,
   deriveBackgroundImageGeometry,
   deriveTextRenderMetrics,
@@ -63,21 +59,24 @@ const {
 } = require('./compose-generation-rules');
 const {
   COMPOSE_IMAGE_IMPORTS,
-  COMPOSE_ACTIVITY,
-  COMPOSE_ACTIVITY_MODE,
   COMPOSE_KOTLIN_DIR,
   COMPOSE_PACKAGE,
   COMPOSE_RES_DIR,
   COMPOSE_R_IMPORT,
   COMPOSE_RESOURCE_MAP,
   COMPOSE_RESOURCE_MODE,
+  COMPOSE_TEXT_IMPORT,
   DESIGN_DIR,
   EXPERIENCE_RULES_PATH,
   PROJECT_ROOT,
   TOOL_OUTPUT_DIR,
   requiredSetting,
 } = require('./config');
-const { ensureLandscapeActivity } = require('./launcher-activity');
+const { loadOrCreateRuntimeContext } = require('./runtime-context');
+const {
+  EXPECTED_HEIGHT,
+  EXPECTED_WIDTH,
+} = require('./design-size');
 const {
   buildImageResourceMap,
   loadCodeImageResourceIndex,
@@ -91,20 +90,12 @@ const GENERATION_REPORT = path.join(TOOL_OUTPUT_DIR, 'compose-generation-report.
 const EXPERIENCE_RULES = EXPERIENCE_RULES_PATH;
 const REFERENCE_PNG = path.join(TOOL_OUTPUT_DIR, 'original.png');
 
-// 设计稿逻辑宽高（dp）。蓝湖导出 HTML 的实际像素（@2x）动态取自 semantic.json 的 designW/designH。
-// Android dp 与 px 的关系：px = dp × density（density = densityDpi / 160）。
-// @2x 设计图对应 densityDpi = 320（xhdpi，密度 = 2），故 dp = px × 160 / 320 = px × 0.5。
-let DESIGN_W = 667;
-let DESIGN_H = 375;
-// 设计图为 @2x，对应 Android 320dpi（xhdpi）。density = densityDpi / 160 = 2。
-const DESIGN_DENSITY_DPI = 320;
-// 设计稿 css px → dp 的换算比例。
-//   默认 0.5：蓝湖 @2x 导出（css px 是物理像素，dp = px × 0.5，对应 320dpi/xhdpi）。
-//   @1x 设计稿（css px 即 dp 值）应传 DP_PER_PX=1，如 812 设计稿（812×375 为 dp 值）。
-const DP_PER_PX = parseFloat(process.env.DP_PER_PX || String(160 / DESIGN_DENSITY_DPI));
+const DP_PER_PX = 0.5;
+let DESIGN_W = EXPECTED_WIDTH * DP_PER_PX;
+let DESIGN_H = EXPECTED_HEIGHT * DP_PER_PX;
 
-// 目标页面名（可经环境变量 PAGE_NAME 覆盖，如 Test2Page；默认 Test1Page）
-const PAGE_NAME = process.env.PAGE_NAME || 'Test1Page';
+// 目标页面名（可经环境变量 PAGE_NAME 覆盖）
+const PAGE_NAME = process.env.PAGE_NAME || 'GeneratedPage';
 // 目标 Compose 文件
 const TARGET_KT = path.join(requiredSetting('COMPOSE_KOTLIN_DIR', COMPOSE_KOTLIN_DIR), `${PAGE_NAME}.kt`);
 
@@ -114,16 +105,12 @@ const IMG_DIR = fs.existsSync(path.join(SOURCE_DIR, 'img'))
   ? path.join(SOURCE_DIR, 'img')
   : path.join(SOURCE_DIR, 'image');
 
-// 图片复制到 app res：使用已注册的 res 源目录 layouts/v2/report
-// 图片密度目录与设计稿倍率一致：@2x（DP_PER_PX=0.5）→ xhdpi，@1x（DP_PER_PX=1）→ mdpi（1dp=1px）。
-// 放错目录会导致 density 320 模拟器把 @1x 图误判为 @2x 而缩小一半。
+// 设计包临时图片统一回退到 xxhdpi；项目已有资源优先通过 code-image 或显式映射复用。
 const RES_ROOT = requiredSetting('COMPOSE_RES_DIR', COMPOSE_RES_DIR);
-const RES_IMG_DIR = path.join(
-  RES_ROOT,
-  `mipmap-${DP_PER_PX < 1 ? 'xhdpi' : 'mdpi'}`,
-);
+const RES_IMG_DIR = path.join(RES_ROOT, 'mipmap-xxhdpi');
 const KOTLIN_PACKAGE = requiredSetting('COMPOSE_PACKAGE', COMPOSE_PACKAGE);
 const R_IMPORT = requiredSetting('COMPOSE_R_IMPORT', COMPOSE_R_IMPORT);
+const TEXT_IMPORT = requiredSetting('COMPOSE_TEXT_IMPORT', COMPOSE_TEXT_IMPORT);
 const IMAGE_IMPORTS = requiredSetting('COMPOSE_IMAGE_IMPORTS', COMPOSE_IMAGE_IMPORTS);
 
 // ---------------- 工具 ----------------
@@ -400,35 +387,40 @@ function genContent(e, ctx, indent, outerModifier = '') {
     const visualOffsetY = placement.visualOffsetY;
     const textModifier = `Modifier.requiredSize(width = ${w}.dp, height = ${renderMetrics.renderHeight}.dp)` +
       (visualOffsetY === 0 ? '' : `.graphicsLayer { translationY = ${visualOffsetY}.dp.toPx() }`);
-    // 文本装饰（如链接下划线 "查看详情"）
-    const decoration = s.textDecoration && s.textDecoration !== 'none'
-      ? `, textDecoration = TextDecoration.${s.textDecoration === 'underline' ? 'Underline' : 'Underline'}`
-      : '';
+    const textAlign = `TextAlign.${align === 'right' ? 'Right' : align === 'center' ? 'Center' : 'Start'}`;
+    const hasDecoration = s.textDecoration && s.textDecoration !== 'none';
+    const textCall = hasDecoration
+      ? `${pad}    Text(\n` +
+          `${pad}        modifier = ${textModifier},\n` +
+          `${pad}        text = "${esc(e.text)}",\n` +
+          `${pad}        maxLines = ${maxLines},\n` +
+          `${pad}        overflow = TextOverflow.${renderMetrics.allowInkOverflow ? 'Visible' : 'Clip'},\n` +
+          `${pad}        textDecoration = TextDecoration.Underline,\n` +
+          `${pad}        style = TextStyle(\n` +
+          `${pad}            fontSize = ${fontSize}.sp,\n` +
+          `${pad}            lineHeight = ${renderMetrics.renderLineHeight}.sp,\n` +
+          `${pad}            color = ${color},\n` +
+          `${pad}            fontWeight = ${fw},\n` +
+          `${pad}            textAlign = ${textAlign},\n` +
+          `${pad}        ),\n` +
+          `${pad}    )\n`
+      : `${pad}    TextItem(\n` +
+          `${pad}        modifier = ${textModifier},\n` +
+          `${pad}        text = "${esc(e.text)}",\n` +
+          `${pad}        maxLines = ${maxLines},\n` +
+          `${pad}        overflow = TextOverflow.${renderMetrics.allowInkOverflow ? 'Visible' : 'Clip'},\n` +
+          `${pad}        fontSize = ${fontSize}.sp,\n` +
+          `${pad}        lineHeight = ${renderMetrics.renderLineHeight}.sp,\n` +
+          `${pad}        color = ${color},\n` +
+          `${pad}        fontWeight = ${fw},\n` +
+          `${pad}        textAlign = ${textAlign},\n` +
+          `${pad}    )\n`;
     return (
       `${pad}Box(\n` +
       `${pad}    modifier = ${rootTag}.size(${w}.dp, ${h}.dp),\n` +
       `${pad}    contentAlignment = ${genContentAlignment(align)},\n` +
       `${pad}) {\n` +
-      `${pad}    ${renderMetrics.fitWidth ? 'FittedSingleLineText' : 'Text'}(\n` +
-      `${pad}        modifier = ${textModifier},\n` +
-      (renderMetrics.fitWidth
-        ? `${pad}        maxWidth = ${w}.dp,\n` +
-          `${pad}        contentAlignment = ${genContentAlignment(align)},\n` +
-          `${pad}        horizontalOrigin = ${align === 'right' ? '1f' : align === 'center' ? '0.5f' : '0f'},\n`
-        : '') +
-      `${pad}        text = "${esc(e.text)}",\n` +
-      `${pad}        maxLines = ${maxLines},\n` +
-      `${pad}        overflow = TextOverflow.${renderMetrics.allowInkOverflow ? 'Visible' : 'Clip'},\n` +
-      `${pad}        softWrap = ${isNowrap ? 'false' : 'true'},\n` +
-      `${pad}        style = TextStyle(\n` +
-      `${pad}            fontSize = ${fontSize}.sp,\n` +
-      `${pad}            lineHeight = ${renderMetrics.renderLineHeight}.sp,\n` +
-      `${pad}            color = ${color},\n` +
-      `${pad}            fontWeight = ${fw},\n` +
-      `${pad}            textAlign = TextAlign.${align === 'right' ? 'Right' : align === 'center' ? 'Center' : 'Start'}${decoration},\n` +
-      `${pad}            platformStyle = PlatformTextStyle(includeFontPadding = ${renderMetrics.includeFontPadding}),\n` +
-      `${pad}        ),\n` +
-      `${pad}    )\n` +
+      textCall +
       `${pad}}\n`
     );
   }
@@ -480,8 +472,8 @@ function flattenTransparent(nodes) {
   return roots;
 }
 
-// 合并同 rect 的兄弟节点（双背景）：设计稿会出现同一位置叠放两张背景层的情况
-// （如"今日已读"分区 e16 + e31 同为 bg-image、同 rect）。若直接平铺渲染，两者互相
+// 合并同 rect 的兄弟节点（双背景）：设计稿会出现同一位置叠放两张背景层的情况。
+// 若直接平铺渲染，两者互相
 // 叠加没问题，但列表一旦嵌套进主容器，会被后画的兄弟背景层盖住而丢失。
 // 因此这里把"无子节点"的同 rect 兄弟降级为主节点的背景层（layers），随主容器一起渲染，
 // 且保持原 z 序（主节点内容先画，layers 后画），视觉不缺失，列表也能安全嵌套进主容器。
@@ -524,9 +516,7 @@ function mergeSameRectChildren(roots) {
 }
 
 // 查找列表宿主容器：树中"面积最小且包含所有卡片中心点"的节点。
-// 用中心点而非完整矩形判定，兼容"卡片底部略溢出分区背景"的设计（今日已读 4 卡中
-// 底部两卡的中心仍在分区 e16 内，但下缘超出 e16 背景；用中心判定仍能命中 e16 作宿主，
-// 使列表能嵌套进所在分区，而不是平铺在根容器）。
+// 用中心点而非完整矩形判定，兼容卡片底部略溢出宿主背景的设计。
 function findListHost(group, roots) {
   const centers = group.map((c) => ({
     x: c.rect.x + c.rect.w / 2,
@@ -552,42 +542,6 @@ function findListHost(group, roots) {
   return best;
 }
 
-// ---------------- 左侧导航聚合 ----------------
-// 左侧导航聚合：把根下零散的左导航元素（图标 + 文字）聚合成一个 LeftNavBar 合成容器。
-// 设计稿左侧有一列竖排导航（课程/书架/磨耳朵/报告 + 图标），语义树里它们是根下的平级元素，
-// 相互独立、无公共父容器。这里按 x 坐标阈值挑出左侧导航元素，用外接矩形作为容器，
-// 内部按相对坐标嵌套，使生成代码呈现"LeftNavBar 包含各导航项"的层级结构
-// （参考 ReportHomeV3Layout 的 LeftMenu 写法）。
-function groupLeftNav(roots, designW) {
-  const threshold = Math.min(120, designW * 0.15); // 左侧导航 x 阈值（dp）
-  const navNodes = roots.filter(
-    (r) => r.e.rect.x < threshold && r.e.rect.x + r.e.rect.w < threshold + 40
-  );
-  if (navNodes.length < 3) return roots; // 没有明显的左导航列，不合成
-  const minX = Math.min(...navNodes.map((n) => n.e.rect.x));
-  const minY = Math.min(...navNodes.map((n) => n.e.rect.y));
-  const maxX = Math.max(...navNodes.map((n) => n.e.rect.x + n.e.rect.w));
-  const maxY = Math.max(...navNodes.map((n) => n.e.rect.y + n.e.rect.h));
-  const synth = {
-    e: {
-      domIndex: -1,
-      role: 'container',
-      className: 'left-nav',
-      rect: { x: minX, y: minY, w: maxX - minX, h: maxY - minY },
-      z: Math.max(...navNodes.map((n) => n.e.z || 0)) + 1,
-      style: {}, imgSrc: null, text: null,
-    },
-    children: navNodes,
-    layers: [],
-    parent: null,
-    synthetic: true,
-  };
-  const navSet = new Set(navNodes);
-  const newRoots = roots.filter((r) => !navSet.has(r));
-  newRoots.push(synth); // 导航 z 序高，放在最后绘制（盖在最上层）
-  return newRoots;
-}
-
 // 从树中摘除被列表包含的卡片节点（卡片自身 + 公共槽位子元素）。
 // 卡片中"非公共槽位"的子元素（如某张卡独有的"Quiz 90%"徽标）不在列表数据里，
 // 需要提升为根级覆盖层单独渲染（保持原 z 序），保证视觉无缺失。
@@ -609,8 +563,7 @@ function removeListCards(roots, excludedDomIndices) {
     }
     node.children = kept;
   }
-  // 摘除子节点后，也要过滤根级被排除的节点：某些卡片因几何上溢出所在分区
-  // （如"今日已读"的底部卡片超出分区 rect）而成为根节点，若只清理子节点，
+  // 摘除子节点后，也要过滤根级被排除的节点：某些卡片因几何上溢出所在分区而成为根节点，若只清理子节点，
   // 这些卡片会被重复渲染（既在 Lazy 网格里、又在根级平铺一次）。
   // 被排除根节点下的"非公共槽位"子元素同样提升为根级覆盖层，保证视觉无缺失。
   for (const r of roots) detachChildren(r);
@@ -679,20 +632,16 @@ function genListItemSlotCode(slot, slotIdx, indent, ctx, imgMap) {
     `${pad}        modifier = Modifier.testTag(item.children[${slotIdx}]?.tag ?: "").size(${w}.dp, ${h}.dp),\n` +
     `${pad}        contentAlignment = ${genContentAlignment(align)},\n` +
     `${pad}    ) {\n` +
-    `${pad}        Text(\n` +
+      `${pad}        TextItem(\n` +
     `${pad}            modifier = ${textModifier},\n` +
     `${pad}            text = item.children[${slotIdx}]?.text ?: "",\n` +
     `${pad}            maxLines = ${slot.maxLines},\n` +
     `${pad}            overflow = TextOverflow.${slot.allowInkOverflow ? 'Visible' : 'Clip'},\n` +
-    `${pad}            softWrap = ${slot.isNowrap ? 'false' : 'true'},\n` +
-    `${pad}            style = TextStyle(\n` +
-    `${pad}                fontSize = ${slot.fontSize}.sp,\n` +
-    `${pad}                lineHeight = ${slot.renderLineHeight}.sp,\n` +
-    `${pad}                color = ${slot.color},\n` +
-    `${pad}                fontWeight = ${slot.fontWeightExpr},\n` +
-    `${pad}                textAlign = TextAlign.${align === 'right' ? 'Right' : align === 'center' ? 'Center' : 'Start'},\n` +
-    `${pad}                platformStyle = PlatformTextStyle(includeFontPadding = ${slot.includeFontPadding}),\n` +
-    `${pad}            ),\n` +
+      `${pad}            fontSize = ${slot.fontSize}.sp,\n` +
+      `${pad}            lineHeight = ${slot.renderLineHeight}.sp,\n` +
+      `${pad}            color = ${slot.color},\n` +
+      `${pad}            fontWeight = ${slot.fontWeightExpr},\n` +
+      `${pad}            textAlign = TextAlign.${align === 'right' ? 'Right' : align === 'center' ? 'Center' : 'Start'},\n` +
     `${pad}        )\n` +
     `${pad}    }\n` +
     `${pad}}\n`
@@ -702,7 +651,7 @@ function genListItemSlotCode(slot, slotIdx, indent, ctx, imgMap) {
 // 构建单个槽位相对指定卡片的描述（相对坐标 + 渲染指标 + 资源名）。
 // 抽出为独立函数，使"模板卡统一定义"与"逐卡精确几何"共用同一套槽位计算逻辑。
 // 列表项渲染一律以各卡自身匹配到的槽位元素为准（见 childValueCode），
-// 这样即使卡片间槽位文本宽度参差（如"今日已读"标题/描述宽度 87-90dp），
+// 这样即使卡片间槽位文本宽度参差，
 // 每张卡仍按其设计宽高还原，不因模板卡统一宽而失真。
 function buildSlotForCard(slotEl, card, ctx, imgMap) {
   const es = slotEl.style || {};
@@ -731,9 +680,7 @@ function buildSlotForCard(slotEl, card, ctx, imgMap) {
     renderLineHeight: renderMetrics.renderLineHeight,
     renderH: renderMetrics.renderHeight,
     maxLines,
-    isNowrap,
     allowInkOverflow: renderMetrics.allowInkOverflow,
-    includeFontPadding: renderMetrics.includeFontPadding,
     color,
     fontWeightExpr: fontWeightExpr(fontWeightNumber(es.fontWeight)),
   };
@@ -756,9 +703,8 @@ function buildSlotDescriptors(card, templateSlots, ctx, imgMap) {
 // 返回 { callCode, comps, excluded }：
 //   callCode  — 插入根 Box 的调用代码（含 Lazy 容器）
 //   comps     — 需要追加到文件底部的方法/数据定义
-//   excluded  — 本组占用的元素 domIndex 集合（基线渲染时跳过）
+//   excluded  — 本组占用的元素 domIndex 集合（逐元素渲染时跳过）
 function genListGroupCode(group, ctx, imgMap, opts = {}) {
-  console.log('[DEBUG] group =', group.map((c) => `${c.domIndex}:${c.rect.x},${c.rect.y},${c.rect.w},${c.rect.h} text="${(c.text||'').slice(0,12)}"`));
   const baseGeometry = computeListGeometry(group);
   const viewportGeometry = computeListGeometry(group.map((item) => (
     item.visibleRect ? { ...item, rect: item.visibleRect } : item
@@ -811,7 +757,7 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
   // 结构一致性校验（公共槽位口径）：列表要求所有卡片共享同一套核心槽位——
   // 封面图 + 标题/描述文本。逐卡对每个模板槽位做匹配，取"所有卡片都命中"的槽位为公共槽位；
   // 仅出现在部分卡片上的额外槽位（如某张卡的附加徽标"Quiz 90%"）不属于公共槽位，
-  // 由基线渲染单独覆盖，避免因一张卡的差异而放弃整组列表。
+  // 作为 item 附加数据，避免因一张卡的差异而放弃整组列表。
   const slotMatches = group.map((card) =>
     templateSlots.map((ts) => matchSlot(card, ts, templateCard, ctx.elements)),
   );
@@ -821,11 +767,11 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
     .filter((i) => i >= 0);
   const commonSlots = commonSlotIndices.map((i) => templateSlots[i]);
   // 公共槽位必须覆盖"封面图 + 文本"且数量 ≥2，才视为结构一致的重复卡片；
-  // 否则（如"阅读量/阅读时长/磨耳朵"三张卡槽位差异大）回退为逐元素基线渲染。
+  // 否则回退为逐元素渲染。
   const hasCover = commonSlots.some((te) => resolveResName(te, imgMap));
   const hasText = commonSlots.some((te) => te.role === 'text');
   if (commonSlots.length < 2 || !hasCover || !hasText) {
-    console.log(`  跳过列表组「${baseName || '未命名'}」：公共槽位不足（需封面+文本），回退为基线渲染`);
+    console.log(`  跳过列表组「${baseName || '未命名'}」：公共槽位不足（需封面+文本），回退为逐元素渲染`);
     return null;
   }
 
@@ -833,11 +779,11 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
   // 其可见宽度会变小，但这属于宿主视口裁切，不应否定前面完整条目的列表语义。
   const listGeometry = summarizeListGeometry(group);
   if (group.length >= 3 && !listGeometry.isList) {
-    console.log(`  跳过列表组「${baseName || '未命名'}」：完整卡片外框尺寸差异超过容差，回退为基线渲染`);
+    console.log(`  跳过列表组「${baseName || '未命名'}」：完整卡片外框尺寸差异超过容差，回退为逐元素渲染`);
     return null;
   }
 
-  // 说明：卡片间公共槽位宽度参差（如"今日已读"标题/描述宽 87-90dp）不再导致回退。
+  // 说明：卡片间公共槽位宽度参差不再导致回退。
   // 列表项按各自匹配到的槽位元素渲染（见 childValueCode / item.children 逐卡几何），
   // 每张卡按自身设计宽高还原，因此保留懒加载列表的同时不失真。
 
@@ -888,7 +834,6 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
       `                fontSize = ${extraDescriptor.fontSize}f,\n` +
       `                renderLineHeight = ${extraDescriptor.renderLineHeight}f,\n` +
       `                maxLines = ${extraDescriptor.maxLines},\n` +
-      `                isNowrap = ${extraDescriptor.isNowrap},\n` +
       `                allowInkOverflow = ${extraDescriptor.allowInkOverflow},\n` +
       `                colorArgb = ${colorArgbLiteral(slot.style)},\n` +
       `                fontWeight = ${fontWeightNumber(slot.style && slot.style.fontWeight)},\n` +
@@ -926,9 +871,7 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
       `        radius = ${sd.radius}f,\n` +
       `        align = ${align},\n` +
       `        maxLines = ${sd.maxLines},\n` +
-      `        isNowrap = ${sd.isNowrap},\n` +
       `        allowInkOverflow = ${sd.allowInkOverflow},\n` +
-      `        includeFontPadding = ${sd.includeFontPadding},\n` +
       `        cropW = ${cw}f,\n` +
       `        cropH = ${ch}f,\n` +
       `        cropOffX = ${cox}f,\n` +
@@ -938,8 +881,8 @@ function genListGroupCode(group, ctx, imgMap, opts = {}) {
       `    )`;
   }
 
-  // 收集本组占用的全部元素（卡片自身 + 公共槽位匹配到的子元素），从基线渲染中剔除；
-  // 非公共槽位（如仅某张卡独有的徽标）保留在基线渲染中作为覆盖层，保证视觉无缺失。
+  // 收集本组占用的全部元素，从逐元素渲染中剔除；
+  // 非公共槽位保留为 item 数据，避免视觉缺失。
   const excluded = new Set();
   group.forEach((card, ci) => {
     excluded.add(card.domIndex);
@@ -971,9 +914,7 @@ data class ChildValue(
     val radius: Float,
     val align: Int,
     val maxLines: Int,
-    val isNowrap: Boolean,
     val allowInkOverflow: Boolean,
-    val includeFontPadding: Boolean,
     val cropW: Float,
     val cropH: Float,
     val cropOffX: Float,
@@ -995,7 +936,6 @@ data class CardExtraValue(
     val fontSize: Float,
     val renderLineHeight: Float,
     val maxLines: Int,
-    val isNowrap: Boolean,
     val allowInkOverflow: Boolean,
     val colorArgb: Long,
     val fontWeight: Int,
@@ -1075,24 +1015,20 @@ ${itemInit},
                             else -> Alignment.CenterStart
                         },
                     ) {
-                        Text(
+                        TextItem(
                             modifier = Modifier.requiredSize(width = child.w.dp, height = child.renderH.dp).graphicsLayer { translationY = child.visualOffsetY.dp.toPx() },
                             text = child.text ?: "",
                             maxLines = child.maxLines,
                             overflow = if (child.allowInkOverflow) TextOverflow.Visible else TextOverflow.Clip,
-                            softWrap = !child.isNowrap,
-                            style = TextStyle(
-                                fontSize = child.fontSize.sp,
-                                lineHeight = child.renderLineHeight.sp,
-                                color = Color(child.colorArgb),
-                                fontWeight = FontWeight(child.fontWeight),
-                                textAlign = when (child.align) {
-                                    2 -> TextAlign.Right
-                                    1 -> TextAlign.Center
-                                    else -> TextAlign.Start
-                                },
-                                platformStyle = PlatformTextStyle(includeFontPadding = child.includeFontPadding),
-                            ),
+                            fontSize = child.fontSize.sp,
+                            lineHeight = child.renderLineHeight.sp,
+                            color = Color(child.colorArgb),
+                            fontWeight = fontWeightOf(child.fontWeight),
+                            textAlign = when (child.align) {
+                                2 -> TextAlign.Right
+                                1 -> TextAlign.Center
+                                else -> TextAlign.Start
+                            },
                         )
                     }
                 }
@@ -1140,24 +1076,20 @@ ${itemInit},
                             else -> Alignment.CenterStart
                         },
                     ) {
-                        Text(
+                        TextItem(
                             modifier = Modifier.requiredSize(width = extra.w.dp, height = extra.renderH.dp),
                             text = extra.text ?: "",
                             maxLines = extra.maxLines,
                             overflow = if (extra.allowInkOverflow) TextOverflow.Visible else TextOverflow.Clip,
-                            softWrap = !extra.isNowrap,
-                            style = TextStyle(
-                                fontSize = extra.fontSize.sp,
-                                lineHeight = extra.renderLineHeight.sp,
-                                color = Color(extra.colorArgb),
-                                fontWeight = FontWeight(extra.fontWeight),
-                                textAlign = when (extra.textAlign) {
-                                    2 -> TextAlign.Right
-                                    1 -> TextAlign.Center
-                                    else -> TextAlign.Start
-                                },
-                                platformStyle = PlatformTextStyle(includeFontPadding = true),
-                            ),
+                            fontSize = extra.fontSize.sp,
+                            lineHeight = extra.renderLineHeight.sp,
+                            color = Color(extra.colorArgb),
+                            fontWeight = fontWeightOf(extra.fontWeight),
+                            textAlign = when (extra.textAlign) {
+                                2 -> TextAlign.Right
+                                1 -> TextAlign.Center
+                                else -> TextAlign.Start
+                            },
                         )
                     }
                 }
@@ -1188,7 +1120,7 @@ ${extraRender}
   const indent = '        ';
   const viewportRuleEnabled = isRuleEnabled(ctx.ruleState, 'list-viewport-clips-and-pads');
   // 视口高度：一律取列表自身完整高度（containerRect.h），不按宿主剩余空间裁切。
-  // 宿主（分区/背景卡片）常比卡片网格更矮（如"今日已读"网格底行溢出分区背景），
+  // 宿主背景可能比卡片网格更矮，
   // 强行裁剪会把设计稿可见的底行卡片截断。视口 = 网格完整高度即可完整显示全部卡片；
   // 开启 viewport 规则时额外补 1 个 rowGap/colGap 高度容纳末项 contentPadding，避免再被裁。
   const viewportRulePad = viewportRuleEnabled
@@ -1314,17 +1246,6 @@ function renderFlowGroup(type, children, parentRect, ctx) {
   );
 }
 
-// CJK 墨迹垂直补偿（dp）：
-// Compose 渲染 CJK 字形时，墨迹相对浏览器会有稳定的垂直偏差；
-// 保留平台字体安全 padding 后，仅对内部绘制层补偿剩余的视觉基线差：
-//   - 首字符为中文（纯中文标题，如 "阅读量/磨耳朵/达标/查看详情"）→ 4dp（实测偏移 8px）
-//   - 否则（含 CJK 的混合/单位文本，如 "1000词"、"30分钟"、"Day 2…"）→ 3.5dp（实测偏移 7px）
-function cjkTopComp(text) {
-  if (!text || !/[\u4e00-\u9fff]/.test(text)) return 0;
-  const first = String(text).replace(/^\s+/, '')[0];
-  return /[\u4e00-\u9fff]/.test(first) ? 4 : 3.5;
-}
-
 // 保证生成的方法名全局唯一（见名知意的推断可能产生重名，追加序号避免编译冲突）。
 function uniqueComposeName(base, ctx) {
   ctx.usedNames = ctx.usedNames || new Set();
@@ -1344,10 +1265,7 @@ function genNode(node, parentRect, ctx) {
   // 相对父容器坐标，保留 0.5dp 精度（r05 已保证非负），避免累计取整导致坐标漂移。
   const relX = r05(e.rect.x - parentRect.x);
   // 坐标严格按设计稿 rect（dp）放置，不做任何 CJK 墨迹补偿。
-  // 曾尝试对 CJK 文本向上扣 3.5~4dp，但同一行内"数字(0补偿)/单位(3.5补偿)"、以及
-  // "文本标签(补偿)/徽章图片(0补偿)"会被补偿量拉开，破坏行内基准线对齐（用户多次反馈
-  // "2620 与 1000词 不对齐、阅读量与达标不对齐"）。平台字体安全 padding 负责避免上下墨迹
-  // 被裁切；这里只按设计稿语义框精确落位，视觉补偿由内部 Text 绘制层处理。
+  // 文本和图片统一按设计稿语义框落位，避免不同内容的局部补偿破坏同一行基线。
   const relY = r05(e.rect.y - parentRect.y);
   const name = uniqueComposeName(inferComponentName(e, ctx.parentContext || '', ctx.elements || []), ctx);
 
@@ -1389,17 +1307,9 @@ function genNode(node, parentRect, ctx) {
 
   if (bodyLines.length === 0) return ''; // 无可视内容（扁平化后一般不会发生）
 
-  // 列表宿主容器：锁定自身尺寸，但不裁剪溢出内容。
-  // 设计稿中分区背景（如"今日已读"e16）常常比卡片网格更短，底行卡片本就超出分区边界，
-  // 结构校验按各卡片完整设计高比对（如 e17 高 169px）。若在宿主上加 clipToBounds，
-  // 会把底行卡片在分区底边处裁短（169px→118px），导致卡片显示不全。
-  // 列表自身的 Lazy 容器视口已 clipToBounds 并按完整网格高铺满，足以容纳并裁剪列表，
-  // 因此宿主只锁定尺寸即可，不必重复裁剪。
+  // 列表宿主容器锁定自身尺寸但不裁剪；列表 viewport 负责可见区域。
   const hostModifier = listCall
-    ? `.size(${e.rect.w}.dp, ${e.rect.h}.dp)` +
-      (ctx.hostSemanticTags && ctx.hostSemanticTags.get(e.domIndex)
-        ? `.testTag("${ctx.hostSemanticTags.get(e.domIndex)}")`
-        : '')
+    ? `.size(${e.rect.w}.dp, ${e.rect.h}.dp)`
     : '';
 
   // 方法注释：根据元素信息生成描述性注释
@@ -1421,41 +1331,10 @@ function genNode(node, parentRect, ctx) {
   return `            ${name}()`;
 }
 
-// 高保真基线：每个视觉元素直接相对根容器定位，不做包含树、去重或 Row/Column 推断。
-// 生成命名见名知意（根据元素文本/className 推断）+ 每个方法带注释。
-function genBaselineNode(element, ctx) {
-  const content = genContent(element, ctx, 8);
-  if (!content) return '';
-  const name = uniqueComposeName(inferComponentName(element, ctx.parentContext || '', ctx.elements || []), ctx);
-  // 方法注释：根据元素信息生成描述性注释
-  const descParts = [];
-  if (element.text) descParts.push(`文本：${element.text.trim().replace(/\s+/g, ' ')}`);
-  if (element.className) descParts.push(`类名：${element.className}`);
-  if (element.role) descParts.push(`角色：${element.role}`);
-  if (element.imgSrc) descParts.push(`图片：${path.basename(element.imgSrc)}`);
-  else if (element.style && element.style.bgImage) {
-    const m = element.style.bgImage.match(/url\("?([^")]+)"?\)/);
-    if (m) descParts.push(`背景图：${path.basename(m[1])}`);
-  }
-  const comment = `/**\n * ${descParts.join('；')}\n * 位置：(x=${element.rect.x}, y=${element.rect.y})，尺寸：${element.rect.w}x${element.rect.h}dp\n */`;
-  comps.push(
-    `${comment}\n` +
-      `@Composable\n` +
-      `private fun ${name}() {\n` +
-      `    Box(\n` +
-      `        modifier = Modifier.padding(start = ${element.rect.x}.dp, top = ${element.rect.y}.dp),\n` +
-      `    ) {\n` +
-      content +
-      `\n    }\n}\n`
-  );
-  return `        ${name}()`;
-}
-
-function genTest1Page(semantic, imgMap, ruleState) {
+function generatePage(semantic, imgMap, ruleState) {
   const designW = DESIGN_W;
   const designH = DESIGN_H;
-  // 先去重：normalize.js 会因 DOM 嵌套产生同 rect + 同内容签名的重复元素（如 e36/e40 同标题、
-  // e35/e39 同封面），若不合并，列表槽位匹配与树形渲染都会出现"同一视觉被画两次"的冗余覆盖。
+  // 先去重：DOM 嵌套可能产生同 rect、同内容签名的重复元素。
   // 去重只保留首个出现，domIndex 不变，校验用的 testTag 不受影响。
   let elements = deduplicate(semantic.elements);
   const ctx = { imgMap, elements, parentContext: PAGE_NAME, usedNames: new Set(), ruleState };
@@ -1465,7 +1344,6 @@ function genTest1Page(semantic, imgMap, ruleState) {
   const bgIndex = elements.findIndex((e) => isFullScreenBg(e, designW, designH));
   const pageIndex = elements.findIndex((e) => isFullScreenPlainBox(e, designW, designH));
   let bgCode = '';
-  let outerBgCode = '';
   let rootBgColor = null;
   let restElements = elements;
   const skipIndices = new Set();
@@ -1473,17 +1351,8 @@ function genTest1Page(semantic, imgMap, ruleState) {
     const bg = elements[bgIndex];
     const res = resolveResName(bg, imgMap);
     if (res) {
-      outerBgCode =
-        `        // 宽高比不同的设备：背景铺满窗口，设计内容仍保持等比缩放\n` +
-        `        ImageItem(\n` +
-        `            parameter = ImageParameter(\n` +
-        `                data = R.mipmap.${res},\n` +
-        `                modifier = Modifier.fillMaxSize(),\n` +
-        `                contentScale = ContentScale.Crop,\n` +
-        `            )\n` +
-        `        )\n`;
       bgCode =
-        `        // 根布局背景图：仅铺满当前设计画布\n` +
+        `        // 根布局背景图\n` +
         `        ImageItem(\n` +
         `            parameter = ImageParameter(\n` +
         `                data = R.mipmap.${res},\n` +
@@ -1503,7 +1372,7 @@ function genTest1Page(semantic, imgMap, ruleState) {
   comps.length = 0; // 重置元素级 Composable / 数据类收集器
 
   // 2) 构建几何包含树：每个元素挂到"面积最小且包含它"的容器下 → 扁平化透明容器 →
-  //    合并同 rect 兄弟（同一位置叠放的双背景，如"今日已读"分区 e16 + e31）。
+  //    合并同 rect 兄弟（同一位置叠放的双背景）。
   let roots = buildTree(restElements);
   roots = flattenTransparent(roots);
   roots = mergeSameRectChildren(roots);
@@ -1516,7 +1385,6 @@ function genTest1Page(semantic, imgMap, ruleState) {
   console.log(`检测到 ${cardGroups.length} 个相似卡片组`);
   const excludedDomIndices = new Set();
   const hostListCall = new Map(); // 宿主 domIndex → Lazy 容器调用代码
-  const hostSemanticTags = new Map(); // 宿主 domIndex → 结构回归测试标签
   let childValueEmitted = false;
   for (let groupIndex = 0; groupIndex < cardGroups.length; groupIndex++) {
     const detectedGroup = detectedCardGroups[groupIndex];
@@ -1544,10 +1412,6 @@ function genTest1Page(semantic, imgMap, ruleState) {
     for (const c of result.comps) comps.push(c);
     if (host) {
       hostListCall.set(host.e.domIndex, result.callCode);
-      const groupTitle = findTitleForGroup(group, elements);
-      if (groupTitle && groupTitle.text.trim() === '今日已读') {
-        hostSemanticTags.set(host.e.domIndex, 'todayReadSection');
-      }
     } else {
       // 无宿主：列表作为根级合成容器追加，保证被列表包含的卡片仍被渲染
       const rect = computeListGeometry(group).containerRect;
@@ -1560,39 +1424,30 @@ function genTest1Page(semantic, imgMap, ruleState) {
     }
   }
   ctx.hostListCall = hostListCall;
-  ctx.hostSemanticTags = hostSemanticTags;
 
   // 4) 从树中摘除被列表包含的卡片节点；非公共槽位子元素提升为根级覆盖层
   roots = removeListCards(roots, excludedDomIndices);
 
-  // 5) 左侧导航聚合成 LeftNavBar 合成容器（参考 ReportHomeV3Layout 的 LeftMenu 层级）
-  roots = groupLeftNav(roots, designW);
-
-  // 6) 树形嵌套渲染：根容器下的每个根节点递归生成嵌套结构的 Composable。
-  //    组件按几何包含关系层层嵌套（如"今日已读"分区包含其 Lazy 列表），
-  //    列表不会跑到父组件之外。
+  // 5) 树形嵌套渲染：组件按几何包含关系层层嵌套，列表不会跑到父组件之外。
   const ROOT_RECT = { x: 0, y: 0, w: designW, h: designH };
   roots.sort((a, b) => (a.e.z || 0) - (b.e.z || 0));
   const calls = roots.map((r) => genNode(r, ROOT_RECT, ctx)).filter(Boolean);
   const callsStr = calls.join('\n');
   const sectionsCode = comps.join('\n');
-  const responsivePageRoot = buildResponsivePageRoot({
+  const pageRoot = buildPageRoot({
     pageName: PAGE_NAME,
     designWidthDp: DESIGN_W,
     designHeightDp: DESIGN_H,
     rootBackgroundColor: rootBgColor,
-    outerBackgroundCode: outerBgCode,
     backgroundCode: bgCode,
     contentCode: callsStr,
   });
 
   return `package ${KOTLIN_PACKAGE}
 
-import android.annotation.SuppressLint
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -1604,21 +1459,15 @@ import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.requiredSize
-import androidx.compose.foundation.layout.requiredWidth
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1629,86 +1478,37 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.semantics.testTagsAsResourceId
-import androidx.compose.ui.text.ExperimentalTextApi
-import androidx.compose.ui.text.AnnotatedString
-import androidx.compose.ui.text.PlatformTextStyle
 import androidx.compose.ui.text.TextStyle
-import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.unit.Dp
-import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.sp
-import kotlin.math.min
+${TEXT_IMPORT}
 ${IMAGE_IMPORTS}
 ${R_IMPORT}
 
-/**
- * 由当前设计稿（逻辑画布 ${DESIGN_W}x${DESIGN_H}dp）经 code-compose-v2 高保真基线生成的 Compose 布局。
- * 布局策略：
- *  - 以语义树为真源，先逐元素生成可验证基线；基线通过后才允许单独做语义化重构。
- *  - 像素级验收尺寸取自当前 semantic.json；运行时按窗口宽高较小比例居中适配，不拉伸、不裁切。
- *  - 元素定位不使用 offset；所有视觉元素直接相对根 Box 使用 padding 定位并保留 0.5dp 精度。
- *  - 每个视觉元素带 Modifier.testTag("e<domIndex>")，供 compose-validate.js 完整边界校验。
- *  - 根背景图铺满设计画布，外层背景填充不同宽高比窗口的剩余空间。
- */
-${responsivePageRoot}
+/** 将设计稿数字字重转换为 Compose FontWeight。 */
+private fun fontWeightOf(weight: Int): FontWeight = when {
+    weight >= 900 -> FontWeight.Black
+    weight >= 700 -> FontWeight.Bold
+    weight >= 600 -> FontWeight.SemiBold
+    weight >= 500 -> FontWeight.Medium
+    else -> FontWeight.Normal
+}
 
 /**
- * FittedSingleLineText：单行文本按设计稿宽度等比缩放（nowrap 数字/短标签用）。
- * 通过 TextMeasurer 实测文本宽度，超出 maxWidth 时按比例缩放，避免横向溢出设计框。
+ * 由 1334x750 HTML 设计稿生成的 Compose 页面。
+ * 布局策略：
+ *  - 以语义树为真源，直接按照 DOM 几何、样式和对齐关系选择 Compose 容器。
+ *  - 页面本身不处理窗口适配，由 Activity 的 BaseV3Page 统一包裹。
+ *  - 每个视觉元素带 Modifier.testTag("e<domIndex>")，供 compose-validate.js 完整边界校验。
  */
-@OptIn(ExperimentalTextApi::class)
-@Composable
-private fun FittedSingleLineText(
-    modifier: Modifier,
-    maxWidth: Dp,
-    contentAlignment: Alignment,
-    horizontalOrigin: Float,
-    text: String,
-    maxLines: Int,
-    overflow: TextOverflow,
-    softWrap: Boolean,
-    style: TextStyle,
-) {
-    val density = LocalDensity.current
-    val textMeasurer = rememberTextMeasurer()
-    val measured = textMeasurer.measure(
-        text = AnnotatedString(text),
-        style = style,
-        maxLines = maxLines,
-        overflow = overflow,
-        softWrap = softWrap,
-    )
-    val targetWidthPx = with(density) { maxWidth.toPx() }
-    val scale = if (measured.size.width > targetWidthPx && measured.size.width > 0) {
-        targetWidthPx / measured.size.width
-    } else {
-        1f
-    }
-    val measuredWidth = with(density) { measured.size.width.toDp() }
-    Box(modifier = modifier, contentAlignment = contentAlignment) {
-        Text(
-            modifier = Modifier
-                .requiredWidth(measuredWidth)
-                .graphicsLayer {
-                    scaleX = scale
-                    transformOrigin = androidx.compose.ui.graphics.TransformOrigin(horizontalOrigin, 0.5f)
-                },
-            text = text,
-            maxLines = maxLines,
-            overflow = overflow,
-            softWrap = softWrap,
-            style = style,
-        )
-    }
-}
+${pageRoot}
 ${sectionsCode}
 `;
 }
@@ -1716,9 +1516,7 @@ ${sectionsCode}
 // ---------------- main ----------------
 function main() {
   try {
-    ensureLandscapeActivity(PROJECT_ROOT, COMPOSE_ACTIVITY, {
-      allowNonLauncher: COMPOSE_ACTIVITY_MODE === 'existing',
-    });
+    loadOrCreateRuntimeContext();
   } catch (error) {
     console.error(`\n${error.message}`);
     process.exit(1);
@@ -1730,6 +1528,13 @@ function main() {
   }
   let semantic = JSON.parse(fs.readFileSync(SEMANTIC, 'utf8'));
   console.log(`设计稿：${semantic.designW}x${semantic.designH}，元素 ${semantic.count} 个`);
+  if (semantic.designW !== EXPECTED_WIDTH || semantic.designH !== EXPECTED_HEIGHT) {
+    console.error(
+      `设计稿尺寸不匹配：需要 ${EXPECTED_WIDTH}x${EXPECTED_HEIGHT}，` +
+      `实际为 ${semantic.designW}x${semantic.designH}。`,
+    );
+    process.exit(1);
+  }
 
   const experienceState = loadExperienceState(EXPERIENCE_RULES);
   const designDir = SOURCE_DIR;
@@ -1737,7 +1542,6 @@ function main() {
     ? filterReferenceUnsupportedImages(semantic, {
         designDir,
         referencePath: REFERENCE_PNG,
-        normalizedPath: path.join(TOOL_OUTPUT_DIR, 'normalized.png'),
       })
     : { semantic, filtered: [], skipped: true };
   semantic = referenceFilter.semantic;
@@ -1760,12 +1564,12 @@ function main() {
 
   // 先去重，再计算可观测元素：normalize.js 会因 DOM 嵌套产生同 rect+同内容签名的重复元素，
   // 去重后这些元素不会渲染、也没有 testTag，若仍计入结构校验分母会误报 not-found。
-  // 去重必须在 main() 这里做，才能让生成报告与 genTest1Page 内部实际渲染保持一致。
+  // 去重必须在 main() 这里做，才能让生成报告与实际渲染保持一致。
   const dedupElements = deduplicate(semantic.elements);
   semantic = { ...semantic, elements: dedupElements };
 
   // 排除全屏纯色根容器（.page 底色）：它由根 Box 的 background 承载、不生成独立 testTag，
-  // 必须与 genTest1Page 内部实际渲染一致，否则结构校验会把 e0 误判为 not-found。
+  // 必须与实际渲染一致，否则结构校验会把根容器误判为 not-found。
   const renderableElements = dedupElements.filter(
     (e) => !isFullScreenPlainBox(e, DESIGN_W, DESIGN_H)
   );
@@ -1779,7 +1583,7 @@ function main() {
   }
   const observable = findObservableElements(renderableElements);
   fs.writeFileSync(GENERATION_REPORT, JSON.stringify({
-    mode: 'pixel-baseline',
+    mode: 'html-derived-compose',
     resourceMode: COMPOSE_RESOURCE_MODE,
     rules: {
       active: Object.keys(experienceState.rules).filter((id) => experienceState.rules[id].enabled),
@@ -1802,10 +1606,10 @@ function main() {
 
   // 1) 复制图片到 res
   console.log(COMPOSE_RESOURCE_MODE === 'existing'
-    ? '步骤 9.1：复用显式资源映射'
+    ? '复用显式资源映射'
     : COMPOSE_RESOURCE_MODE === 'reuse'
-      ? '步骤 9.1：按累计 image.json 的 md5 优先复用 code-image，未命中时回退设计包图片'
-      : '步骤 9.1：复制设计图到 app res 目录');
+      ? '按累计 image.json 的 md5 优先复用 code-image，未命中时回退设计包图片'
+      : '复制设计图到 app res 目录');
   const copied = copyImages(semantic);
   const reusedCount = copied.filter((item) => item.reused).length;
   const copiedCount = copied.length - reusedCount;
@@ -1820,8 +1624,8 @@ function main() {
   fs.writeFileSync(GENERATION_REPORT, JSON.stringify(report, null, 2));
 
   // 2) 生成 Kotlin
-  console.log(`步骤 9.2：生成 ${PAGE_NAME}.kt`);
-  const code = genTest1Page(semantic, imgMap, experienceState);
+  console.log(`生成 ${PAGE_NAME}.kt`);
+  const code = generatePage(semantic, imgMap, experienceState);
   fs.mkdirSync(path.dirname(TARGET_KT), { recursive: true });
   fs.writeFileSync(TARGET_KT, code.replace(/\n+$/, '\n'));
   console.log(`  已写入 → ${TARGET_KT}`);
@@ -1831,6 +1635,7 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
+  generatePage,
   genContent,
   renderFlowGroup,
 };

@@ -2,13 +2,13 @@
   "name": "code-compose-v2-tools",
   "version": "1.0.0",
   "private": true,
-  "description": "HTML 设计包到 Jetpack Compose 高保真基线的可复用工具脚本",
+  "description": "HTML 设计包到 Jetpack Compose 页面生成与验证工具",
   "scripts": {
     "run": "node run.js",
     "unzip": "node unzip-to-downloads.js",
     "normalize": "node normalize.js",
-    "compare": "node compare.js",
-    "iterate": "node iterate.js",
+    "generate": "node html-to-compose.js",
+    "validate": "node compose-validate.js",
     "test": "node --test test/*.test.js"
   },
   "dependencies": {

@@ -1,15 +1,15 @@
 /**
- * 最小原型：HTML 规范化器（步骤 4-5）
+ * HTML 语义树采集器。
  * 1. 用系统 Chrome 加载 DESIGN_DIR 下的 index.html，遍历 DOM 计算每个视觉元素的精确几何与样式
- * 2. 生成规范化 HTML（语义标注 + 绝对定位精确还原）
- * 3. 导出语义树 JSON（供 Compose 生成器作为输入）
+ * 2. 截取原始 HTML 作为视觉真源
+ * 3. 导出语义树 JSON（供 Compose 生成器直接分析布局）
  * 依赖环境变量 DESIGN_DIR：直接包含 index.html 的设计源目录。
  */
 const puppeteer = require('puppeteer-core');
 const fs = require('fs');
 const path = require('path');
 const { CHROME_BIN, DESIGN_DIR, TOOL_OUTPUT_DIR, requiredSetting } = require('./config');
-const { detectDesignSize } = require('./design-size');
+const { detectDesignSize, requireSupportedDesignSize } = require('./design-size');
 
 const CHROME = CHROME_BIN;
 const BASE = requiredSetting('DESIGN_DIR', DESIGN_DIR);
@@ -18,28 +18,15 @@ const SRC_HTML = (() => {
   const hit = cands.find(f => /^\.?code-lanhu-index\.html$/.test(f) || f === 'index.html');
   return path.join(BASE, hit || 'index.html');
 })();
-const NORMALIZED_HTML = path.join(BASE, 'normalized.html');
 const OUT_DIR = TOOL_OUTPUT_DIR;
 
-// 尺寸必须来自当前设计包；无法自动识别时允许调用方成对显式指定，禁止静默套用历史尺寸。
+// 固定横屏基准；不读取 DESIGN_WIDTH、DESIGN_HEIGHT，也不允许静默套用其他尺寸。
 const {
   w: VIEW_W,
   h: VIEW_H,
   source: DESIGN_SIZE_SOURCE,
-} = detectDesignSize(BASE, {
-  width: process.env.DESIGN_WIDTH,
-  height: process.env.DESIGN_HEIGHT,
-});
+} = requireSupportedDesignSize(detectDesignSize(BASE));
 console.log(`设计稿尺寸：${VIEW_W}x${VIEW_H}（${DESIGN_SIZE_SOURCE}）`);
-
-// z-index 策略：默认 DOM 顺序（文本最高层）。可选 'legacy' 恢复“背景图整体抬升”的旧策略。
-const Z_STRATEGY = process.env.Z_STRATEGY || 'dom';
-
-// 是否有直接文本子节点（过滤掉纯 <br>）
-function hasDirectText(el) {
-  const nodes = Array.from(el.childNodes);
-  return nodes.some(n => n.nodeType === 3 && (n.textContent || '').trim().length > 0);
-}
 
 async function main() {
   fs.mkdirSync(OUT_DIR, { recursive: true });
@@ -58,8 +45,7 @@ async function main() {
     document.body.style.padding = '0px';
   });
 
-  const elements = await page.$$eval('body *', (els, _zStrategy) => {
-      const Z_STRATEGY_LOCAL = _zStrategy;
+  const elements = await page.$$eval('body *', (els) => {
       const out = [];
       let domIndex = 0;
       for (const el of els) {
@@ -119,7 +105,6 @@ async function main() {
           z: (() => {
             if (directText) return 100000 + domIndex;
             if (isImg) return 90000 + domIndex; // 图片是实际内容，覆盖背景色块
-            if (Z_STRATEGY_LOCAL === 'legacy') return (bgImage ? 50000 + domIndex : domIndex);
             return domIndex;
           })(),
           style: {
@@ -143,80 +128,18 @@ async function main() {
         });
       }
       return out;
-    },
-    Z_STRATEGY
-  );
+    });
 
   // 写语义树 JSON（Compose 生成器输入）
   fs.writeFileSync(path.join(OUT_DIR, 'semantic.json'), JSON.stringify({ designW: VIEW_W, designH: VIEW_H, count: elements.length, elements }, null, 2));
 
-  // 生成规范化 HTML
-  const html = buildNormalizedHtml(elements);
-  fs.writeFileSync(NORMALIZED_HTML, html);
-
-  // 截图：原始 vs 规范化
-  await screenshot(page, SRC_HTML, path.join(OUT_DIR, 'original.png'));
-  await screenshot(page, NORMALIZED_HTML, path.join(OUT_DIR, 'normalized.png'));
+  // 原始 HTML 截图是最终视觉真源，只截取一次。
+  await page.screenshot({ path: path.join(OUT_DIR, 'original.png') });
 
   await browser.close();
   console.log('elements:', elements.length);
-  console.log('normalized:', NORMALIZED_HTML);
   console.log('semantic.json:', path.join(OUT_DIR, 'semantic.json'));
-  console.log('screenshots:', path.join(OUT_DIR, 'original.png'), path.join(OUT_DIR, 'normalized.png'));
-}
-
-function screenshot(page, file, dest) {
-  return new Promise(async (resolve) => {
-    await page.evaluate(() => location.reload()); // 触发 reload 到新 url
-    await page.goto('file://' + file, { waitUntil: 'networkidle0' });
-    await page.evaluate(() => document.fonts.ready);
-    await page.screenshot({ path: dest });
-    resolve();
-  });
-}
-
-function buildNormalizedHtml(elements) {
-  const parts = [];
-  for (const e of elements) {
-    const s = e.style;
-    const st = [`position:absolute`, `left:${e.rect.x}px`, `top:${e.rect.y}px`, `width:${e.rect.w}px`, `height:${e.rect.h}px`, `z-index:${e.z}`];
-    if (s.opacity) st.push(`opacity:${s.opacity}`);
-    if (s.bgColor) st.push(`background-color:${s.bgColor}`);
-    if (s.bgImage) st.push(`background-image:${s.bgImage}`, `background-size:${s.bgSize || '100% 100%'}`, `background-repeat:no-repeat`, `background-position:${s.bgPosition || '0% 0%'}`);
-    if (s.borderRadius) st.push(`border-radius:${s.borderRadius}`);
-    if (s.border) st.push(`border:${s.border}`);
-    if (s.boxShadow) st.push(`box-shadow:${s.boxShadow}`);
-    if (e.role === 'image' && e.imgSrc) {
-      parts.push(`<img data-vi="${e.role}" style="${escapeAttr(st.join(';'))}" src="${escapeAttr(e.imgSrc)}"/>`);
-    } else if (e.text) {
-      const t = [`color:${s.color || '#000'}`, `font-size:${s.fontSize || '14px'}`, `line-height:${s.lineHeight || 'normal'}`];
-      if (s.fontFamily) t.push(`font-family:${s.fontFamily}`);
-      if (s.fontWeight) t.push(`font-weight:${s.fontWeight}`);
-      if (s.textAlign) t.push(`text-align:${s.textAlign}`);
-      if (s.whiteSpace) t.push(`white-space:${s.whiteSpace}`);
-      else t.push('white-space:pre-line');
-      // 用 flex 让文字在容器内垂直居中，还原 flex 布局下字形的实际位置
-      const justify = s.textAlign === 'right' ? 'flex-end' : s.textAlign === 'center' ? 'center' : 'flex-start';
-      const flexSt = `justify-content:${justify};align-items:center`;
-      parts.push(`<div data-vi="${e.role}" style="${escapeAttr(st.join(';') + ';display:flex;' + flexSt)}"><span style="${escapeAttr(t.join(';'))}">${escapeHtml(e.text)}</span></div>`);
-    } else {
-      parts.push(`<div data-vi="${e.role}" style="${escapeAttr(st.join(';'))}"></div>`);
-    }
-  }
-  return `<!DOCTYPE html>
-<html lang="en"><head><meta charset="UTF-8"/>
-<style>html,body{margin:0;padding:0;width:${VIEW_W}px;height:${VIEW_H}px;overflow:hidden}body{position:relative}img{max-width:none}</style>
-</head><body>
-${parts.join('\n')}
-</body></html>`;
-}
-
-function escapeHtml(s) {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-}
-// 内联属性值转义：双引号必须转义，否则会破坏属性边界
-function escapeAttr(s) {
-  return escapeHtml(s).replace(/"/g, '&quot;');
+  console.log('original.png:', path.join(OUT_DIR, 'original.png'));
 }
 
 main().catch((err) => { console.error(err); process.exit(1); });

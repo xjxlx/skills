@@ -2,8 +2,7 @@ const assert = require('node:assert/strict');
 const test = require('node:test');
 
 const {
-  buildResponsivePageRoot,
-  calculateFitDensity,
+  buildPageRoot,
   convertSemanticToDp,
   buildBoxDecorationModifier,
   buildCroppedBackgroundModifier,
@@ -16,31 +15,22 @@ const {
   shouldFillRootBackground,
 } = require('../compose-generation-core');
 
-test('运行时适配必须使用当前设计尺寸并按较小比例完整显示', () => {
-  assert.equal(calculateFitDensity({
-    containerWidthPx: 2880,
-    containerHeightPx: 1680,
-    designWidthDp: 800,
-    designHeightDp: 360,
-  }), 3.6);
-
-  const source = buildResponsivePageRoot({
+test('生成页面只输出内容根，尺寸适配交给 Activity 的 BaseV3Page', () => {
+  const source = buildPageRoot({
     pageName: 'SamplePage',
-    designWidthDp: 800,
-    designHeightDp: 360,
+    designWidthDp: 667,
+    designHeightDp: 375,
     rootBackgroundColor: 'Color.White',
-    outerBackgroundCode: '        OuterBackground()',
     backgroundCode: '        SampleBackground()',
     contentCode: '        SampleContent()',
   });
 
-  assert.match(source, /windowWidthPx \/ 800f/);
-  assert.match(source, /windowHeightPx \/ 360f/);
-  assert.match(source, /contentAlignment = Alignment\.Center/);
-  assert.equal((source.match(/\.background\(Color\.White\)/g) || []).length, 2);
-  assert.match(source, /OuterBackground\(\)/);
-  assert.match(source, /requiredSize\(width = 800\.dp, height = 360\.dp\)/);
-  assert.doesNotMatch(source, /Density\(density = 2f/);
+  assert.doesNotMatch(source, /BoxWithConstraints/);
+  assert.doesNotMatch(source, /LocalDensity/);
+  assert.doesNotMatch(source, /CompositionLocalProvider/);
+  assert.match(source, /Preview\(widthDp = 667, heightDp = 375/);
+  assert.match(source, /SampleBackground\(\)/);
+  assert.match(source, /SampleContent\(\)/);
 });
 
 test('px 转 dp 必须保留半像素逻辑精度', () => {
@@ -105,7 +95,7 @@ test('超出容器的背景图片必须从左上角无约束测量避免父布�
   );
 });
 
-test('高保真基线必须保留全部视觉元素并按 z 顺序输出', () => {
+test('生成阶段必须保留全部视觉元素并按 z 顺序输出', () => {
   const elements = [
     { domIndex: 9, z: 100, rect: { x: 0, y: 0, w: 10, h: 10 } },
     { domIndex: 2, z: 1, rect: { x: 0, y: 0, w: 10, h: 10 } },
@@ -159,7 +149,7 @@ test('设计稿已有充足行高时不得额外改变文字行高', () => {
   assert.equal(result.renderHeight, 20);
 });
 
-test('单行文本必须启用实际字宽适配而不是按设计框裁切', () => {
+test('单行文本允许墨迹溢出，多行文本保持裁切', () => {
   const result = deriveTextRenderMetrics({
     boundsHeight: 28,
     fontSize: 20,
@@ -168,7 +158,6 @@ test('单行文本必须启用实际字宽适配而不是按设计框裁切', ()
     isNowrap: true,
   });
 
-  assert.equal(result.fitWidth, true);
   assert.equal(result.allowInkOverflow, true);
 });
 
@@ -182,18 +171,6 @@ test('多行文本不能允许字形逃逸到相邻区块', () => {
   });
 
   assert.equal(result.allowInkOverflow, false);
-});
-
-test('文字必须保留平台字体安全 padding 防止字形被截断', () => {
-  const result = deriveTextRenderMetrics({
-    boundsHeight: 11,
-    fontSize: 11,
-    lineHeight: 11,
-    maxLines: 1,
-    isNowrap: true,
-  });
-
-  assert.equal(result.includeFontPadding, true);
 });
 
 test('只有从视口原点开始的背景才能转成 fillMaxSize', () => {
@@ -259,7 +236,7 @@ test('大字号按钮文字不能套用小状态徽章的垂直补偿', () => {
   });
 });
 
-test('普通文字必须保持设计稿原始对齐与现有基线补偿', () => {
+test('普通文字必须保持设计稿原始对齐和稳定视觉偏移', () => {
   const label = {
     domIndex: 104,
     role: 'text',

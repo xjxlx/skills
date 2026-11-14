@@ -122,7 +122,7 @@ function isCardLike(e, elements) {
 
 // 聚类：把互相相似的卡片聚成组，返回组数组（每组 ≥2 个）。
 // 子列表抑制：若某组所有卡片都严格落在另一更大组（卡片组）的卡片内，
-// 说明它是大卡片内部的子元素（如"今日已读"卡片的封面图自身也带背景图，会被判定为卡片），
+// 说明它是大卡片内部的子元素，避免因内部背景图被误判为新的卡片。
 // 应并入大列表项作为槽位，而不是独立成列表，否则会造成卡片内容与封面被渲染两次。
 function detectCardGroups(elements) {
   const cards = elements.filter((e) => isCardLike(e, elements));
@@ -401,87 +401,10 @@ function isContainedIn(e, card) {
   );
 }
 
-// 中文 → 驼峰英文（用于组件命名，覆盖本项目常见词，找不到返回 ''）
+// 数字或纯英文标签 → 驼峰英文；其他文本交由 DOM 类名和角色兜底，避免写入项目专用词典。
 function chineseToCamel(text) {
   if (!text || typeof text !== 'string') return '';
-  // 纯数字/数字开头 → 前缀 "Number"
   if (/^\d/.test(text)) return 'Number' + text.replace(/[^A-Za-z0-9]/g, '');
-  const mapping = {
-    '今日已读': 'TodayRead',
-    '近7天阅读量达标情况': 'WeekReadingTarget',
-    '学习报告': 'StudyReport',
-    '阅读量': 'ReadingVolume',
-    '阅读时长': 'ReadingDuration',
-    '查看详情': 'ViewDetail',
-    '磨耳朵': 'Listening',
-    '分享卡片': 'ShareCard',
-    '最近阅读平均AR': 'RecentAvgAR',
-    'Quiz平均正确率': 'QuizAvgCorrectRate',
-    '≥1000词达标': 'Target1000Words',
-    '连续5天': 'Streak5Days',
-    '共4本': 'Total4Books',
-    '今天': 'Today',
-    '未达标': 'NotAchieved',
-    '达标': 'Achieved',
-    '正确率': 'Accuracy',
-    '累计学习': 'TotalLearning',
-    '累计': 'Total',
-    '课程': 'Course',
-    '书架': 'Bookshelf',
-    '报告': 'Report',
-    '阅读': 'Reading',
-    '今日': 'Today',
-    '已读': 'Read',
-    '共': 'Total',
-    '卡片': 'Card',
-    '列表': 'List',
-    '标题': 'Title',
-    '背景': 'Background',
-    '图片': 'Image',
-    '图标': 'Icon',
-    '内容': 'Content',
-    '词': 'Words',
-    '分钟': 'Minutes',
-    '小时': 'Hours',
-    '本': 'Books',
-    '近7天': 'Week7',
-    '天': 'Day',
-    '阅读量达标': 'ReadingTargetMet',
-    '达标情况': 'TargetStatus',
-    '情况': 'Status',
-    '学习': 'Learning',
-    '时长': 'Duration',
-    '分享': 'Share',
-    '最近': 'Recent',
-    '平均': 'Avg',
-    'AR': 'AR',
-    '正确': 'Correct',
-    '率': 'Rate',
-    '自由读': 'FreeRead',
-    '单词': 'Word',
-    '连续': 'Streak',
-    '量': 'Volume',
-    '首': 'Book',
-    '第': '',
-    '章': 'Chapter',
-    '节': 'Section',
-    '总': 'Total',
-    '统计': 'Stats',
-  };
-  if (mapping[text]) return mapping[text];
-  // 子串匹配：按词条长度降序，让更具体的长短语优先命中
-  // （如"近7天阅读量达标情况"先命中完整词条，而不是先被"天"→Day 拆碎）。
-  const keys = Object.keys(mapping).sort((a, b) => b.length - a.length);
-  for (const cn of keys) {
-    if (text.includes(cn)) {
-      const before = text.split(cn)[0];
-      const after = text.split(cn).slice(1).join(cn);
-      let result = mapping[cn];
-      if (before && chineseToCamel(before)) result = chineseToCamel(before) + result;
-      if (after && chineseToCamel(after)) result = result + chineseToCamel(after);
-      return result;
-    }
-  }
   return '';
 }
 
@@ -508,7 +431,7 @@ function classNameSuffix(element) {
 // 从容器内部"直接包含"的文本中挑选最代表性的标题文本，用于容器语义命名。
 // "直接包含" = 文本不被容器内其它非文本元素严格包含（排除深层嵌套子卡片里的文本），
 // 这样统计卡整行等"无独立标题"的大容器不会误用子卡片的标题命名；
-// 而带独立标题的分区（如"今日已读"）能正确取到标题。
+// 而带独立标题的分区能正确取到标题。
 // 选取策略：只看容器顶部区域（标题一般在顶部）内的直接文本，按 最上 → 最左 取第一个；
 // 若无直接文本（大容器内全是子卡片）则返回 null，回退为通用命名。
 function findRepresentativeText(element, allElements) {
@@ -544,8 +467,7 @@ function findRepresentativeText(element, allElements) {
 }
 
 // 查找包含该元素的最小"有代表性标题"的容器（用于兜底命名的上下文）。
-// 例如"阅读量"卡内的进度条小色块没有直接标题，但其所属的"阅读量"卡有标题，
-// 用该标题命名 → ReadingVolumeBox，而不是 Test1PageBoxGroup。
+// 例如容器内的小色块没有直接标题，但所属卡片有标题，可用该标题补足命名上下文。
 function findEnclosingTitledSection(element, allElements) {
   if (!allElements || !element || !element.rect) return null;
   let best = null;
@@ -606,11 +528,9 @@ function buildSemanticSuffix(element) {
 }
 
 // 根据元素信息推断组件名（见名知意）：
-//   - 文本元素：用文本语义转英文驼峰（如"今日已读"→ TodayRead），不再拼接父上下文，
-//     避免出现 TodayReadTest1Page 这种不可读命名。长描述文本（>12 字符）不做整句翻译，
-//     用所在分区标题 + Description 兜底，避免 RecentNumber3AR2RAZ 这类乱码名。
-//   - 容器/图片元素：优先用"直接包含的标题文本"语义命名（含"今日已读"的分区 → TodayReadSection）；
-//     无语义标题时回退为 所在分区标题 + 语义后缀（如 阅读量卡内色块 → ReadingVolumeBox），
+//   - 文本元素：数字和纯英文标签可转为驼峰名；中文文本使用角色和父上下文兜底。
+//   - 容器/图片元素：优先使用直接包含文本中的可转换名称；
+//     无语义标题时回退为所在分区上下文 + 语义后缀，
 //     细线分隔图（宽/高 ≤3px）命名为 Divider。
 function inferComponentName(element, parentContext = '', allElements = []) {
   const ctx = parentContext ? capitalizeFirst(parentContext) : '';

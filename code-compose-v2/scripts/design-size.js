@@ -1,6 +1,9 @@
 const fs = require('node:fs');
 const path = require('node:path');
 
+const EXPECTED_WIDTH = 1334;
+const EXPECTED_HEIGHT = 750;
+
 function positiveDimension(value, name) {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -9,20 +12,11 @@ function positiveDimension(value, name) {
   return Math.round(parsed);
 }
 
-function detectDesignSize(directory, override = {}) {
-  const hasWidth = override.width !== undefined && override.width !== '';
-  const hasHeight = override.height !== undefined && override.height !== '';
-  if (hasWidth || hasHeight) {
-    if (!hasWidth || !hasHeight) {
-      throw new Error('DESIGN_WIDTH 与 DESIGN_HEIGHT 必须成对设置');
-    }
-    return {
-      w: positiveDimension(override.width, 'DESIGN_WIDTH'),
-      h: positiveDimension(override.height, 'DESIGN_HEIGHT'),
-      source: 'environment',
-    };
-  }
-
+/**
+ * 从设计包 CSS 或目录名读取当前页面尺寸。
+ * 尺寸只用于确认设计稿符合固定基准，不接受环境变量覆盖。
+ */
+function detectDesignSize(directory) {
   let cssFiles = [];
   try {
     cssFiles = fs.readdirSync(directory)
@@ -60,8 +54,27 @@ function detectDesignSize(directory, override = {}) {
   }
 
   throw new Error(
-    '无法识别设计稿尺寸：请确保 CSS 的 .page 包含 px 宽高，或成对设置 DESIGN_WIDTH 与 DESIGN_HEIGHT',
+    '无法识别设计稿尺寸：请确保 CSS 的 .page 包含 px 宽高，或目录名包含 1334x750。',
   );
 }
 
-module.exports = { detectDesignSize };
+/**
+ * 校验设计稿必须使用固定的横屏基准。
+ * 不匹配时直接停止，禁止通过环境变量或局部缩放继续执行。
+ */
+function requireSupportedDesignSize(size) {
+  if (size.w !== EXPECTED_WIDTH || size.h !== EXPECTED_HEIGHT) {
+    throw new Error(
+      `设计稿尺寸不匹配：需要 ${EXPECTED_WIDTH}x${EXPECTED_HEIGHT}，实际为 ${size.w}x${size.h}。` +
+      '请重新导出正确尺寸的 HTML 设计包。',
+    );
+  }
+  return size;
+}
+
+module.exports = {
+  EXPECTED_HEIGHT,
+  EXPECTED_WIDTH,
+  detectDesignSize,
+  requireSupportedDesignSize,
+};
