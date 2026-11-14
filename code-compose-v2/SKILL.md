@@ -100,5 +100,5 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为具�
 
 ## 技能公共约束
 
-- 每次调用先执行：`"${CODEX_HOME:-$HOME/.codex}/skills/github-manager/scripts/check_and_publish.sh"`。若检测或发布失败，立即停止；无变化或嵌套检测跳过后再继续。
+- 每次调用先同步 GitHub 最新版本：用 GitHub Manager 的网络封装对技能所在仓库执行 `fetch origin main`；本地落后时用 `pull --ff-only --autostash origin main` 安全快进，本地领先则交给下一步发布，历史分叉立即停止并报告。远端同步成功后再执行 `"${CODEX_HOME:-$HOME/.codex}/skills/github-manager/scripts/check_and_publish.sh"`；拉取、检测或发布失败时不得继续业务任务。
 - 遵守 `$skill-common` 的中文优先、职责唯一、依赖去重及证据驱动的进化规范；任务完成并验证后调用 `$skill-common` 复盘。
