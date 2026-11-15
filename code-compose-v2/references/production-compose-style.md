@@ -16,9 +16,9 @@
 
 ## 尺寸与锚点
 
-- 生成页面内使用 `667×375dp` 设计坐标。
+- 生成页面内使用 `667×375dp` 设计坐标；分母复用 `AutoSizeConfig`：横向÷`DEFAULT_HEIGHT`(667)、纵向÷`DEFAULT_WIDTH`(375)，禁止页面级或局部尺寸常量。
 - 页面不进行第二层窗口缩放。
-- 页面首层必须优先使用 `ConstraintLayout`；内部固定区域可继续使用 Guideline 或经过验证的固定尺寸。
+- 页面首层必须优先使用 `ConstraintLayout`；Guide 紧挨使用它的子布局声明；约束子布局用 start/end/top/bottom 边界 Guide + `Dimension.fillToConstraints` 控制宽高，禁止 `Dimension.value`；内部图标与文字测量盒可用 padding/size。
 - 连续内容优先使用 Row/Column/weight/spacedBy。
 - 图片、背景和卡片有稳定比例时使用 `aspectRatio`。
 - 只有局部光学修正才能使用 offset，整页 offset 或缩放不可接受。
@@ -47,7 +47,7 @@
 
 ## 验收与正式集成
 
-- 测试阶段保留 `e<domIndex>` 标签用于边界校验。
+- 测试阶段保留 `e<domIndex>` 标签用于边界校验；验收通过后移除全部标签与 `testTagsAsResourceId`，重新安装并像素复核。
 - 正式业务整合时只保留有价值的语义标签和无障碍标记。
 - 页面状态变化后同时复核内容结果和固定区域 bounds。
 - 未通过统一 95% 验收时不得宣称完成。

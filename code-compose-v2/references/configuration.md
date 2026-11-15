@@ -47,6 +47,7 @@ export COMPOSE_TEXT_IMPORT="import com.example.widget.TextItem"
 | `COMPOSE_REFERENCE_MANIFEST` | 无 | 主页面和通用状态片段的 JSON 清单 |
 | `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 优先 code-image；`copy` 先从设计包复制；`existing` 只接受显式映射 |
 | `COMPOSE_RESOURCE_MAP` | 无 | 设计图片文件到现有 `R` 资源的映射 |
+| `COMPOSE_SIZE_IMPORTS` | `AutoSizeConfig.DEFAULT_HEIGHT/DEFAULT_WIDTH` 两条 import | 坐标分母 import；项目分母常量不同时覆盖 |
 | `ADB_SERIAL` | `emulator-5554` | 验证目标模拟器 |
 | `VALIDATE_PIXEL_PASS` | `0.95` | 整页像素相似度阈值 |
 | `VALIDATE_STRUCT_PASS` | `0.95` | 元素边界通过率阈值 |

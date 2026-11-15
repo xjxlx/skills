@@ -259,6 +259,8 @@ function launch(activity) {
 }
 
 function readBounds(scaleX, scaleY) {
+  // 先清除设备上的旧 dump：dump 失败时若复用上一轮 ui.xml，会把旧界面的结构当成当前结果。
+  execSync(`${ADB} shell rm -f /sdcard/ui.xml`, { stdio: 'ignore', shell: true });
   execSync(`${ADB} shell uiautomator dump /sdcard/ui.xml`, { stdio: 'ignore', shell: true });
   execSync(`${ADB} pull /sdcard/ui.xml "${UI_XML}"`, { stdio: 'ignore', shell: true });
   const xml = fs.readFileSync(UI_XML, 'utf8');

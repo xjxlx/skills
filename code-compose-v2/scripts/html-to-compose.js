@@ -65,6 +65,7 @@ const {
   COMPOSE_R_IMPORT,
   COMPOSE_RESOURCE_MAP,
   COMPOSE_RESOURCE_MODE,
+  COMPOSE_SIZE_IMPORTS,
   COMPOSE_TEXT_IMPORT,
   DESIGN_DIR,
   EXPERIENCE_RULES_PATH,
@@ -112,6 +113,7 @@ const KOTLIN_PACKAGE = requiredSetting('COMPOSE_PACKAGE', COMPOSE_PACKAGE);
 const R_IMPORT = requiredSetting('COMPOSE_R_IMPORT', COMPOSE_R_IMPORT);
 const TEXT_IMPORT = requiredSetting('COMPOSE_TEXT_IMPORT', COMPOSE_TEXT_IMPORT);
 const IMAGE_IMPORTS = requiredSetting('COMPOSE_IMAGE_IMPORTS', COMPOSE_IMAGE_IMPORTS);
+const SIZE_IMPORTS = requiredSetting('COMPOSE_SIZE_IMPORTS', COMPOSE_SIZE_IMPORTS);
 
 // ---------------- 工具 ----------------
 function rgbToColor(rgb) {
@@ -1287,7 +1289,7 @@ function uniqueReferenceName(componentName, ctx) {
 function uniqueGuideNames(componentName, ctx) {
   ctx.usedGuides = ctx.usedGuides || new Set();
   const base = `${componentName.charAt(0).toLowerCase()}${componentName.slice(1)}`;
-  const suffixes = ['Start', 'Top', 'Bottom'];
+  const suffixes = ['Start', 'End', 'Top', 'Bottom'];
   return suffixes.map((suffix) => {
     let name = `${base}${suffix}`;
     let index = 2;
@@ -1388,9 +1390,10 @@ function genRootConstraintCall(meta, reference, guides) {
     `        ${meta.name}(\n` +
     `            modifier = Modifier.constrainAs(${reference}) {\n` +
     `                start.linkTo(${guides[0]})\n` +
-    `                top.linkTo(${guides[1]})\n` +
-    `                bottom.linkTo(${guides[2]})\n` +
-    `                width = Dimension.value(${meta.e.rect.w}.dp)\n` +
+    `                end.linkTo(${guides[1]})\n` +
+    `                top.linkTo(${guides[2]})\n` +
+    `                bottom.linkTo(${guides[3]})\n` +
+    `                width = Dimension.fillToConstraints\n` +
     `                height = Dimension.fillToConstraints\n` +
     `            },\n` +
     `        )`;
@@ -1504,7 +1507,6 @@ function generatePage(semantic, imgMap, ruleState) {
     .filter(Boolean);
 
   const referenceNames = [];
-  const guideLines = [];
   let backgroundCode = '';
   if (backgroundItem) {
     const backgroundReference = 'pageBackgroundRef';
@@ -1515,17 +1517,15 @@ function generatePage(semantic, imgMap, ruleState) {
       'pageBackgroundBottom',
     ];
     referenceNames.push(backgroundReference);
-    guideLines.push(
-      `        val ${backgroundGuides[0]} = createGuidelineFromStart(0f / PAGE_WIDTH)`,
-      `        val ${backgroundGuides[1]} = createGuidelineFromEnd(0f)`,
-      `        val ${backgroundGuides[2]} = createGuidelineFromTop(0f / PAGE_HEIGHT)`,
-      `        val ${backgroundGuides[3]} = createGuidelineFromBottom(0f / PAGE_HEIGHT)`,
-    );
     const backgroundTestTag = backgroundItem.bg.domIndex > 0
       ? `.testTag("e${backgroundItem.bg.domIndex}")`
       : '';
     backgroundCode =
       `        // 绘制铺满页面的背景图。\n` +
+      `        val ${backgroundGuides[0]} = createGuidelineFromStart(0f / DEFAULT_HEIGHT)\n` +
+      `        val ${backgroundGuides[1]} = createGuidelineFromEnd(0f / DEFAULT_HEIGHT)\n` +
+      `        val ${backgroundGuides[2]} = createGuidelineFromTop(0f / DEFAULT_WIDTH)\n` +
+      `        val ${backgroundGuides[3]} = createGuidelineFromBottom(0f / DEFAULT_WIDTH)\n` +
       `        ImageItem(\n` +
       `            parameter = ImageParameter(\n` +
       `                data = R.mipmap.${backgroundItem.res},\n` +
@@ -1545,20 +1545,21 @@ function generatePage(semantic, imgMap, ruleState) {
   for (const entry of rootEntries) {
     referenceNames.push(entry.reference);
     const { x, y, w, h } = entry.meta.e.rect;
-    guideLines.push(
-      `        val ${entry.guides[0]} = createGuidelineFromStart(${r05(x)}f / PAGE_WIDTH)`,
-      `        val ${entry.guides[1]} = createGuidelineFromTop(${r05(y)}f / PAGE_HEIGHT)`,
-      `        val ${entry.guides[2]} = createGuidelineFromBottom(${r05(Math.max(0, designH - y - h))}f / PAGE_HEIGHT)`,
-    );
+    entry.guideCode = [
+      `        val ${entry.guides[0]} = createGuidelineFromStart(${r05(x)}f / DEFAULT_HEIGHT)`,
+      `        val ${entry.guides[1]} = createGuidelineFromEnd(${r05(Math.max(0, designW - x - w))}f / DEFAULT_HEIGHT)`,
+      `        val ${entry.guides[2]} = createGuidelineFromTop(${r05(y)}f / DEFAULT_WIDTH)`,
+      `        val ${entry.guides[3]} = createGuidelineFromBottom(${r05(Math.max(0, designH - y - h))}f / DEFAULT_WIDTH)`,
+    ].join('\n');
   }
 
   const refsCode = referenceNames.length > 0
     ? `        val (${referenceNames.join(', ')}) = createRefs()\n`
     : '';
   const calls = rootEntries
-    .map((entry) => genRootConstraintCall(entry.meta, entry.reference, entry.guides))
+    .map((entry) => `${entry.guideCode}\n${genRootConstraintCall(entry.meta, entry.reference, entry.guides)}`)
     .filter(Boolean);
-  const callsStr = [refsCode + guideLines.join('\n') + (guideLines.length ? '\n' : ''), backgroundCode, calls.join('\n')]
+  const callsStr = [refsCode, backgroundCode, calls.join('\n')]
     .filter(Boolean)
     .join('');
   const sectionsCode = comps.join('\n');
@@ -1620,10 +1621,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 ${TEXT_IMPORT}
 ${IMAGE_IMPORTS}
+${SIZE_IMPORTS}
 ${R_IMPORT}
-
-private const val PAGE_WIDTH = ${designW}f
-private const val PAGE_HEIGHT = ${designH}f
 
 /** 将设计稿数字字重转换为 Compose FontWeight。 */
 private fun fontWeightOf(weight: Int): FontWeight = when {
@@ -1638,11 +1637,12 @@ private fun fontWeightOf(weight: Int): FontWeight = when {
  * 由 1334x750 HTML 设计稿生成的 Compose 页面。
  * 布局策略：
  *  - 页面首个布局固定使用 ConstraintLayout，并通过 createRefs 统一声明全部子布局引用。
- *  - 每个一级子布局至少使用三条 Guide，并至少一个维度使用 fillToConstraints。
+ *  - 每个一级子布局使用 start/end/top/bottom 四条边界 Guide，Guide 紧挨使用处声明，宽高均用 fillToConstraints。
+ *  - 坐标分母复用 AutoSizeConfig：横向除以 DEFAULT_HEIGHT、纵向除以 DEFAULT_WIDTH。
  *  - 一级子布局调用点和子 Composable 方法均保留不带重复前缀的中文用途说明。
  *  - 以语义树为真源，直接按照 DOM 几何、样式和对齐关系选择 Compose 容器。
  *  - 页面本身不处理窗口适配，由 Activity 的 BaseV3Page 统一包裹。
- *  - 每个视觉元素带 Modifier.testTag("e<domIndex>")；根布局不生成 e0 标签。
+ *  - 每个视觉元素带 Modifier.testTag("e<domIndex>") 仅供验收；根布局不生成 e0 标签，验收通过后移除全部标签。
  */
 ${pageRoot}
 ${sectionsCode}
@@ -1680,8 +1680,14 @@ function assertGeneratedLayoutPolicy(code) {
   if (/=\s*createRef\(\)/.test(code)) violations.push('存在单个 createRef()');
   if (/testTag\("e0"\)/.test(code)) violations.push('根布局生成了 testTag("e0")');
   if (code.includes('子布局：')) violations.push('存在旧注释前缀“子布局：”');
-  if (/DEFAULT_(?:WIDTH|HEIGHT)/.test(code)) {
-    violations.push('使用了语义不明确的 DEFAULT_WIDTH/DEFAULT_HEIGHT');
+  if (/DEFAULT_(?:WIDTH|HEIGHT)/.test(code) === false) {
+    violations.push('坐标分母必须使用 AutoSizeConfig.DEFAULT_WIDTH/DEFAULT_HEIGHT');
+  }
+  if (/private const val PAGE_(?:WIDTH|HEIGHT)/.test(code)) {
+    violations.push('存在页面级 PAGE_WIDTH/PAGE_HEIGHT 常量');
+  }
+  if (/Dimension\.value\(/.test(code)) {
+    violations.push('约束尺寸使用 Dimension.value 固定值，应改用边界 Guide + fillToConstraints');
   }
   if (violations.length > 0) {
     throw new Error(`生成布局违反 Skill 约束：${violations.join('；')}`);
