@@ -6,8 +6,8 @@
 
 - 检查当前工作区改动，保留用户已有修改。
 - 确认设计稿为 `1334×750px`。
-- 定位项目全屏 Compose 测试 Activity，确认它由 `BaseV3Page` 包裹。
-- 只扫描一次 Manifest，将 Activity、Manifest 路径和横屏修改结果写入 `runtime-context.json`。
+- 默认定位项目的 `TestActivity`，确认它由 `BaseV3Page` 包裹；指定页面时使用 `COMPOSE_ACTIVITY`。
+- 只扫描一次 Manifest 和对应 Gradle 模块，将包名、Activity 完整类名、Manifest 路径和横屏修改结果写入 `runtime-context.json`。
 - 检查 `node_modules` 已存在；正常流程不执行 `npm ci`。
 
 ## 2. HTML 解析
@@ -28,10 +28,14 @@
 
 生成器直接根据 HTML 布局参数决定 Compose 结构：
 
-- 根据父容器和相对位置选择 Box 或约束区域。
+- 页面首个布局默认生成 `ConstraintLayout`，全部子布局引用统一用一次 `createRefs()` 声明。
+- 每个约束子布局至少生成三条 Guide，并在 `constrainAs` 中至少使用一个 `Dimension.fillToConstraints`；纯文字布局可豁免。
+- 只有用户明确指定其他根布局，或现有宿主存在不可兼容契约时才允许例外，并在入口 KDoc 中说明原因。
 - 根据连续子项的对齐轴和间距选择 Row/Column。
 - 根据重复外框、公共槽位和视口选择 Lazy 容器。
 - 根据背景、层级和覆盖关系保留必要遮罩。
+- 每个生成子布局的调用点写不带“子布局：”前缀的中文用途注释；子布局 Composable 写中文 KDoc，包含用途、位置和尺寸。
+- 根 `ConstraintLayout` 不写 `testTag("e0")`，校验标签只标记实际视觉元素。
 - 根据资源 MD5、项目映射和视觉证据选择 ImageItem。
 - 根据文本内容和样式选择 TextItem。
 
@@ -57,16 +61,21 @@ InitView {
 
 ## 5. 运行方式
 
-生成 Kotlin 和资源后，不在脚本内构建 APK。通过 Android Studio/IntelliJ 的 Run、Running 或 Apply Changes 刷新已运行应用。
+生成 Kotlin 和资源后，不使用 Android Studio/IntelliJ 的 Run、Running 或 Apply Changes。代码有改动时，在终端执行项目对应的 Debug 安装任务，例如：
+
+```bash
+./gradlew :app:installDebug
+```
 
 验证脚本只负责：
 
-- `am force-stop` 当前包。
-- `am start -W` 启动目标 Activity。
+- 从 `runtime-context.json` 读取缓存的包名与 Activity。
+- `am force-stop` 缓存的当前包。
+- `am start -W -n <缓存的 Activity> -a MAIN -c LAUNCHER` 启动默认或指定测试页面。
 - 短轮询等待 `testTag` 节点。
 - 截图、dump 和报告。
 
-修改代码后如果 IDE 尚未刷新，验证结果仍是旧页面，必须先完成 IDE 运行再复测。
+修改代码后必须先通过命令行完成安装，再复测；否则验证结果仍是旧页面。
 
 ## 6. 统一验收
 
@@ -104,7 +113,7 @@ InitView {
 4. 文本色差或裁切：检查 TextItem 字号、行高、maxLines、对齐、父高度和行盒。
 5. 局部层级错误：检查 z 序、遮罩、Dialog/Popup 宿主和覆盖节点。
 
-每轮只根据真实报告修正，不修改设计图片模拟结果。最多执行 5 轮生成、IDE 刷新和验证；仍未通过时保留最佳报告并明确停止。
+每轮只根据真实报告修正，不修改设计图片模拟结果。最多执行 5 轮生成、命令行安装和验证；仍未通过时保留最佳报告并明确停止。
 
 ## 8. 产物
 

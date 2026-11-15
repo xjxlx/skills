@@ -31,7 +31,7 @@ module.exports = {
   ADB,
   CHROME_BIN: process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   COMPOSE_ACTIVITY: process.env.COMPOSE_ACTIVITY,
-  COMPOSE_ACTIVITY_MODE: process.env.COMPOSE_ACTIVITY_MODE || 'launcher',
+  COMPOSE_ACTIVITY_MODE: process.env.COMPOSE_ACTIVITY_MODE || 'existing',
   COMPOSE_KOTLIN_DIR: resolveFromProject(process.env.COMPOSE_KOTLIN_DIR, PROJECT_ROOT),
   COMPOSE_RES_DIR: resolveFromProject(process.env.COMPOSE_RES_DIR, PROJECT_ROOT),
   COMPOSE_PACKAGE: process.env.COMPOSE_PACKAGE,

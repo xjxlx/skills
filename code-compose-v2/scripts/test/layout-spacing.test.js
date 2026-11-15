@@ -87,6 +87,20 @@ test('生成页面不得创建第二套窗口适配层', () => {
   assert.doesNotMatch(source, /LocalDensity/);
   assert.doesNotMatch(source, /CompositionLocalProvider/);
   assert.doesNotMatch(source, /AutoSizeConfig/);
+  assert.match(source, /ConstraintLayout\(/);
+  assert.match(source, /val \(+[^)]*\) = createRefs\(\)/);
+  assert.match(source, /constrainAs\(/);
+  assert.match(source, /createGuidelineFromStart\(/);
+  assert.match(source, /createGuidelineFromTop\(/);
+  assert.match(source, /createGuidelineFromBottom\(/);
+  assert.match(source, /height = Dimension\.fillToConstraints/);
+  assert.match(source, /Dimension\.value\(/);
+  assert.doesNotMatch(source, /testTag\("e0"\)/);
+  assert.doesNotMatch(source, /= createRef\(\)/);
+  assert.match(source, /\/\/ 展示文本“页面标题”/);
+  assert.doesNotMatch(source, /子布局：/);
+  assert.match(source, /\/\*\*[\s\S]*用途：展示文本“页面标题”/);
+  assert.match(source, /private fun \w+\(modifier: Modifier = Modifier\)/);
 });
 
 function createContext() {
@@ -109,6 +123,8 @@ test('纵向相邻元素使用后一个子项的 top padding 表达间距', () =
   );
 
   assert.match(source, /\.padding\(top = 11\.dp\)/);
+  assert.match(source, /\/\/ 将 2 个相邻元素按 Column 排列/);
+  assert.doesNotMatch(source, /子布局：/);
   assert.doesNotMatch(source, /Spacer\(/);
 });
 
@@ -125,5 +141,7 @@ test('横向相邻元素使用后一个子项的 start padding 表达间距', ()
   );
 
   assert.match(source, /\.padding\(start = 21\.dp\)/);
+  assert.match(source, /\/\/ 将 2 个相邻元素按 Row 排列/);
+  assert.doesNotMatch(source, /子布局：/);
   assert.doesNotMatch(source, /Spacer\(/);
 });

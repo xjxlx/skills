@@ -1143,6 +1143,7 @@ ${extraRender}
       (viewportRuleEnabled ? `                contentPadding = PaddingValues(bottom = ${rowGap}.dp),\n` : '') +
       `            ) {\n` +
       `                items(${dataVar}) { item ->\n` +
+      `                    // 渲染单张网格卡片及其槽位内容。\n` +
       `                    ${itemName}(item)\n` +
       `                }\n` +
       `            }\n` +
@@ -1160,6 +1161,7 @@ ${extraRender}
       (viewportRuleEnabled ? `                contentPadding = PaddingValues(bottom = ${rowGap}.dp),\n` : '') +
       `            ) {\n` +
       `                items(${dataVar}) { item ->\n` +
+      `                    // 渲染单张纵向列表卡片及其槽位内容。\n` +
       `                    ${itemName}(item)\n` +
       `                }\n` +
       `            }\n` +
@@ -1177,6 +1179,7 @@ ${extraRender}
       (viewportRuleEnabled ? `                contentPadding = PaddingValues(end = ${colGap}.dp),\n` : '') +
       `            ) {\n` +
       `                items(${dataVar}) { item ->\n` +
+      `                    // 渲染单张横向列表卡片及其槽位内容。\n` +
       `                    ${itemName}(item)\n` +
       `                }\n` +
       `            }\n` +
@@ -1238,6 +1241,7 @@ function renderFlowGroup(type, children, parentRect, ctx) {
     ? `Modifier.padding(start = ${Math.max(0, common - parentRect.x)}.dp, top = ${Math.max(0, sorted[0].e.rect.y - parentRect.y)}.dp)`
     : `Modifier.padding(start = ${Math.max(0, sorted[0].e.rect.x - parentRect.x)}.dp, top = ${Math.max(0, common - parentRect.y)}.dp)`;
   return (
+    `                // 将 ${children.length} 个相邻元素按 ${type} 排列并保持设计间距。\n` +
     `                ${type}(\n` +
     `                    modifier = ${padStr},\n` +
     `                ) {\n` +
@@ -1256,12 +1260,57 @@ function uniqueComposeName(base, ctx) {
   return name;
 }
 
+function compactText(text, limit = 20) {
+  const normalized = String(text || '').trim().replace(/\s+/g, ' ');
+  return normalized.length > limit ? `${normalized.slice(0, limit)}…` : normalized;
+}
+
+/**
+ * 根据 DOM 语义生成生成代码中的中文用途说明。
+ */
+function describeElementPurpose(e) {
+  const text = compactText(e.text);
+  if (text) return `展示文本“${text}”`;
+  if (e.imgSrc || (e.style && e.style.bgImage) || e.role === 'bg-image') return '渲染图片或背景视觉';
+  if (e.style && e.style.bgColor) return '提供视觉背景与分区容器';
+  if (e.className) return `承载 ${e.className} 区域`;
+  if (e.role) return `承载 ${e.role} 区域`;
+  return '承载页面一级区块';
+}
+
+/**
+ * 为根级 ConstraintLayout 子项生成唯一引用名。
+ */
+function uniqueReferenceName(componentName, ctx) {
+  ctx.usedRefs = ctx.usedRefs || new Set();
+  const base = `${componentName.charAt(0).toLowerCase()}${componentName.slice(1)}Ref`;
+  let name = base;
+  let index = 2;
+  while (ctx.usedRefs.has(name)) name = `${base}${index++}`;
+  ctx.usedRefs.add(name);
+  return name;
+}
+
+function uniqueGuideNames(componentName, ctx) {
+  ctx.usedGuides = ctx.usedGuides || new Set();
+  const base = `${componentName.charAt(0).toLowerCase()}${componentName.slice(1)}`;
+  const suffixes = ['Start', 'Top', 'Bottom'];
+  return suffixes.map((suffix) => {
+    let name = `${base}${suffix}`;
+    let index = 2;
+    while (ctx.usedGuides.has(name)) name = `${base}${suffix}${index++}`;
+    ctx.usedGuides.add(name);
+    return name;
+  });
+}
+
 // 生成一个节点的元素级 Composable（每个元素一个函数，避免 MethodTooLarge）。
 // 采用嵌套层级渲染：当前节点内容 + 背景层（同 rect 兄弟降级而来） + 子组件（相对父容器定位）
 // + 列表注入（当前节点是列表宿主时，在其内容与子节点之后追加 Lazy 容器）。
 // 返回调用表达式；体注册到 comps。
-function genNode(node, parentRect, ctx) {
+function genNode(node, parentRect, ctx, options = {}) {
   const e = node.e;
+  const constrainedRoot = options.constrainedRoot === true;
   // 相对父容器坐标，保留 0.5dp 精度（r05 已保证非负），避免累计取整导致坐标漂移。
   const relX = r05(e.rect.x - parentRect.x);
   // 坐标严格按设计稿 rect（dp）放置，不做任何 CJK 墨迹补偿。
@@ -1317,18 +1366,43 @@ function genNode(node, parentRect, ctx) {
   if (e.text) descParts.push(`文本：${e.text.trim().replace(/\s+/g, ' ')}`);
   if (e.className) descParts.push(`类名：${e.className}`);
   if (e.role) descParts.push(`角色：${e.role}`);
-  const comment = `/**\n * ${descParts.join('；')}\n * 位置：(x=${relX}, y=${relY}) 相对父容器，尺寸：${e.rect.w}x${e.rect.h}dp\n */`;
+  const purpose = describeElementPurpose(e);
+  const comment = `/**\n * 用途：${purpose}。\n * ${descParts.join('；')}\n * 位置：(x=${relX}, y=${relY}) 相对父容器，尺寸：${e.rect.w}x${e.rect.h}dp\n */`;
+  const modifierExpression = constrainedRoot
+    ? 'modifier'
+    : `Modifier.padding(start = ${relX}.dp, top = ${relY}.dp)${hostModifier}`;
+  const functionSignature = constrainedRoot
+    ? `private fun ${name}(modifier: Modifier = Modifier)`
+    : `private fun ${name}()`;
   comps.push(
     `${comment}\n` +
       `@Composable\n` +
-      `private fun ${name}() {\n` +
+      `${functionSignature} {\n` +
       `    Box(\n` +
-      `        modifier = Modifier.padding(start = ${relX}.dp, top = ${relY}.dp)${hostModifier},\n` +
+      `        modifier = ${modifierExpression},\n` +
       `    ) {\n` +
       bodyLines.join('\n') +
       `\n    }\n}\n`
   );
-  return `            ${name}()`;
+  if (options.returnMeta === true) return { name, purpose, e };
+  return `            // ${purpose}。\n            ${name}()`;
+}
+
+/**
+ * 将页面一级子布局放入根 ConstraintLayout，并用设计坐标生成约束。
+ */
+function genRootConstraintCall(meta, reference, guides) {
+  if (!meta) return '';
+  return `        // ${meta.purpose}。\n` +
+    `        ${meta.name}(\n` +
+    `            modifier = Modifier.constrainAs(${reference}) {\n` +
+    `                start.linkTo(${guides[0]})\n` +
+    `                top.linkTo(${guides[1]})\n` +
+    `                bottom.linkTo(${guides[2]})\n` +
+    `                width = Dimension.value(${meta.e.rect.w}.dp)\n` +
+    `                height = Dimension.fillToConstraints\n` +
+    `            },\n` +
+    `        )`;
 }
 
 function generatePage(semantic, imgMap, ruleState) {
@@ -1343,7 +1417,7 @@ function generatePage(semantic, imgMap, ruleState) {
   //    避免它被当成普通元素生成覆盖层而盖住根背景图。
   const bgIndex = elements.findIndex((e) => isFullScreenBg(e, designW, designH));
   const pageIndex = elements.findIndex((e) => isFullScreenPlainBox(e, designW, designH));
-  let bgCode = '';
+  let backgroundItem = null;
   let rootBgColor = null;
   let restElements = elements;
   const skipIndices = new Set();
@@ -1351,15 +1425,7 @@ function generatePage(semantic, imgMap, ruleState) {
     const bg = elements[bgIndex];
     const res = resolveResName(bg, imgMap);
     if (res) {
-      bgCode =
-        `        // 根布局背景图\n` +
-        `        ImageItem(\n` +
-        `            parameter = ImageParameter(\n` +
-        `                data = R.mipmap.${res},\n` +
-        `                modifier = Modifier.fillMaxSize().testTag("e${bg.domIndex}"),\n` +
-        `                contentScale = ContentScale.FillBounds,\n` +
-        `            )\n` +
-        `        )\n`;
+      backgroundItem = { bg, res };
     }
     skipIndices.add(bgIndex);
   }
@@ -1431,15 +1497,83 @@ function generatePage(semantic, imgMap, ruleState) {
   // 5) 树形嵌套渲染：组件按几何包含关系层层嵌套，列表不会跑到父组件之外。
   const ROOT_RECT = { x: 0, y: 0, w: designW, h: designH };
   roots.sort((a, b) => (a.e.z || 0) - (b.e.z || 0));
-  const calls = roots.map((r) => genNode(r, ROOT_RECT, ctx)).filter(Boolean);
-  const callsStr = calls.join('\n');
+  const rootEntries = roots
+    .map((root) => {
+      const meta = genNode(root, ROOT_RECT, ctx, {
+        constrainedRoot: true,
+        returnMeta: true,
+      });
+      if (!meta) return null;
+      return {
+        meta,
+        reference: uniqueReferenceName(meta.name, ctx),
+        guides: uniqueGuideNames(meta.name, ctx),
+      };
+    })
+    .filter(Boolean);
+
+  const referenceNames = [];
+  const guideLines = [];
+  let backgroundCode = '';
+  if (backgroundItem) {
+    const backgroundReference = 'pageBackgroundRef';
+    const backgroundGuides = [
+      'pageBackgroundStart',
+      'pageBackgroundEnd',
+      'pageBackgroundTop',
+      'pageBackgroundBottom',
+    ];
+    referenceNames.push(backgroundReference);
+    guideLines.push(
+      `        val ${backgroundGuides[0]} = createGuidelineFromStart(0f / DEFAULT_WIDTH)`,
+      `        val ${backgroundGuides[1]} = createGuidelineFromEnd(0f)`,
+      `        val ${backgroundGuides[2]} = createGuidelineFromTop(0f / DEFAULT_HEIGHT)`,
+      `        val ${backgroundGuides[3]} = createGuidelineFromBottom(0f / DEFAULT_HEIGHT)`,
+    );
+    backgroundCode =
+      `        // 绘制铺满页面的背景图。\n` +
+      `        ImageItem(\n` +
+      `            parameter = ImageParameter(\n` +
+      `                data = R.mipmap.${backgroundItem.res},\n` +
+      `                modifier = Modifier.testTag("e${backgroundItem.bg.domIndex}").constrainAs(${backgroundReference}) {\n` +
+      `                    start.linkTo(${backgroundGuides[0]})\n` +
+      `                    end.linkTo(${backgroundGuides[1]})\n` +
+      `                    top.linkTo(${backgroundGuides[2]})\n` +
+      `                    bottom.linkTo(${backgroundGuides[3]})\n` +
+      `                    width = Dimension.fillToConstraints\n` +
+      `                    height = Dimension.fillToConstraints\n` +
+      `                },\n` +
+      `                contentScale = ContentScale.FillBounds,\n` +
+      `            )\n` +
+      `        )\n`;
+  }
+
+  for (const entry of rootEntries) {
+    referenceNames.push(entry.reference);
+    const { x, y, w, h } = entry.meta.e.rect;
+    guideLines.push(
+      `        val ${entry.guides[0]} = createGuidelineFromStart(${r05(x)}f / DEFAULT_WIDTH)`,
+      `        val ${entry.guides[1]} = createGuidelineFromTop(${r05(y)}f / DEFAULT_HEIGHT)`,
+      `        val ${entry.guides[2]} = createGuidelineFromBottom(${r05(Math.max(0, designH - y - h))}f / DEFAULT_HEIGHT)`,
+    );
+  }
+
+  const refsCode = referenceNames.length > 0
+    ? `        val (${referenceNames.join(', ')}) = createRefs()\n`
+    : '';
+  const calls = rootEntries
+    .map((entry) => genRootConstraintCall(entry.meta, entry.reference, entry.guides))
+    .filter(Boolean);
+  const callsStr = [refsCode + guideLines.join('\n') + (guideLines.length ? '\n' : ''), backgroundCode, calls.join('\n')]
+    .filter(Boolean)
+    .join('');
   const sectionsCode = comps.join('\n');
   const pageRoot = buildPageRoot({
     pageName: PAGE_NAME,
     designWidthDp: DESIGN_W,
     designHeightDp: DESIGN_H,
     rootBackgroundColor: rootBgColor,
-    backgroundCode: bgCode,
+    backgroundCode: '',
     contentCode: callsStr,
   });
 
@@ -1468,6 +1602,8 @@ import androidx.compose.foundation.layout.wrapContentSize
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.constraintlayout.compose.ConstraintLayout
+import androidx.constraintlayout.compose.Dimension
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -1492,6 +1628,9 @@ ${TEXT_IMPORT}
 ${IMAGE_IMPORTS}
 ${R_IMPORT}
 
+private const val DEFAULT_WIDTH = ${designW}f
+private const val DEFAULT_HEIGHT = ${designH}f
+
 /** 将设计稿数字字重转换为 Compose FontWeight。 */
 private fun fontWeightOf(weight: Int): FontWeight = when {
     weight >= 900 -> FontWeight.Black
@@ -1504,9 +1643,12 @@ private fun fontWeightOf(weight: Int): FontWeight = when {
 /**
  * 由 1334x750 HTML 设计稿生成的 Compose 页面。
  * 布局策略：
- *  - 以语义树为真源，直接按照 DOM 几何、样式和对齐关系选择 Compose 容器。
+ *  - 页面首个布局固定使用 ConstraintLayout，并通过 createRefs 统一声明全部子布局引用。
+ *  - 每个一级子布局至少使用三条 Guide，并至少一个维度使用 fillToConstraints。
+ *  - 一级子布局调用点和子 Composable 方法均保留不带重复前缀的中文用途说明。
+ *  - 以语义树为真源，直接按照 DOM 几何、样式和对齐关系选择内部 Compose 容器。
  *  - 页面本身不处理窗口适配，由 Activity 的 BaseV3Page 统一包裹。
- *  - 每个视觉元素带 Modifier.testTag("e<domIndex>")，供 compose-validate.js 完整边界校验。
+ *  - 每个视觉元素带 Modifier.testTag("e<domIndex>")；根布局不生成 e0 标签。
  */
 ${pageRoot}
 ${sectionsCode}
@@ -1636,6 +1778,7 @@ if (require.main === module) main();
 
 module.exports = {
   generatePage,
+  genRootConstraintCall,
   genContent,
   renderFlowGroup,
 };

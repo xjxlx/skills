@@ -2,7 +2,7 @@
  * Compose 页面统一验证器。
  *
  * 一次运行完成以下检查：
- *   1. 启动 IDE 已经运行并安装好的目标 Activity，不执行构建、安装或长时间固定等待。
+ *   1. 使用 ADB 启动已安装的目标 Activity，不点击 IDE Run，也不执行长时间固定等待。
  *   2. 截取当前页面并与 original.png 做整页像素对比。
  *   3. 通过 uiautomator 提取 e<domIndex> 边界，与 HTML 语义树比对。
  *   4. 对文本和关键区域做局部色差抽查。
@@ -240,13 +240,16 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function launch(activity) {
-  const packageName = activity.split('/')[0];
+function launch(activity, packageName) {
   execSync(`${ADB} shell am force-stop ${packageName}`, { stdio: 'ignore', shell: true });
-  const output = execSync(`${ADB} shell am start -W -n ${activity}`, {
-    encoding: 'utf8',
-    shell: true,
-  });
+  const output = execSync(
+    `${ADB} shell am start -W -n ${activity} ` +
+      '-a android.intent.action.MAIN -c android.intent.category.LAUNCHER',
+    {
+      encoding: 'utf8',
+      shell: true,
+    },
+  );
   if (/Error|Exception/i.test(output) && !/Status: ok/i.test(output)) {
     throw new Error(`Activity 启动失败：${output.trim()}`);
   }
@@ -281,8 +284,9 @@ function waitForBounds(scaleX, scaleY, expectedCount) {
 }
 
 function main() {
-  const runtime = loadOrCreateRuntimeContext();
-  const activity = process.argv[2] || runtime.activity;
+  const runtime = loadOrCreateRuntimeContext(process.argv[2]);
+  const activity = runtime.activity;
+  const packageName = runtime.packageName;
 
   if (!fs.existsSync(SEMANTIC)) {
     console.error(`语义树不存在：${SEMANTIC}`);
@@ -311,8 +315,9 @@ function main() {
     process.exit(1);
   }
 
+  console.log(`启动应用：${packageName}`);
   console.log(`启动 Activity：${activity}`);
-  launch(activity);
+  launch(activity, packageName);
 
   // 使用当前真实窗口计算坐标缩放；不修改模拟器窗口、density 或旋转。
   execSync(`${ADB} exec-out screencap -p > "${SHOT}"`, { shell: true });
@@ -370,7 +375,9 @@ function main() {
   const spotPassRate = spotChecks.length ? spotPassed / spotChecks.length : 0;
 
   const report = {
+    packageName,
     activity,
+    activityClass: runtime.activityClass,
     comparedAt: new Date().toISOString(),
     designPx: `${semantic.designW}x${semantic.designH}`,
     reference,

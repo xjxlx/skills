@@ -6,6 +6,11 @@
 
 - Activity 负责设置窗口、全屏和一次 `BaseV3Page` 包装。
 - 页面入口 Composable 接收业务状态、列表数据和回调。
+- 页面入口首层使用 `ConstraintLayout`，同一层全部引用用一次 `createRefs()` 声明。
+- 每个约束子布局至少使用三条 Guide 定位，且至少一个维度使用 `Dimension.fillToConstraints`；纯文字布局可豁免。
+- 只允许在用户明确要求或宿主契约不兼容时改用其他首层布局，并在入口 KDoc 中记录原因。
+- 每次调用生成的一级或嵌套子布局 Composable 时，直接写明中文用途注释，不加“子布局：”前缀；子布局方法用中文 KDoc 说明用途、位置和尺寸。
+- 根布局不添加 `testTag("e0")`。
 - 不在纯视觉区域函数中发起网络请求或持有页面级副作用。
 - 使用稳定业务 key 启动 `LaunchedEffect`，Flow 收集放在页面入口。
 
@@ -13,7 +18,7 @@
 
 - 生成页面内使用 `667×375dp` 设计坐标。
 - 页面不进行第二层窗口缩放。
-- 固定区域可用 `ConstraintLayout`、Guideline 或经过验证的固定尺寸。
+- 页面首层必须优先使用 `ConstraintLayout`；内部固定区域可继续使用 Guideline 或经过验证的固定尺寸。
 - 连续内容优先使用 Row/Column/weight/spacedBy。
 - 图片、背景和卡片有稳定比例时使用 `aspectRatio`。
 - 只有局部光学修正才能使用 offset，整页 offset 或缩放不可接受。

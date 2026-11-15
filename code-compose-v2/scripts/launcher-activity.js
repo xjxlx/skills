@@ -8,6 +8,7 @@ const IGNORED_DIRECTORIES = new Set([
   'build',
   'node_modules',
 ]);
+const GRADLE_BUILD_FILES = ['build.gradle.kts', 'build.gradle'];
 
 function collectManifestPaths(projectRoot) {
   const manifests = [];
@@ -50,6 +51,54 @@ function readManifestPackage(xml) {
   return manifestTag ? readAttribute(manifestTag[0], 'package') : null;
 }
 
+function stripGradleComments(source) {
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+}
+
+function readGradleSetting(source, settingName) {
+  const cleaned = stripGradleComments(source);
+  const patterns = [
+    new RegExp(`\\b${settingName}\\s*=\\s*["']([^"']+)["']`, 'i'),
+    new RegExp(`\\b${settingName}\\s+["']([^"']+)["']`, 'i'),
+  ];
+  for (const pattern of patterns) {
+    const match = cleaned.match(pattern);
+    if (match) return match[1];
+  }
+  return null;
+}
+
+function findNearestBuildFile(projectRoot, manifestPath) {
+  let current = path.dirname(manifestPath);
+  const root = path.resolve(projectRoot);
+  while (current === root || current.startsWith(`${root}${path.sep}`)) {
+    for (const fileName of GRADLE_BUILD_FILES) {
+      const buildFile = path.join(current, fileName);
+      if (fs.existsSync(buildFile)) return buildFile;
+    }
+    if (current === root) break;
+    current = path.dirname(current);
+  }
+  return null;
+}
+
+function readModulePackageInfo(projectRoot, manifestPath) {
+  const manifestXml = stripXmlComments(fs.readFileSync(manifestPath, 'utf8'));
+  const manifestPackage = readManifestPackage(manifestXml);
+  const buildFile = findNearestBuildFile(projectRoot, manifestPath);
+  const buildSource = buildFile ? fs.readFileSync(buildFile, 'utf8') : '';
+  const namespace = readGradleSetting(buildSource, 'namespace');
+  const applicationId = readGradleSetting(buildSource, 'applicationId');
+  return {
+    buildFile,
+    manifestPackage,
+    namespace: namespace || manifestPackage,
+    packageName: applicationId || namespace || manifestPackage,
+  };
+}
+
 function normalizeActivityName(name, manifestPackage) {
   if (!name) return null;
   if (name.startsWith('.')) return `${manifestPackage || ''}${name}`;
@@ -71,9 +120,10 @@ function hasLauncherIntentFilter(activityBlock) {
   });
 }
 
-function findActivityDeclarations(manifestPath, fallbackPackage) {
+function findActivityDeclarations(manifestPath, fallbackPackage, classPackage) {
   const xml = stripXmlComments(fs.readFileSync(manifestPath, 'utf8'));
   const manifestPackage = readManifestPackage(xml) || fallbackPackage;
+  const resolutionPackage = classPackage || manifestPackage;
   const activityBlocks = [
     ...xml.matchAll(/<(activity|activity-alias)\b(?![^>]*\/\s*>)[^>]*>[\s\S]*?<\/\1\s*>/gi),
     ...xml.matchAll(/<(activity|activity-alias)\b[^>]*\/\s*>/gi),
@@ -85,7 +135,7 @@ function findActivityDeclarations(manifestPath, fallbackPackage) {
     if (!name) return [];
     return [{
       name,
-      fullName: normalizeActivityName(name, manifestPackage),
+      fullName: normalizeActivityName(name, resolutionPackage),
       type: match[1],
       targetActivity: readAttribute(block, 'android:targetActivity'),
       manifest: manifestPath,
@@ -137,6 +187,61 @@ function parseActivityComponent(activityComponent) {
   };
 }
 
+function toActivityComponent(packageName, className) {
+  if (!packageName || !className) return null;
+  return `${packageName}/${className}`;
+}
+
+/**
+ * 在项目源 Manifest 中查找默认 TestActivity。
+ * 应用包名优先取同一个 Gradle 模块的 applicationId，Activity 类名优先按 namespace 解析。
+ */
+function discoverDefaultTestActivity(projectRoot) {
+  const candidates = [];
+  for (const manifestPath of collectManifestPaths(projectRoot)) {
+    const packageInfo = readModulePackageInfo(projectRoot, manifestPath);
+    if (!packageInfo.packageName) continue;
+    const declarations = findActivityDeclarations(
+      manifestPath,
+      packageInfo.packageName,
+      packageInfo.namespace,
+    );
+    for (const activity of declarations) {
+      if (!/(?:^|\.)TestActivity$/.test(activity.fullName)) continue;
+      candidates.push({
+        ...activity,
+        packageName: packageInfo.packageName,
+        component: toActivityComponent(packageInfo.packageName, activity.fullName),
+      });
+    }
+  }
+
+  const uniqueCandidates = [...new Map(
+    candidates.map((candidate) => [candidate.component, candidate]),
+  ).values()];
+  if (uniqueCandidates.length === 0) {
+    const error = new Error([
+      '未配置 COMPOSE_ACTIVITY，且项目源 AndroidManifest.xml 中没有找到 TestActivity。',
+      '请确认测试页面的 Activity 名称，并通过 COMPOSE_ACTIVITY 指定完整组件，例如 com.example.app/.TestActivity。',
+    ].join('\n'));
+    error.code = 'INVALID_COMPOSE_ACTIVITY_NOT_FOUND';
+    throw error;
+  }
+
+  const launcherCandidates = uniqueCandidates.filter((candidate) => candidate.launcher);
+  const preferred = launcherCandidates.length > 0 ? launcherCandidates : uniqueCandidates;
+  if (preferred.length > 1) {
+    const error = new Error([
+      '项目中找到多个 TestActivity，无法确定默认测试页面：',
+      ...preferred.map((candidate) => `- ${candidate.component}`),
+      '请通过 COMPOSE_ACTIVITY 指定本次测试使用的 Activity。',
+    ].join('\n'));
+    error.code = 'INVALID_COMPOSE_ACTIVITY_AMBIGUOUS';
+    throw error;
+  }
+  return preferred[0];
+}
+
 function stopMessage(component, reason) {
   const detail = reason === 'missing-component'
     ? '未配置 COMPOSE_ACTIVITY，无法确定当前生成布局实际由哪个 Activity 承载。'
@@ -166,7 +271,14 @@ function inspectConfiguredActivity(projectRoot, activityComponent, options = {})
   }
 
   const declarations = collectManifestPaths(projectRoot)
-    .flatMap((manifestPath) => findActivityDeclarations(manifestPath, parsed.packageName))
+    .flatMap((manifestPath) => {
+      const packageInfo = readModulePackageInfo(projectRoot, manifestPath);
+      return findActivityDeclarations(
+        manifestPath,
+        packageInfo.packageName || parsed.packageName,
+        packageInfo.namespace || parsed.packageName,
+      );
+    })
     .filter((activity) => activity.fullName === parsed.className);
   const target = declarations[0];
   if (!target) {
@@ -208,8 +320,10 @@ function ensureLandscapeActivity(projectRoot, activityComponent, options = {}) {
   const result = ensureConfiguredActivity(projectRoot, activityComponent, options);
   const manifestPath = result.activity.manifest;
   const parsed = parseActivityComponent(activityComponent);
+  const packageInfo = readModulePackageInfo(projectRoot, manifestPath);
+  const classPackage = packageInfo.namespace || parsed.packageName;
   const orientationTarget = result.activity.type === 'activity-alias'
-    ? normalizeActivityName(result.activity.targetActivity, parsed.packageName)
+    ? normalizeActivityName(result.activity.targetActivity, classPackage)
     : result.activity.fullName;
   if (!orientationTarget) {
     throw new Error(`COMPOSE_ACTIVITY=${activityComponent} 是缺少 targetActivity 的 Activity-alias，无法写入横屏配置，已停止后续操作。`);
@@ -217,7 +331,7 @@ function ensureLandscapeActivity(projectRoot, activityComponent, options = {}) {
   const openingTag = findActivityOpeningTag(
     manifestPath,
     orientationTarget,
-    parsed.packageName,
+    classPackage,
   );
   if (!openingTag) {
     throw new Error(`无法定位 ${activityComponent} 在源 AndroidManifest.xml 中的 Activity 声明，已停止后续操作。`);
@@ -237,8 +351,12 @@ function ensureLandscapeActivity(projectRoot, activityComponent, options = {}) {
 
 module.exports = {
   collectManifestPaths,
+  discoverDefaultTestActivity,
   findActivityDeclarations,
   inspectConfiguredActivity,
   ensureConfiguredActivity,
   ensureLandscapeActivity,
+  parseActivityComponent,
+  readModulePackageInfo,
+  toActivityComponent,
 };
