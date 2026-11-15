@@ -52,7 +52,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 - 3 个及以上条目共享近似外框尺寸、对齐轴、间距和字段槽位时，按数据类、`listOf` 和单一 item Composable 建模。
 - 横向或纵向列表由可见视口和排列方向决定。尾项只被视口裁切时，数据仍保存完整 item 尺寸，由 `LazyRow`/`LazyColumn` 自然裁切。
 - 透明容器可扁平化；同 rect 的背景层可合并到同一复合项。只有设计和交互确实需要时才使用页面级 `offset`，不得用 `graphicsLayer` 整页缩放掩盖几何误差。
-- 文字内容默认由文字测量决定宽高；固定视觉盒、裁切和覆盖关系才使用固定尺寸。固定行盒出现底部裁切时，先检查父约束和测量高度，再调整行高、绘制高度或 `wrapContentHeight(unbounded = true)`。
+- 文字内容默认由文字测量决定宽高；固定视觉盒、裁切和覆盖关系才使用固定尺寸。固定行盒底部裁切时先检查父约束和测量高度。Text 语义边界高度取 `max(lineHeight, 字体自然 ascent+descent)`，设计行高更小时用 `Modifier.height(设计dp)` 约束 Text 节点收敛边界；`wrapContentHeight(unbounded = true)` 只位移、不缩小语义边界。
 - 页面颜色、Shape 和视觉常量按“类型 + 实际值”命名，例如 `COLOR_F5F7FA`、`ROUNDED_CORNER_SHAPE_14`。
 - 每次调用提取出的自定义子布局 Composable 时，调用点必须用中文单行注释直接说明用途，不添加“子布局：”等重复前缀；该 Composable 必须有中文 KDoc，写明用途、设计位置和尺寸。标准 `Box`、`Row`、`Column`、`ImageItem` 仅在成组视觉块或复杂层级处添加注释。
 - 根 `ConstraintLayout` 不生成 `testTag("e0")`；`testTag("e<domIndex>")` 只用于实际 DOM 视觉元素，且仅服务验收阶段；验收通过后移除全部 `testTag`、`testTagsAsResourceId` 及 tag 参数管线，重新安装并像素复核。

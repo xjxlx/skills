@@ -30,6 +30,7 @@
 - Material3 `Text` 仅用于项目 TextItem 无法表达的文字装饰；其他 Material3 组件按业务需要复用。
 - 纯文字默认由测量决定宽高；固定视觉盒必须说明设计原因。
 - 出现底部裁切时检查父容器剩余高度、TextLayoutResult、行高和字体 padding，不只移动下方元素。
+- 结构校验文本 bounds 偏高时，根因是字体自然 ascent+descent 撑大语义边界（`Trim.Both`/`includeFontPadding=false` 压不到自然高度以下）；对 TextItem 用 `Modifier.height(设计dp)` 约束 Text 节点本身，父 Box 固定高度同样收敛边界。
 
 ## 列表
 

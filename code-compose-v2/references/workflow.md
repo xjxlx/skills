@@ -109,7 +109,7 @@ node <技能目录>/scripts/install-app.js
 低于 95% 时读取统一报告，按以下顺序修正：
 
 1. `not-found` 或缺失元素：检查 DOM 过滤、列表槽位、图片可见性、`testTag` 和页面挂载。
-2. 位置或尺寸异常：检查父约束、Row/Column 测量、Guideline、fixed size 和视口裁切。
+2. 位置或尺寸异常：检查父约束、Row/Column 测量、Guideline、fixed size 和视口裁切。clickable 节点 bounds 被无障碍扩到 48dp 时，用 `CompositionLocalProvider(LocalViewConfiguration provides ... minimumTouchTargetSize = DpSize.Zero)` 关闭扩边；material3 `LocalMinimumInteractiveComponentEnforcement` 已废弃且不影响 foundation clickable。
 3. 整页热点集中在图片：检查 code-image Hash、资源映射、ContentScale 和背景裁切。
 4. 文本色差或裁切：检查 TextItem 字号、行高、maxLines、对齐、父高度和行盒。
 5. 局部层级错误：检查 z 序、遮罩、Dialog/Popup 宿主和覆盖节点。
