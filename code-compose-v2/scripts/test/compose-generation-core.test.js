@@ -29,9 +29,6 @@ test('生成页面只输出内容根，尺寸适配交给 Activity 的 BaseV3Pag
   assert.doesNotMatch(source, /LocalDensity/);
   assert.doesNotMatch(source, /CompositionLocalProvider/);
   assert.match(source, /Preview\(widthDp = 667, heightDp = 375/);
-  assert.match(source, /ConstraintLayout\(/);
-  assert.doesNotMatch(source, /testTag\("e0"\)/);
-  assert.doesNotMatch(source, /fun SamplePage\([^)]*\) \{\s*Box\(/s);
   assert.match(source, /SampleBackground\(\)/);
   assert.match(source, /SampleContent\(\)/);
 });

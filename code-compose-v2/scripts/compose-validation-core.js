@@ -17,13 +17,6 @@ function clipRectToViewport(rect, viewportWidth, viewportHeight) {
   return { x, y, w: Math.max(0, right - x), h: Math.max(0, bottom - y) };
 }
 
-function isRootContainer(element, designWidth, designHeight) {
-  if (!element || element.role !== 'box' || !element.rect) return false;
-  const { x, y, w, h } = element.rect;
-  return x <= 0.01 && y <= 0.01 &&
-    w >= designWidth - 0.01 && h >= designHeight - 0.01;
-}
-
 function evaluateStructure(elements, bounds, options) {
   const toleranceXY = options.toleranceXY;
   const toleranceWH = options.toleranceWH;
@@ -107,7 +100,6 @@ function selectSpotCandidates(elements, count, designWidth, designHeight) {
 module.exports = {
   evaluateReferenceDimensions,
   evaluateStructure,
-  isRootContainer,
   selectSpotCandidates,
   shouldAcceptReport,
 };

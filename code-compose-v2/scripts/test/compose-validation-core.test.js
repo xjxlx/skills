@@ -3,7 +3,6 @@ const test = require('node:test');
 
 const {
   evaluateStructure,
-  isRootContainer,
   selectSpotCandidates,
   evaluateReferenceDimensions,
   shouldAcceptReport,
@@ -69,21 +68,6 @@ test('超出视口的元素必须按可见裁剪边界校验', () => {
 test('原始设计截图尺寸必须与语义树一致', () => {
   assert.equal(evaluateReferenceDimensions({ width: 1334, height: 750 }, 1334, 750).valid, true);
   assert.equal(evaluateReferenceDimensions({ width: 750, height: 1334 }, 1334, 750).valid, false);
-});
-
-test('全屏根容器必须从结构校验元素中排除', () => {
-  assert.equal(isRootContainer({
-    role: 'box',
-    rect: { x: 0, y: 0, w: 1334, h: 750 },
-  }, 1334, 750), true);
-  assert.equal(isRootContainer({
-    role: 'box',
-    rect: { x: 40, y: 120, w: 1254, h: 630 },
-  }, 1334, 750), false);
-  assert.equal(isRootContainer({
-    role: 'text',
-    rect: { x: 0, y: 0, w: 1334, h: 750 },
-  }, 1334, 750), false);
 });
 
 test('结构或抽查失败时总验收不能通过', () => {

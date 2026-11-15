@@ -5,10 +5,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const test = require('node:test');
 
-const {
-  discoverDefaultTestActivity,
-  inspectConfiguredActivity,
-} = require('../launcher-activity');
+const { inspectConfiguredActivity } = require('../launcher-activity');
 
 function createProject(manifest) {
   const projectRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'code-compose-v2-launcher-'));
@@ -54,32 +51,6 @@ test('Manifest 未声明 package 时使用 COMPOSE_ACTIVITY 的包名解析相�
   `);
 
   assert.equal(inspectConfiguredActivity(projectRoot, 'com.example.app/.MainActivity').found, true);
-});
-
-test('未配置 Activity 时按 Gradle applicationId 和 namespace 发现默认 TestActivity', () => {
-  const projectRoot = createProject(`
-    <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-      <application>
-        <activity android:name=".compose.activity.TestActivity" android:exported="true" />
-      </application>
-    </manifest>
-  `);
-  fs.writeFileSync(path.join(projectRoot, 'app', 'build.gradle.kts'), `
-    plugins { id("com.android.application") }
-    android {
-      namespace = "com.example.app"
-      defaultConfig { applicationId = "com.example.app.debug" }
-    }
-  `);
-
-  const result = discoverDefaultTestActivity(projectRoot);
-
-  assert.equal(result.packageName, 'com.example.app.debug');
-  assert.equal(result.fullName, 'com.example.app.compose.activity.TestActivity');
-  assert.equal(
-    result.component,
-    'com.example.app.debug/com.example.app.compose.activity.TestActivity',
-  );
 });
 
 test('其他 Activity 有 Launcher 也不能替代生成布局的目标 Activity', () => {
@@ -168,7 +139,6 @@ test('总入口目标 Activity 缺少 Launcher 时必须在解压前停止且不
       ...process.env,
       PROJECT_ROOT: projectRoot,
       COMPOSE_ACTIVITY: 'com.example.app/.PreviewActivity',
-      COMPOSE_ACTIVITY_MODE: 'launcher',
     },
     encoding: 'utf8',
   });

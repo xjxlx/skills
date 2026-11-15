@@ -2,7 +2,7 @@
  * Compose 页面统一验证器。
  *
  * 一次运行完成以下检查：
- *   1. 使用 ADB 启动已安装的目标 Activity，不点击 IDE Run，也不执行长时间固定等待。
+ *   1. 启动 IDE 已经运行并安装好的目标 Activity，不执行构建、安装或长时间固定等待。
  *   2. 截取当前页面并与 original.png 做整页像素对比。
  *   3. 通过 uiautomator 提取 e<domIndex> 边界，与 HTML 语义树比对。
  *   4. 对文本和关键区域做局部色差抽查。
@@ -15,13 +15,11 @@ const { PNG } = require('pngjs');
 const {
   evaluateReferenceDimensions,
   evaluateStructure,
-  isRootContainer,
   selectSpotCandidates,
   shouldAcceptReport,
 } = require('./compose-validation-core');
 const {
   ADB,
-  COMPOSE_START_ARGS,
   TOOL_OUTPUT_DIR,
   WORK_DIR,
 } = require('./config');
@@ -242,17 +240,13 @@ function sleepSync(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
-function launch(activity, packageName) {
+function launch(activity) {
+  const packageName = activity.split('/')[0];
   execSync(`${ADB} shell am force-stop ${packageName}`, { stdio: 'ignore', shell: true });
-  const output = execSync(
-    `${ADB} shell am start -W -n ${activity} ` +
-      '-a android.intent.action.MAIN -c android.intent.category.LAUNCHER' +
-      (COMPOSE_START_ARGS ? ` ${COMPOSE_START_ARGS}` : ''),
-    {
-      encoding: 'utf8',
-      shell: true,
-    },
-  );
+  const output = execSync(`${ADB} shell am start -W -n ${activity}`, {
+    encoding: 'utf8',
+    shell: true,
+  });
   if (/Error|Exception/i.test(output) && !/Status: ok/i.test(output)) {
     throw new Error(`Activity 启动失败：${output.trim()}`);
   }
@@ -287,9 +281,8 @@ function waitForBounds(scaleX, scaleY, expectedCount) {
 }
 
 function main() {
-  const runtime = loadOrCreateRuntimeContext(process.argv[2]);
-  const activity = runtime.activity;
-  const packageName = runtime.packageName;
+  const runtime = loadOrCreateRuntimeContext();
+  const activity = process.argv[2] || runtime.activity;
 
   if (!fs.existsSync(SEMANTIC)) {
     console.error(`语义树不存在：${SEMANTIC}`);
@@ -311,26 +304,15 @@ function main() {
   }
 
   const generation = JSON.parse(fs.readFileSync(GENERATION_REPORT, 'utf8'));
-  const semanticByIndex = new Map(
-    semantic.elements.map((element) => [element.domIndex, element]),
-  );
-  const observableIndices = new Set(
-    (generation.observableDomIndices || [])
-      .filter((index) => !isRootContainer(
-        semanticByIndex.get(index),
-        semantic.designW,
-        semantic.designH,
-      )),
-  );
+  const observableIndices = new Set(generation.observableDomIndices || []);
   const observableElements = semantic.elements.filter((element) => observableIndices.has(element.domIndex));
-  if (observableElements.length !== observableIndices.size) {
+  if (observableElements.length !== generation.observableElementCount) {
     console.error('Compose 生成报告与 semantic.json 不一致，请重新生成 Compose。');
     process.exit(1);
   }
 
-  console.log(`启动应用：${packageName}`);
   console.log(`启动 Activity：${activity}`);
-  launch(activity, packageName);
+  launch(activity);
 
   // 使用当前真实窗口计算坐标缩放；不修改模拟器窗口、density 或旋转。
   execSync(`${ADB} exec-out screencap -p > "${SHOT}"`, { shell: true });
@@ -388,9 +370,7 @@ function main() {
   const spotPassRate = spotChecks.length ? spotPassed / spotChecks.length : 0;
 
   const report = {
-    packageName,
     activity,
-    activityClass: runtime.activityClass,
     comparedAt: new Date().toISOString(),
     designPx: `${semantic.designW}x${semantic.designH}`,
     reference,

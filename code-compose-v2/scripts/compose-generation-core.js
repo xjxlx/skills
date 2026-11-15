@@ -22,8 +22,7 @@ function buildPageRoot({
 @Preview(widthDp = ${Math.round(designWidthDp)}, heightDp = ${Math.round(designHeightDp)}, showBackground = true)
 @Composable
 fun ${pageName}(modifier: Modifier = Modifier) {
-    // 页面首个布局：通过 ConstraintLayout 约束每个一级区块的位置和尺寸。
-    ConstraintLayout(
+    Box(
         modifier = modifier
             .fillMaxSize()${backgroundModifier}
             .semantics { testTagsAsResourceId = true },

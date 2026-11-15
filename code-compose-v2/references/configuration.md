@@ -13,7 +13,7 @@
 - HTML 设计稿固定为 `1334px × 750px`。
 - 目标 Activity 已配置横屏，并由项目 `BaseV3Page` 包裹生成页面。
 - 模拟器已经由用户旋转为横屏。
-- 代码有改动时，应用已通过命令行 Debug 安装任务刷新；不得依赖 IDE Run 或 Apply Changes。
+- 应用已经通过 IDE Running、Run 或 Apply Changes 刷新。
 - `scripts/node_modules` 已存在且依赖有效。正常页面任务不执行 `npm ci`；依赖缺失时先通知用户。
 
 ## 必填变量
@@ -25,6 +25,8 @@ export COMPOSE_RES_DIR="app/src/main/res"
 export COMPOSE_PACKAGE="com.example.app.ui.generated"
 export COMPOSE_R_IMPORT="import com.example.app.R"
 export COMPOSE_IMAGE_IMPORTS=$'import com.example.widget.ImageItem\nimport com.example.widget.ImageParameter'
+export COMPOSE_ACTIVITY="com.example.app/.TestActivity"
+export COMPOSE_ACTIVITY_MODE="existing"
 ```
 
 `COMPOSE_TEXT_IMPORT` 必须由目标项目提供：
@@ -37,13 +39,8 @@ export COMPOSE_TEXT_IMPORT="import com.example.widget.TextItem"
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
-| `PAGE_NAME` | `GeneratedPage` | 页面任务名、生成的 Kotlin 文件和 Composable 名 |
-| `CODE_COMPOSE_V2_TASK_ID` | 同 `PAGE_NAME` | 任务目录名，非法路径字符会替换为 `-` |
-| `CODE_COMPOSE_V2_WORK_DIR` | `<PROJECT_ROOT>/.code-compose-v2/<TASK_ID>` | 显式覆盖任务工作目录 |
-| `COMPOSE_ACTIVITY` | 自动查找 `TestActivity` | 指定测试 Activity，格式为 `applicationId/.Activity` 或 `applicationId/full.Activity` |
-| `COMPOSE_ACTIVITY_MODE` | `existing` | `launcher` 要求 MAIN/LAUNCHER；`existing` 允许已有测试 Activity |
-| `COMPOSE_INSTALL_COMMAND` | `./gradlew installDebug` | 命令行构建安装命令 |
-| `COMPOSE_START_ARGS` | 无 | 追加给 `am start` 的页面路由参数，例如 `--es codeComposePage NavigationRevisePage` |
+| `CODE_COMPOSE_V2_WORK_DIR` | `<PROJECT_ROOT>/.code-compose-v2` | 运行产物目录 |
+| `PAGE_NAME` | `GeneratedPage` | 生成的 Kotlin 文件和 Composable 名 |
 | `COMPOSE_REFERENCE_MANIFEST` | 无 | 主页面和通用状态片段的 JSON 清单 |
 | `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 优先 code-image；`copy` 先从设计包复制；`existing` 只接受显式映射 |
 | `COMPOSE_RESOURCE_MAP` | 无 | 设计图片文件到现有 `R` 资源的映射 |
@@ -72,35 +69,16 @@ export COMPOSE_TEXT_IMPORT="import com.example.widget.TextItem"
 1. 继承项目已有的全屏 Compose Activity 封装。
 2. Manifest 使用 `FullScreenTheme` 和 `screenOrientation="landscape"`。
 3. `InitView()` 内只调用一次 `BaseV3Page { 生成页面() }`。
-4. 默认从源 Manifest 查找名称以 `TestActivity` 结尾的 Activity，并从同名 Gradle 模块读取 `applicationId` 与 `namespace`。
-5. 指定其他页面时设置 `COMPOSE_ACTIVITY`；后续命令直接复用解析结果，不重复扫描项目。
-6. 不创建第二套测试 Activity，不在生成页面内部再次添加尺寸缩放包装。
+4. 需要 adb 启动时保留 `MAIN + LAUNCHER`；若项目已有真实导航入口，可设置 `COMPOSE_ACTIVITY_MODE=existing`。
+5. 不创建第二套测试 Activity，不在生成页面内部再次添加尺寸缩放包装。
 
 任务开始时由 `run.js` 扫描一次 Manifest，并写入：
 
 ```text
-<PROJECT_ROOT>/.code-compose-v2/<PAGE_NAME>/out/runtime-context.json
+<PROJECT_ROOT>/.code-compose-v2/out/runtime-context.json
 ```
 
 后续脚本只读取该文件。
-
-文件至少包含：
-
-```json
-{
-  "taskId": "NavigationRevisePage",
-  "pageName": "NavigationRevisePage",
-  "packageName": "com.example.app",
-  "activity": "com.example.app/com.example.app.TestActivity",
-  "activityClass": "com.example.app.TestActivity"
-}
-```
-
-指定其他测试 Activity：
-
-```bash
-export COMPOSE_ACTIVITY="com.example.app/.compose.activity.SpecificTestActivity"
-```
 
 ## 参考清单
 
@@ -130,42 +108,11 @@ node <技能目录>/scripts/run.js /绝对路径/设计包.zip
 3. 单次 DOM 解析和原始截图。
 4. 生成 Compose 页面。
 
-代码有改动时，先执行安装脚本：
-
-```bash
-export COMPOSE_INSTALL_COMMAND="./gradlew :app:installDebug"
-node <技能目录>/scripts/install-app.js
-```
-
-然后执行验证：
+生成后通过 IDE 刷新应用，再执行：
 
 ```bash
 node <技能目录>/scripts/compose-validate.js
 ```
-
-指定单次测试页面时可直接传入 Activity 组件：
-
-```bash
-node <技能目录>/scripts/compose-validate.js \
-  "com.example.app/.compose.activity.SpecificTestActivity"
-```
-
-命令参数只覆盖本次验证，不修改 `runtime-context.json` 中缓存的默认 `TestActivity`。
-
-如果 TestActivity 通过 Intent 路由目标页面：
-
-```bash
-export COMPOSE_START_ARGS="--es codeComposePage NavigationRevisePage"
-node <技能目录>/scripts/compose-validate.js
-```
-
-TestActivity 可使用稳定的路由参数：
-
-```kotlin
-val targetPage = intent.getStringExtra("codeComposePage")
-```
-
-由 TestActivity 根据 `targetPage` 选择页面，不在每次验收前修改默认状态。
 
 分阶段命令：
 
@@ -183,8 +130,7 @@ npm test --prefix <技能目录>/scripts
 
 ## 运行边界
 
-- 不得点击 IDE Run 或 Apply Changes 刷新应用；代码变更后通过命令行 Debug 安装任务完成部署。
-- `compose-validate.js` 只读取缓存并用 ADB 启动 Activity，不重复解析包名，也不执行构建或安装。
+- 生成与验证脚本不执行 `assembleDebug`、`installDebug` 或 `adb install -r`。
 - 不修改模拟器 `wm size`、`wm density`、旋转锁定或系统栏。
-- 使用 `adb shell am start -W` 和短轮询等待页面标签，不轮询固定长等待。
+- 不轮询固定 6 秒；只通过 `am start -W` 和短轮询等待页面标签。
 - 验证失败时返回非零退出码，并保留统一报告和差异图。

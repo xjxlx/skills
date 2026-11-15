@@ -8,7 +8,6 @@
     "unzip": "node unzip-to-downloads.js",
     "normalize": "node normalize.js",
     "generate": "node html-to-compose.js",
-    "install-app": "node install-app.js",
     "validate": "node compose-validate.js",
     "test": "node --test test/*.test.js"
   },
