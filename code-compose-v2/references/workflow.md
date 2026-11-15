@@ -7,7 +7,7 @@
 - 检查当前工作区改动，保留用户已有修改。
 - 确认设计稿为 `1334×750px`。
 - 默认定位项目的 `TestActivity`，确认它由 `BaseV3Page` 包裹；指定页面时使用 `COMPOSE_ACTIVITY`。
-- 只扫描一次 Manifest 和对应 Gradle 模块，将包名、Activity 完整类名、Manifest 路径和横屏修改结果写入 `runtime-context.json`。
+- 为页面设置唯一 `PAGE_NAME`，使用默认隔离目录 `.code-compose-v2/<PAGE_NAME>`；只扫描一次 Manifest 和对应 Gradle 模块，将包名、Activity 完整类名、Manifest 路径和横屏修改结果写入该目录的 `runtime-context.json`。
 - 检查 `node_modules` 已存在；正常流程不执行 `npm ci`。
 
 ## 2. HTML 解析
@@ -34,7 +34,7 @@
 - 根据连续子项的对齐轴和间距选择 Row/Column。
 - 根据重复外框、公共槽位和视口选择 Lazy 容器。
 - 根据背景、层级和覆盖关系保留必要遮罩。
-- 每个生成子布局的调用点写不带“子布局：”前缀的中文用途注释；子布局 Composable 写中文 KDoc，包含用途、位置和尺寸。
+- 每个提取出的自定义子布局 Composable 调用点写不带“子布局：”前缀的中文用途注释；该 Composable 写中文 KDoc，包含用途、位置和尺寸。标准 Compose 布局调用只注释复杂视觉块。
 - 根 `ConstraintLayout` 不写 `testTag("e0")`，校验标签只标记实际视觉元素。
 - 根据资源 MD5、项目映射和视觉证据选择 ImageItem。
 - 根据文本内容和样式选择 TextItem。
@@ -61,10 +61,10 @@ InitView {
 
 ## 5. 运行方式
 
-生成 Kotlin 和资源后，不使用 Android Studio/IntelliJ 的 Run、Running 或 Apply Changes。代码有改动时，在终端执行项目对应的 Debug 安装任务，例如：
+生成 Kotlin 和资源后，不使用 Android Studio/IntelliJ 的 Run、Running 或 Apply Changes。代码有改动时执行安装脚本：
 
 ```bash
-./gradlew :app:installDebug
+node <技能目录>/scripts/install-app.js
 ```
 
 验证脚本只负责：
@@ -72,6 +72,7 @@ InitView {
 - 从 `runtime-context.json` 读取缓存的包名与 Activity。
 - `am force-stop` 缓存的当前包。
 - `am start -W -n <缓存的 Activity> -a MAIN -c LAUNCHER` 启动默认或指定测试页面。
+- `COMPOSE_START_ARGS` 存在时追加到启动命令，用于 Intent 路由测试页面。
 - 短轮询等待 `testTag` 节点。
 - 截图、dump 和报告。
 
@@ -91,6 +92,7 @@ InitView {
 ### 结构边界
 
 - 从语义树读取全部可见元素。
+- 全屏根容器不参与结构校验，历史报告中的根 `domIndex 0` 由验证器自动排除。
 - 从 `uiautomator` 读取 `e<domIndex>` 实际 bounds。
 - 位置和尺寸容差默认 4 设计 px，文本尺寸默认 6 设计 px。
 - 通过率目标不少于 95%。
@@ -117,7 +119,7 @@ InitView {
 
 ## 8. 产物
 
-统一产物位于 `<PROJECT_ROOT>/.code-compose-v2/`：
+统一产物位于 `<PROJECT_ROOT>/.code-compose-v2/<PAGE_NAME>/`：
 
 - `out/semantic.json`
 - `out/original.png`

@@ -5,11 +5,20 @@ function resolveFromProject(value, projectRoot) {
   return path.isAbsolute(value) ? path.resolve(value) : path.resolve(projectRoot, value);
 }
 
+function normalizeTaskId(value) {
+  return String(value || 'GeneratedPage')
+    .trim()
+    .replace(/\s+/g, '-')
+    .replace(/[^A-Za-z0-9._-]/g, '-');
+}
+
 const PROJECT_ROOT = path.resolve(process.env.PROJECT_ROOT || process.cwd());
+const PAGE_NAME = process.env.PAGE_NAME || 'GeneratedPage';
+const TASK_ID = normalizeTaskId(process.env.CODE_COMPOSE_V2_TASK_ID || PAGE_NAME);
 const WORK_DIR = resolveFromProject(
   process.env.CODE_COMPOSE_V2_WORK_DIR,
   PROJECT_ROOT,
-) || path.join(PROJECT_ROOT, '.code-compose-v2');
+) || path.join(PROJECT_ROOT, '.code-compose-v2', TASK_ID);
 const TOOL_OUTPUT_DIR = path.join(WORK_DIR, 'out');
 const EXPERIENCE_PATH = path.join(WORK_DIR, 'experience.md');
 const EXPERIENCE_RULES_PATH = path.join(WORK_DIR, 'experience-rules.json');
@@ -23,6 +32,8 @@ function requiredSetting(name, value) {
 
 module.exports = {
   PROJECT_ROOT,
+  PAGE_NAME,
+  TASK_ID,
   WORK_DIR,
   TOOL_OUTPUT_DIR,
   EXPERIENCE_PATH,
@@ -32,6 +43,8 @@ module.exports = {
   CHROME_BIN: process.env.CHROME_BIN || '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
   COMPOSE_ACTIVITY: process.env.COMPOSE_ACTIVITY,
   COMPOSE_ACTIVITY_MODE: process.env.COMPOSE_ACTIVITY_MODE || 'existing',
+  COMPOSE_INSTALL_COMMAND: process.env.COMPOSE_INSTALL_COMMAND || './gradlew installDebug',
+  COMPOSE_START_ARGS: process.env.COMPOSE_START_ARGS || '',
   COMPOSE_KOTLIN_DIR: resolveFromProject(process.env.COMPOSE_KOTLIN_DIR, PROJECT_ROOT),
   COMPOSE_RES_DIR: resolveFromProject(process.env.COMPOSE_RES_DIR, PROJECT_ROOT),
   COMPOSE_PACKAGE: process.env.COMPOSE_PACKAGE,

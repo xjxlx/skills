@@ -3,7 +3,9 @@ const path = require('node:path');
 const {
   COMPOSE_ACTIVITY,
   COMPOSE_ACTIVITY_MODE,
+  PAGE_NAME,
   PROJECT_ROOT,
+  TASK_ID,
   TOOL_OUTPUT_DIR,
 } = require('./config');
 const {
@@ -28,6 +30,8 @@ function createRuntimeContext(projectRoot = PROJECT_ROOT, activity = COMPOSE_ACT
     allowNonLauncher: COMPOSE_ACTIVITY_MODE === 'existing',
   });
   const context = {
+    taskId: TASK_ID,
+    pageName: PAGE_NAME,
     packageName: parsed.packageName,
     activity: resolvedActivity,
     activityClass: parsed.className,
@@ -48,6 +52,11 @@ function loadRuntimeContext() {
   const context = JSON.parse(fs.readFileSync(RUNTIME_CONTEXT_PATH, 'utf8'));
   if (!context.activity) {
     throw new Error(`运行上下文缺少 activity：${RUNTIME_CONTEXT_PATH}`);
+  }
+  if (context.taskId && context.taskId !== TASK_ID) {
+    throw new Error(
+      `运行上下文任务不匹配：期望 ${TASK_ID}，实际 ${context.taskId}。请使用对应的 CODE_COMPOSE_V2_WORK_DIR。`,
+    );
   }
   if (!context.packageName || !context.activityClass) {
     const parsed = parseActivityComponent(context.activity);

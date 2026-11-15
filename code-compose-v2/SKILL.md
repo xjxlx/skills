@@ -26,7 +26,14 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 - Activity 层只调用一次项目已有的 `BaseV3Page { GeneratedPage() }`。`BaseV3Page` 是唯一允许承载横屏基准缩放的包装层。
 - 默认复用项目中的 `TestActivity`，并通过 `BaseV3Page` 承载页面；指定其他测试页面时使用 `COMPOSE_ACTIVITY` 或验证命令参数动态替换 Activity 组件。已有测试 Activity 只补充当前页面的临时入口、状态和样例数据，不创建第二套 Activity。
 - 测试 Activity 不承担业务导航，只用于临时展示、截图和结构校验；验收完成后撤销本轮临时接线和样例数据，保留可复用的全屏测试宿主。
-- Android 包名、Activity 完整类名、Manifest 和方向只在项目首次运行时解析一次，结果写入 `.code-compose-v2/out/runtime-context.json`；后续生成、安装和验证直接复用，不得重复获取。
+- Android 包名、Activity 完整类名、Manifest 和方向只在项目首次运行时解析一次，结果写入 `.code-compose-v2/<PAGE_NAME>/out/runtime-context.json`；后续生成、安装和验证直接复用，不得重复获取。
+
+## 任务隔离与运行契约
+
+- 一个页面任务固定一个 `PAGE_NAME`。默认工作目录为 `.code-compose-v2/<PAGE_NAME>`，不同设计或页面不得共用 `out/semantic.json`、`original.png` 和验收报告。
+- 生成代码使用明确的 `PAGE_WIDTH=667f`、`PAGE_HEIGHT=375f`。横向坐标除以 `PAGE_WIDTH`，纵向坐标除以 `PAGE_HEIGHT`；不得把项目里名称相近但方向相反的常量直接套入生成逻辑。
+- 安装命令通过 `COMPOSE_INSTALL_COMMAND` 配置。测试宿主需要路由参数时，通过 `COMPOSE_START_ARGS` 传递，不能反复修改 TestActivity 默认页。
+- 使用 `CODE_COMPOSE_V2_WORK_DIR` 可覆盖默认任务目录；覆盖时必须保证目录、设计源、Activity 和报告属于同一个页面任务。
 
 ## 启动与依赖
 
@@ -40,8 +47,8 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 1. 在目标 Android 项目根目录定位并确认全屏 Compose 测试 Activity，只解析一次 Manifest。
 2. 解压设计包，定位直接包含 `index.html` 或 `.code-lanhu-index.html` 的目录。
 3. 运行一次 `normalize.js`：采集 DOM 语义树，并截取 `original.png` 作为唯一视觉真源。
-4. 根据 HTML 布局参数直接生成 Compose，不生成“绝对定位基线”中间阶段，也不设置验收后才允许语义化的门槛。
-5. 将生成页面临时接入全屏测试 Activity。代码有改动时通过终端执行项目的 Debug 安装任务；禁止点击 IDE Run 或 Apply Changes。
+4. 根据 HTML 布局参数直接生成 Compose。写入文件前执行布局契约校验，不生成“绝对定位基线”中间阶段，也不设置验收后才允许语义化的门槛。
+5. 将生成页面临时接入全屏测试 Activity。代码有改动时执行 `COMPOSE_INSTALL_COMMAND` 配置的命令行安装任务；禁止点击 IDE Run 或 Apply Changes。
 6. 运行 `compose-validate.js`，一次生成整页像素、结构边界、局部抽查、差异图和统一报告。
 7. 未达到 95% 时，根据差异区域和失败元素修正生成逻辑，再通过命令行安装、ADB 启动并重新验证。
 
@@ -54,7 +61,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 - 透明容器可扁平化；同 rect 的背景层可合并到同一复合项。只有设计和交互确实需要时才使用页面级 `offset`，不得用 `graphicsLayer` 整页缩放掩盖几何误差。
 - 文字内容默认由文字测量决定宽高；固定视觉盒、裁切和覆盖关系才使用固定尺寸。固定行盒出现底部裁切时，先检查父约束和测量高度，再调整行高、绘制高度或 `wrapContentHeight(unbounded = true)`。
 - 页面颜色、Shape 和视觉常量按“类型 + 实际值”命名，例如 `COLOR_F5F7FA`、`ROUNDED_CORNER_SHAPE_14`。
-- 每次调用生成的子布局 Composable 时，调用点必须用中文单行注释直接说明用途，不添加“子布局：”等重复前缀；子布局方法本身必须有中文 KDoc，写明用途、设计位置和尺寸，参数较多时补充 `@param`。
+- 每次调用提取出的自定义子布局 Composable 时，调用点必须用中文单行注释直接说明用途，不添加“子布局：”等重复前缀；该 Composable 必须有中文 KDoc，写明用途、设计位置和尺寸。标准 `Box`、`Row`、`Column`、`ImageItem` 仅在成组视觉块或复杂层级处添加注释。
 - 根 `ConstraintLayout` 不生成 `testTag("e0")`；`testTag("e<domIndex>")` 只用于实际 DOM 视觉元素。
 - 只生成原始 HTML 中可见且有视觉证据的节点。不得根据文案或组件名补造箭头、指示器、装饰和业务数据。
 

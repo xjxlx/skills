@@ -37,10 +37,13 @@ export COMPOSE_TEXT_IMPORT="import com.example.widget.TextItem"
 
 | 变量 | 默认值 | 用途 |
 |---|---|---|
-| `CODE_COMPOSE_V2_WORK_DIR` | `<PROJECT_ROOT>/.code-compose-v2` | 运行产物目录 |
-| `PAGE_NAME` | `GeneratedPage` | 生成的 Kotlin 文件和 Composable 名 |
+| `PAGE_NAME` | `GeneratedPage` | 页面任务名、生成的 Kotlin 文件和 Composable 名 |
+| `CODE_COMPOSE_V2_TASK_ID` | 同 `PAGE_NAME` | 任务目录名，非法路径字符会替换为 `-` |
+| `CODE_COMPOSE_V2_WORK_DIR` | `<PROJECT_ROOT>/.code-compose-v2/<TASK_ID>` | 显式覆盖任务工作目录 |
 | `COMPOSE_ACTIVITY` | 自动查找 `TestActivity` | 指定测试 Activity，格式为 `applicationId/.Activity` 或 `applicationId/full.Activity` |
 | `COMPOSE_ACTIVITY_MODE` | `existing` | `launcher` 要求 MAIN/LAUNCHER；`existing` 允许已有测试 Activity |
+| `COMPOSE_INSTALL_COMMAND` | `./gradlew installDebug` | 命令行构建安装命令 |
+| `COMPOSE_START_ARGS` | 无 | 追加给 `am start` 的页面路由参数，例如 `--es codeComposePage NavigationRevisePage` |
 | `COMPOSE_REFERENCE_MANIFEST` | 无 | 主页面和通用状态片段的 JSON 清单 |
 | `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 优先 code-image；`copy` 先从设计包复制；`existing` 只接受显式映射 |
 | `COMPOSE_RESOURCE_MAP` | 无 | 设计图片文件到现有 `R` 资源的映射 |
@@ -76,7 +79,7 @@ export COMPOSE_TEXT_IMPORT="import com.example.widget.TextItem"
 任务开始时由 `run.js` 扫描一次 Manifest，并写入：
 
 ```text
-<PROJECT_ROOT>/.code-compose-v2/out/runtime-context.json
+<PROJECT_ROOT>/.code-compose-v2/<PAGE_NAME>/out/runtime-context.json
 ```
 
 后续脚本只读取该文件。
@@ -85,6 +88,8 @@ export COMPOSE_TEXT_IMPORT="import com.example.widget.TextItem"
 
 ```json
 {
+  "taskId": "NavigationRevisePage",
+  "pageName": "NavigationRevisePage",
   "packageName": "com.example.app",
   "activity": "com.example.app/com.example.app.TestActivity",
   "activityClass": "com.example.app.TestActivity"
@@ -125,10 +130,11 @@ node <技能目录>/scripts/run.js /绝对路径/设计包.zip
 3. 单次 DOM 解析和原始截图。
 4. 生成 Compose 页面。
 
-代码有改动时，先在终端执行项目的 Debug 安装任务；模块任务按项目结构选择，例如：
+代码有改动时，先执行安装脚本：
 
 ```bash
-./gradlew :app:installDebug
+export COMPOSE_INSTALL_COMMAND="./gradlew :app:installDebug"
+node <技能目录>/scripts/install-app.js
 ```
 
 然后执行验证：
@@ -145,6 +151,21 @@ node <技能目录>/scripts/compose-validate.js \
 ```
 
 命令参数只覆盖本次验证，不修改 `runtime-context.json` 中缓存的默认 `TestActivity`。
+
+如果 TestActivity 通过 Intent 路由目标页面：
+
+```bash
+export COMPOSE_START_ARGS="--es codeComposePage NavigationRevisePage"
+node <技能目录>/scripts/compose-validate.js
+```
+
+TestActivity 可使用稳定的路由参数：
+
+```kotlin
+val targetPage = intent.getStringExtra("codeComposePage")
+```
+
+由 TestActivity 根据 `targetPage` 选择页面，不在每次验收前修改默认状态。
 
 分阶段命令：
 

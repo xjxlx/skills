@@ -15,6 +15,8 @@ const fs = require('fs');
 const path = require('path');
 const {
   COMPOSE_REFERENCE_MANIFEST,
+  COMPOSE_INSTALL_COMMAND,
+  PAGE_NAME,
   PROJECT_ROOT,
   WORK_DIR,
 } = require('./config');
@@ -33,6 +35,10 @@ function run(cmd, env = {}) {
 }
 
 function main() {
+  console.log(`页面任务：${PAGE_NAME}`);
+  console.log(`工作目录：${WORK_DIR}`);
+  console.log(`安装命令：${COMPOSE_INSTALL_COMMAND}`);
+
   try {
     loadOrCreateRuntimeContext();
   } catch (error) {
@@ -85,7 +91,7 @@ function main() {
 
   console.log('\n===== 生成完成 =====');
   console.log('代码有变更时，请通过终端执行项目的 Debug 安装任务，不要点击 IDE Run。');
-  console.log('例如：./gradlew :app:installDebug');
+  console.log(`安装脚本：node ${path.join(TOOLS, 'install-app.js')}`);
   console.log('安装完成后执行：');
   console.log(`  node ${path.join(TOOLS, 'compose-validate.js')}`);
   console.log('验证低于 95% 时，根据 compose-structure-report.json 修正生成逻辑后重复运行和验证。');

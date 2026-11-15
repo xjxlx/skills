@@ -17,6 +17,7 @@ process.env.COMPOSE_R_IMPORT = 'import com.example.R';
 process.env.COMPOSE_TEXT_IMPORT = 'import com.example.TextItem';
 process.env.COMPOSE_IMAGE_IMPORTS = 'import com.example.ImageItem\nimport com.example.ImageParameter';
 const {
+  assertGeneratedLayoutPolicy,
   generatePage,
   genContent,
   renderFlowGroup,
@@ -90,17 +91,28 @@ test('生成页面不得创建第二套窗口适配层', () => {
   assert.match(source, /ConstraintLayout\(/);
   assert.match(source, /val \(+[^)]*\) = createRefs\(\)/);
   assert.match(source, /constrainAs\(/);
+  assert.match(source, /private const val PAGE_WIDTH = 667f/);
+  assert.match(source, /private const val PAGE_HEIGHT = 375f/);
   assert.match(source, /createGuidelineFromStart\(/);
   assert.match(source, /createGuidelineFromTop\(/);
   assert.match(source, /createGuidelineFromBottom\(/);
   assert.match(source, /height = Dimension\.fillToConstraints/);
   assert.match(source, /Dimension\.value\(/);
+  assert.doesNotMatch(source, /DEFAULT_WIDTH|DEFAULT_HEIGHT/);
   assert.doesNotMatch(source, /testTag\("e0"\)/);
   assert.doesNotMatch(source, /= createRef\(\)/);
   assert.match(source, /\/\/ 展示文本“页面标题”/);
   assert.doesNotMatch(source, /子布局：/);
   assert.match(source, /\/\*\*[\s\S]*用途：展示文本“页面标题”/);
   assert.match(source, /private fun \w+\(modifier: Modifier = Modifier\)/);
+  assert.doesNotThrow(() => assertGeneratedLayoutPolicy(source));
+});
+
+test('生成器必须拒绝违反 ConstraintLayout 契约的源码', () => {
+  assert.throws(
+    () => assertGeneratedLayoutPolicy('@Composable fun Bad() { Box {} }'),
+    /缺少 createRefs/,
+  );
 });
 
 function createContext() {

@@ -68,6 +68,7 @@ const {
   COMPOSE_TEXT_IMPORT,
   DESIGN_DIR,
   EXPERIENCE_RULES_PATH,
+  PAGE_NAME,
   PROJECT_ROOT,
   TOOL_OUTPUT_DIR,
   requiredSetting,
@@ -94,8 +95,6 @@ const DP_PER_PX = 0.5;
 let DESIGN_W = EXPECTED_WIDTH * DP_PER_PX;
 let DESIGN_H = EXPECTED_HEIGHT * DP_PER_PX;
 
-// 目标页面名（可经环境变量 PAGE_NAME 覆盖）
-const PAGE_NAME = process.env.PAGE_NAME || 'GeneratedPage';
 // 目标 Compose 文件
 const TARGET_KT = path.join(requiredSetting('COMPOSE_KOTLIN_DIR', COMPOSE_KOTLIN_DIR), `${PAGE_NAME}.kt`);
 
@@ -1525,10 +1524,10 @@ function generatePage(semantic, imgMap, ruleState) {
     ];
     referenceNames.push(backgroundReference);
     guideLines.push(
-      `        val ${backgroundGuides[0]} = createGuidelineFromStart(0f / DEFAULT_WIDTH)`,
+      `        val ${backgroundGuides[0]} = createGuidelineFromStart(0f / PAGE_WIDTH)`,
       `        val ${backgroundGuides[1]} = createGuidelineFromEnd(0f)`,
-      `        val ${backgroundGuides[2]} = createGuidelineFromTop(0f / DEFAULT_HEIGHT)`,
-      `        val ${backgroundGuides[3]} = createGuidelineFromBottom(0f / DEFAULT_HEIGHT)`,
+      `        val ${backgroundGuides[2]} = createGuidelineFromTop(0f / PAGE_HEIGHT)`,
+      `        val ${backgroundGuides[3]} = createGuidelineFromBottom(0f / PAGE_HEIGHT)`,
     );
     backgroundCode =
       `        // 绘制铺满页面的背景图。\n` +
@@ -1552,9 +1551,9 @@ function generatePage(semantic, imgMap, ruleState) {
     referenceNames.push(entry.reference);
     const { x, y, w, h } = entry.meta.e.rect;
     guideLines.push(
-      `        val ${entry.guides[0]} = createGuidelineFromStart(${r05(x)}f / DEFAULT_WIDTH)`,
-      `        val ${entry.guides[1]} = createGuidelineFromTop(${r05(y)}f / DEFAULT_HEIGHT)`,
-      `        val ${entry.guides[2]} = createGuidelineFromBottom(${r05(Math.max(0, designH - y - h))}f / DEFAULT_HEIGHT)`,
+      `        val ${entry.guides[0]} = createGuidelineFromStart(${r05(x)}f / PAGE_WIDTH)`,
+      `        val ${entry.guides[1]} = createGuidelineFromTop(${r05(y)}f / PAGE_HEIGHT)`,
+      `        val ${entry.guides[2]} = createGuidelineFromBottom(${r05(Math.max(0, designH - y - h))}f / PAGE_HEIGHT)`,
     );
   }
 
@@ -1628,8 +1627,8 @@ ${TEXT_IMPORT}
 ${IMAGE_IMPORTS}
 ${R_IMPORT}
 
-private const val DEFAULT_WIDTH = ${designW}f
-private const val DEFAULT_HEIGHT = ${designH}f
+private const val PAGE_WIDTH = ${designW}f
+private const val PAGE_HEIGHT = ${designH}f
 
 /** 将设计稿数字字重转换为 Compose FontWeight。 */
 private fun fontWeightOf(weight: Int): FontWeight = when {
@@ -1653,6 +1652,32 @@ private fun fontWeightOf(weight: Int): FontWeight = when {
 ${pageRoot}
 ${sectionsCode}
 `;
+}
+
+/**
+ * 写入 Kotlin 前校验不可回退的布局契约。
+ *
+ * @param code 生成的 Kotlin 源码。
+ */
+function assertGeneratedLayoutPolicy(code) {
+  const violations = [];
+  const guideCount = (
+    code.match(/createGuidelineFrom(?:Start|End|Top|Bottom)\(/g) || []
+  ).length;
+  if (!code.includes('= createRefs()')) violations.push('缺少 createRefs()');
+  if (guideCount < 3) violations.push(`Guide 数量不足：${guideCount}`);
+  if (!code.includes('Dimension.fillToConstraints')) {
+    violations.push('缺少 Dimension.fillToConstraints');
+  }
+  if (/=\s*createRef\(\)/.test(code)) violations.push('存在单个 createRef()');
+  if (/testTag\("e0"\)/.test(code)) violations.push('根布局生成了 testTag("e0")');
+  if (code.includes('子布局：')) violations.push('存在旧注释前缀“子布局：”');
+  if (/DEFAULT_(?:WIDTH|HEIGHT)/.test(code)) {
+    violations.push('使用了语义不明确的 DEFAULT_WIDTH/DEFAULT_HEIGHT');
+  }
+  if (violations.length > 0) {
+    throw new Error(`生成布局违反 Skill 约束：${violations.join('；')}`);
+  }
 }
 
 // ---------------- main ----------------
@@ -1768,6 +1793,7 @@ function main() {
   // 2) 生成 Kotlin
   console.log(`生成 ${PAGE_NAME}.kt`);
   const code = generatePage(semantic, imgMap, experienceState);
+  assertGeneratedLayoutPolicy(code);
   fs.mkdirSync(path.dirname(TARGET_KT), { recursive: true });
   fs.writeFileSync(TARGET_KT, code.replace(/\n+$/, '\n'));
   console.log(`  已写入 → ${TARGET_KT}`);
@@ -1777,6 +1803,7 @@ function main() {
 if (require.main === module) main();
 
 module.exports = {
+  assertGeneratedLayoutPolicy,
   generatePage,
   genRootConstraintCall,
   genContent,
