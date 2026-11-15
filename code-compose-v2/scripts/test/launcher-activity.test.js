@@ -139,6 +139,7 @@ test('总入口目标 Activity 缺少 Launcher 时必须在解压前停止且不
       ...process.env,
       PROJECT_ROOT: projectRoot,
       COMPOSE_ACTIVITY: 'com.example.app/.PreviewActivity',
+      COMPOSE_ACTIVITY_MODE: 'launcher',
     },
     encoding: 'utf8',
   });

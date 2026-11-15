@@ -32,29 +32,30 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 
 1. 检查远端技能版本并按公共约束拉取最新提交。
 2. 确认工作区现有改动，不覆盖用户未提交内容。
-3. 检查 `scripts/node_modules` 和依赖状态；依赖存在时直接使用，不重复执行 `npm ci`。缺失时明确提示用户安装，不在正常页面流程中自动重装依赖。
-4. 配置 `PROJECT_ROOT`、Compose 目录、包名、`R`、`TextItem`/`ImageItem` import、Activity 和目标页面名；完整变量见 [配置参考](references/configuration.md)。
+3. 检查 `scripts/node_modules` 和项目 `constraintlayout-compose` 依赖；依赖存在时直接使用，不重复执行 `npm ci`。缺失时明确提示用户安装，不在正常页面流程中自动重装依赖。
+4. 配置 `PROJECT_ROOT`、Compose 目录、包名、`R`、`TextItem`/`ImageItem` import、Activity 和目标页面名；安装命令通过 `COMPOSE_INSTALL_COMMAND` 配置，页面路由参数通过 `COMPOSE_START_ARGS` 传入。完整变量见 [配置参考](references/configuration.md)。
 
 ## 固定流程
 
 1. 在目标 Android 项目根目录定位并确认全屏 Compose 测试 Activity，只解析一次 Manifest。
 2. 解压设计包，定位直接包含 `index.html` 或 `.code-lanhu-index.html` 的目录。
 3. 运行一次 `normalize.js`：采集 DOM 语义树，并截取 `original.png` 作为唯一视觉真源。
-4. 根据 HTML 布局参数直接生成 Compose，不生成“绝对定位基线”中间阶段，也不设置验收后才允许语义化的门槛。
-5. 将生成页面临时接入全屏测试 Activity，由 IDE Running、Run 或 Apply Changes 刷新正在运行的应用。脚本不执行 `assembleDebug` 或 `adb install -r`。
+4. 根据 HTML 布局参数直接生成 Compose。写入文件前执行 ConstraintLayout 布局契约校验，不生成“绝对定位基线”中间阶段，也不设置验收后才允许语义化的门槛。
+5. 将生成页面临时接入全屏测试 Activity。代码有改动时执行 `COMPOSE_INSTALL_COMMAND` 配置的命令行 Debug 安装任务；禁止点击 IDE Run 或 Apply Changes。
 6. 运行 `compose-validate.js`，一次生成整页像素、结构边界、局部抽查、差异图和统一报告。
-7. 未达到 95% 时，根据差异区域和失败元素修正生成逻辑，再由 IDE 刷新并重新验证。
+7. 未达到 95% 时，根据差异区域和失败元素修正生成逻辑，再通过命令行安装、ADB 启动并重新验证。
 
 ## HTML 与 Compose 生成
 
 - 以 DOM 文本、角色、矩形、层级、间距、对齐轴、背景和重复结构为依据选择布局，不根据页面业务名称生成固定结构。
-- 固定骨架和可重复入口使用稳定锚点。页面级区域可使用 `ConstraintLayout` 和独立 `Guideline`；在首次使用 Guideline 的节点前就地创建，禁止集中声明在 `ConstraintLayout` 顶部。有明确方向的连续内容使用 `Row`、`Column` 或列表容器。
+- 除非用户明确要求其他方案或现有宿主存在不可兼容的布局契约，页面首个布局必须使用 `ConstraintLayout`。同一个 `ConstraintLayout` 内的全部子布局引用使用一次 `createRefs()` 声明，禁止使用单个 `createRef()`；每个约束子布局至少建立三条定位 Guide，并在 `constrainAs` 中使用这些 Guide，至少一个 `width` 或 `height` 使用 `Dimension.fillToConstraints`。例外原因写入入口 KDoc。
 - 3 个及以上条目共享近似外框尺寸、对齐轴、间距和字段槽位时，按数据类、`listOf` 和单一 item Composable 建模。
 - 横向或纵向列表由可见视口和排列方向决定。尾项只被视口裁切时，数据仍保存完整 item 尺寸，由 `LazyRow`/`LazyColumn` 自然裁切。
 - 透明容器可扁平化；同 rect 的背景层可合并到同一复合项。只有设计和交互确实需要时才使用页面级 `offset`，不得用 `graphicsLayer` 整页缩放掩盖几何误差。
 - 文字内容默认由文字测量决定宽高；固定视觉盒、裁切和覆盖关系才使用固定尺寸。固定行盒出现底部裁切时，先检查父约束和测量高度，再调整行高、绘制高度或 `wrapContentHeight(unbounded = true)`。
 - 页面颜色、Shape 和视觉常量按“类型 + 实际值”命名，例如 `COLOR_F5F7FA`、`ROUNDED_CORNER_SHAPE_14`。
-- 每个命名 Composable、辅助函数和自定义定位方法使用中文 KDoc；参数较多时补充 `@param`。
+- 每次调用提取出的自定义子布局 Composable 时，调用点必须用中文单行注释直接说明用途，不添加“子布局：”等重复前缀；该 Composable 必须有中文 KDoc，写明用途、设计位置和尺寸。标准 `Box`、`Row`、`Column`、`ImageItem` 仅在成组视觉块或复杂层级处添加注释。
+- 根 `ConstraintLayout` 不生成 `testTag("e0")`；`testTag("e<domIndex>")` 只用于实际 DOM 视觉元素。
 - 只生成原始 HTML 中可见且有视觉证据的节点。不得根据文案或组件名补造箭头、指示器、装饰和业务数据。
 
 ## 项目组件与资源
@@ -79,7 +80,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 
 统一使用 `compose-validate.js`，不再保留独立整页截图脚本或重复验证器。单次验证包含：
 
-1. 启动 IDE 已经运行的最新 Activity；使用 `am start -W` 和短轮询等待 `testTag` 就绪，不使用固定长等待。
+1. 从 `runtime-context.json` 读取 Activity，使用 `adb shell am start -W` 启动；短轮询等待 `testTag` 就绪，不使用固定长等待，也不点击 IDE Run。
 2. 截取当前真实横屏画面，与 `original.png` 计算整页像素相似度。
 3. 通过 `uiautomator` 获取 `testTag("e<domIndex>")` 边界，与语义树 rect 比对；重组或动画期间 dump 可能返回空树，短轮询重试直到非空语义树。
 4. 对文本和关键区域做局部色差抽查。
@@ -100,7 +101,7 @@ description: "将蓝湖等工具导出的 HTML/CSS/图片设计包转换为可�
 4. 文字差异：检查 `TextItem` 字体、行高、最大行数、对齐和父容器高度。
 5. 层级差异：检查 z 序、遮罩、Dialog/Popup 宿主和覆盖关系。
 
-修正生成器或页面后，通过 IDE Running 刷新应用并重新验证。单轮任务最多自动修正 5 次；仍未达到 95% 时保留最佳报告并明确停止，禁止原样重跑、无限循环或伪造通过。
+修正生成器或页面后，通过命令行重新安装、ADB 启动并验证。单轮任务最多自动修正 5 次；仍未达到 95% 时保留最佳报告并明确停止，禁止原样重跑、无限循环或伪造通过。
 
 ## 参考文件
 

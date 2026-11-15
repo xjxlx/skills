@@ -13,7 +13,8 @@
 - HTML 设计稿固定为 `1334px × 750px`。
 - 目标 Activity 已配置横屏，并由项目 `BaseV3Page` 包裹生成页面。
 - 模拟器已经由用户旋转为横屏。
-- 应用已经通过 IDE Running、Run 或 Apply Changes 刷新。
+- 代码有改动时，应用已通过命令行 Debug 安装任务刷新；不得依赖 IDE Run 或 Apply Changes。
+- 项目已包含 `constraintlayout-compose`。
 - `scripts/node_modules` 已存在且依赖有效。正常页面任务不执行 `npm ci`；依赖缺失时先通知用户。
 
 ## 必填变量
@@ -41,6 +42,8 @@ export COMPOSE_TEXT_IMPORT="import com.example.widget.TextItem"
 |---|---|---|
 | `CODE_COMPOSE_V2_WORK_DIR` | `<PROJECT_ROOT>/.code-compose-v2` | 运行产物目录 |
 | `PAGE_NAME` | `GeneratedPage` | 生成的 Kotlin 文件和 Composable 名 |
+| `COMPOSE_INSTALL_COMMAND` | `./gradlew installDebug` | 命令行构建安装命令 |
+| `COMPOSE_START_ARGS` | 无 | 追加给 `am start` 的页面路由参数，例如 `--es codeComposePage NavigationRevisePage` |
 | `COMPOSE_REFERENCE_MANIFEST` | 无 | 主页面和通用状态片段的 JSON 清单 |
 | `COMPOSE_RESOURCE_MODE` | `reuse` | `reuse` 优先 code-image；`copy` 先从设计包复制；`existing` 只接受显式映射 |
 | `COMPOSE_RESOURCE_MAP` | 无 | 设计图片文件到现有 `R` 资源的映射 |
@@ -108,9 +111,23 @@ node <技能目录>/scripts/run.js /绝对路径/设计包.zip
 3. 单次 DOM 解析和原始截图。
 4. 生成 Compose 页面。
 
-生成后通过 IDE 刷新应用，再执行：
+代码有改动时，先执行安装脚本：
 
 ```bash
+export COMPOSE_INSTALL_COMMAND="./gradlew :app:installDebug"
+node <技能目录>/scripts/install-app.js
+```
+
+然后执行验证：
+
+```bash
+node <技能目录>/scripts/compose-validate.js
+```
+
+如果 TestActivity 通过 Intent 路由目标页面：
+
+```bash
+export COMPOSE_START_ARGS="--es codeComposePage NavigationRevisePage"
 node <技能目录>/scripts/compose-validate.js
 ```
 
@@ -130,7 +147,8 @@ npm test --prefix <技能目录>/scripts
 
 ## 运行边界
 
-- 生成与验证脚本不执行 `assembleDebug`、`installDebug` 或 `adb install -r`。
+- 不得点击 IDE Run 或 Apply Changes 刷新应用；代码变更后通过命令行 Debug 安装任务完成部署。
+- `compose-validate.js` 只读取缓存并用 ADB 启动 Activity，不执行构建或安装。
 - 不修改模拟器 `wm size`、`wm density`、旋转锁定或系统栏。
-- 不轮询固定 6 秒；只通过 `am start -W` 和短轮询等待页面标签。
+- 使用 `adb shell am start -W` 和短轮询等待页面标签，不轮询固定长等待。
 - 验证失败时返回非零退出码，并保留统一报告和差异图。

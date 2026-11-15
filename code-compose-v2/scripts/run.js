@@ -8,12 +8,13 @@
  *   2. 解压设计包并定位 index.html
  *   3. 解析一次 DOM，输出 semantic.json 和 original.png
  *   4. 根据 HTML 布局参数直接生成 Compose 页面
- *   5. 提示通过 IDE Running 刷新应用，再执行 compose-validate.js
+ *   5. 提示通过命令行 Debug 安装任务刷新应用，再执行 compose-validate.js
  */
 const { execSync } = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const {
+  COMPOSE_INSTALL_COMMAND,
   COMPOSE_REFERENCE_MANIFEST,
   PROJECT_ROOT,
   WORK_DIR,
@@ -33,6 +34,8 @@ function run(cmd, env = {}) {
 }
 
 function main() {
+  console.log(`安装命令：${COMPOSE_INSTALL_COMMAND}`);
+
   try {
     createRuntimeContext();
   } catch (error) {
@@ -84,8 +87,9 @@ function main() {
   run('node html-to-compose.js', { DESIGN_DIR });
 
   console.log('\n===== 生成完成 =====');
-  console.log('请先在 IDE 中 Running 或 Apply Changes 刷新已安装应用。');
-  console.log('应用显示最新页面后执行：');
+  console.log('代码有变更时，请通过终端执行项目的 Debug 安装任务，不要点击 IDE Run。');
+  console.log(`安装脚本：node ${path.join(TOOLS, 'install-app.js')}`);
+  console.log('安装完成后执行：');
   console.log(`  node ${path.join(TOOLS, 'compose-validate.js')}`);
   console.log('验证低于 95% 时，根据 compose-structure-report.json 修正生成逻辑后重复运行和验证。');
 }

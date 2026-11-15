@@ -15,11 +15,13 @@ const { PNG } = require('pngjs');
 const {
   evaluateReferenceDimensions,
   evaluateStructure,
+  isRootContainer,
   selectSpotCandidates,
   shouldAcceptReport,
 } = require('./compose-validation-core');
 const {
   ADB,
+  COMPOSE_START_ARGS,
   TOOL_OUTPUT_DIR,
   WORK_DIR,
 } = require('./config');
@@ -243,10 +245,14 @@ function sleepSync(ms) {
 function launch(activity) {
   const packageName = activity.split('/')[0];
   execSync(`${ADB} shell am force-stop ${packageName}`, { stdio: 'ignore', shell: true });
-  const output = execSync(`${ADB} shell am start -W -n ${activity}`, {
-    encoding: 'utf8',
-    shell: true,
-  });
+  const output = execSync(
+    `${ADB} shell am start -W -n ${activity}` +
+      (COMPOSE_START_ARGS ? ` ${COMPOSE_START_ARGS}` : ''),
+    {
+      encoding: 'utf8',
+      shell: true,
+    },
+  );
   if (/Error|Exception/i.test(output) && !/Status: ok/i.test(output)) {
     throw new Error(`Activity 启动失败：${output.trim()}`);
   }
@@ -304,9 +310,19 @@ function main() {
   }
 
   const generation = JSON.parse(fs.readFileSync(GENERATION_REPORT, 'utf8'));
-  const observableIndices = new Set(generation.observableDomIndices || []);
+  const semanticByIndex = new Map(
+    semantic.elements.map((element) => [element.domIndex, element]),
+  );
+  const observableIndices = new Set(
+    (generation.observableDomIndices || [])
+      .filter((index) => !isRootContainer(
+        semanticByIndex.get(index),
+        semantic.designW,
+        semantic.designH,
+      )),
+  );
   const observableElements = semantic.elements.filter((element) => observableIndices.has(element.domIndex));
-  if (observableElements.length !== generation.observableElementCount) {
+  if (observableElements.length !== observableIndices.size) {
     console.error('Compose 生成报告与 semantic.json 不一致，请重新生成 Compose。');
     process.exit(1);
   }
